@@ -1,11 +1,11 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include <Adafruit_NeoPixel.h>   //Library for the Logging status LED
-#include "FS.h"                  //FAT system library used by the SD-MMC library
-#include "SD_MMC.h"              //SD-MMC library
-#include "RX8900.h"              //RTC Library
-#include <SparkFun_LSM6DSV16X.h> //IMU Library
-#include "pins.h"                //Pinconfig header
+#include <Adafruit_NeoPixel.h> //Library for the Logging status LED
+#include "FS.h"                //FAT system library used by the SD-MMC library
+#include "SD_MMC.h"            //SD-MMC library
+#include "RX8900.h"            //RTC Library
+#include "imu.h"               //IMU Library
+#include "pins.h"              //Pinconfig header
 
 // ---- NeoPixel setup ----
 #define NEOPIXEL_NUMPIXELS 1
@@ -24,12 +24,6 @@ void IRAM_ATTR rtcIntIsr()
   g_rtcUpdatePending = true;
   // Keep ISR short; we clear flags in the main context
 }
-
-// IMU object and data containers
-SparkFun_LSM6DSV16X imu;
-sfe_lsm_data_t imuAccelData;
-sfe_lsm_data_t imuGyroData;
-
 
 // ---- System state machine ----
 enum SystemState
@@ -147,84 +141,58 @@ bool initSdCard()
 
 bool initImu()
 {
-    Serial.println(F("[IMU] Initialising LSM6DSV..."));
+  Serial.println(F("[IMU] Initialising LSM6DSV..."));
 
-    // INT pins from the IMU to the ESP32 — keep as plain inputs for now.
-    pinMode(PIN_IMU_INT1, INPUT);
-    pinMode(PIN_IMU_INT2, INPUT);
+  // INT pins from the IMU to the ESP32 — keep as plain inputs for now.
+  pinMode(PIN_IMU_INT1, INPUT);
+  pinMode(PIN_IMU_INT2, INPUT);
 
-    // Start the IMU on the default I2C bus and address.
-    // SparkFun board defaults to I2C address 0x6B. If your SDO/SA0 pin is
-    // strapped low (0x6A) you may need to adjust the library's address or
-    // use an overload of begin() that takes an address.
-    if (!imu.begin())
-    {
-        Serial.println(F("[IMU] begin() failed – check wiring and I2C address (0x6B vs 0x6A)."));
-        return false;
-    }
+  // Start the IMU on the default I2C bus and address.
+  // SparkFun board defaults to I2C address 0x6B. If your SDO/SA0 pin is
+  // strapped low (0x6A) you may need to adjust the library's address or
+  // use an overload of begin() that takes an address.
+  if (!imu.begin())
+  {
+    Serial.println(F("[IMU] begin() failed – check wiring and I2C address (0x6B vs 0x6A)."));
+    return false;
+  }
 
-    // Reset device to a known state (SparkFun example pattern).
-    imu.deviceReset();
-    while (!imu.getDeviceReset())
-    {
-        delay(1);
-    }
-    Serial.println(F("[IMU] Reset complete, applying configuration."));
+  // Reset device to a known state (SparkFun example pattern).
+  imu.deviceReset();
+  while (!imu.getDeviceReset())
+  {
+    delay(1);
+  }
+  Serial.println(F("[IMU] Reset complete, applying configuration."));
 
-    // Avoid partial updates: accel/gyro registers update only when both are ready.
-    imu.enableBlockDataUpdate();
+  // Avoid partial updates: accel/gyro registers update only when both are ready.
+  imu.enableBlockDataUpdate();
 
-    // ***** Accelerometer config *****
-    // Full-scale: ±16 g
-    imu.setAccelFullScale(LSM6DSV16X_16g);
+  // ***** Accelerometer config *****
+  // Full-scale: ±16 g
+  imu.setAccelFullScale(LSM6DSV16X_16g);
 
-    // Output data rate: start low for bring-up (7.5 Hz).
-    // Once everything works, we can bump this up (e.g. 120 / 480 Hz) by
-    // changing this enum.
-    imu.setAccelDataRate(LSM6DSV16X_ODR_AT_7Hz5);
+  // Output data rate: start low for bring-up (7.5 Hz).
+  // Once everything works, we can bump this up (e.g. 120 / 480 Hz) by
+  // changing this enum.
+  imu.setAccelDataRate(LSM6DSV16X_ODR_AT_7Hz5);
 
-    // Enable accel filtering (same pattern as SparkFun example 1). 
-    imu.enableFilterSettling();
-    imu.enableAccelLP2Filter();
-    imu.setAccelLP2Bandwidth(LSM6DSV16X_XL_STRONG);
+  // Enable accel filtering (same pattern as SparkFun example 1).
+  imu.enableFilterSettling();
+  imu.enableAccelLP2Filter();
+  imu.setAccelLP2Bandwidth(LSM6DSV16X_XL_STRONG);
 
-    // ***** Gyroscope config *****
-    imu.setGyroFullScale(LSM6DSV16X_2000dps);
-    imu.setGyroDataRate(LSM6DSV16X_ODR_AT_15Hz);
+  // ***** Gyroscope config *****
+  imu.setGyroFullScale(LSM6DSV16X_2000dps);
+  imu.setGyroDataRate(LSM6DSV16X_ODR_AT_15Hz);
 
-    imu.enableGyroLP1Filter();
-    imu.setGyroLP1Bandwidth(LSM6DSV16X_GY_ULTRA_LIGHT);
+  imu.enableGyroLP1Filter();
+  imu.setGyroLP1Bandwidth(LSM6DSV16X_GY_ULTRA_LIGHT);
 
-    Serial.println(F("[IMU] Configuration done."));
+  Serial.println(F("[IMU] Configuration done."));
 
-    // Optional quick sanity read (not strictly required for init):
-    if (imu.checkStatus())
-    {
-        imu.getAccel(&imuAccelData);
-        imu.getGyro(&imuGyroData);
-
-        Serial.print(F("[IMU] First accel sample (mg) X: "));
-        Serial.print(imuAccelData.xData);
-        Serial.print(F(" Y: "));
-        Serial.print(imuAccelData.yData);
-        Serial.print(F(" Z: "));
-        Serial.println(imuAccelData.zData);
-
-        Serial.print(F("[IMU] First gyro sample (mdps) X: "));
-        Serial.print(imuGyroData.xData);
-        Serial.print(F(" Y: "));
-        Serial.print(imuGyroData.yData);
-        Serial.print(F(" Z: "));
-        Serial.println(imuGyroData.zData);
-    }
-    else
-    {
-        Serial.println(F("[IMU] Warning: no data ready immediately after init."));
-    }
-
-    return true;
+  return true;
 }
-
 
 bool initRtc()
 {
