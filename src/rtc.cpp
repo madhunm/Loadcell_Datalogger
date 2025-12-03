@@ -195,7 +195,6 @@ bool rtcInit()
     rtcDevice.InterruptSettings(false, false, true);
 
     // Set RTC from compile time each boot (dev-friendly).
-    // In production you may want to guard this so you don't clobber a valid clock.
     if (!rtcSetFromCompileTime())
     {
         Serial.println("[INIT][RTC] WARNING: Failed to set RTC from compile time.");
@@ -293,4 +292,24 @@ bool rtcSetFromCompileTime()
         return false;
     }
     return rtcSetDateTime(dt);
+}
+
+// ---- Sample timebase helpers ----
+
+void rtcInitSampleTimebase(SampleTimebase &timebase,
+                           const RtcDateTime &rtcNow,
+                           uint64_t sampleIndexNow,
+                           uint32_t sampleRate)
+{
+    timebase.anchorRtc = rtcNow;
+    timebase.anchorSampleIndex = sampleIndexNow;
+    timebase.sampleRate = sampleRate;
+}
+
+double rtcSampleIndexToSeconds(const SampleTimebase &timebase,
+                               uint64_t sampleIndex)
+{
+    // Positive for future samples, negative for past samples (if any).
+    int64_t deltaSamples = (int64_t)sampleIndex - (int64_t)timebase.anchorSampleIndex;
+    return (double)deltaSamples / (double)timebase.sampleRate;
 }

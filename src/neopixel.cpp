@@ -13,14 +13,94 @@ static uint8_t baseR = 0;
 static uint8_t baseG = 0;
 static uint8_t baseB = 0;
 
-// Blinking state for ERROR pattern
-static bool errorLedOn = false;
-static uint32_t errorLastToggle = 0;
-static const uint32_t ERROR_BLINK_INTERVAL_MS = 250; // 4 Hz blink (on/off every 250 ms)
+// Blinking state for error patterns
+static bool blinkOn = false;
+static uint32_t lastBlinkChange = 0;
+
+// Per-pattern blink configuration
+static uint32_t blinkOnMs = 0;
+static uint32_t blinkOffMs = 0;
+static uint8_t blinkPulsesPerGroup = 0;
+static uint8_t blinkCurrentPulse = 0;
+static uint32_t blinkGroupGapMs = 0;
 
 // Apply base colour immediately (no blinking logic)
 static void applyStaticColour()
 {
+    pixel.setPixelColor(0, pixel.Color(baseR, baseG, baseB));
+    pixel.show();
+}
+
+// Configure blink parameters for each error type
+static void configureErrorPattern(NeopixelPattern pattern)
+{
+    // Defaults (will be overridden)
+    blinkOnMs = 200;
+    blinkOffMs = 200;
+    blinkPulsesPerGroup = 1;
+    blinkGroupGapMs = 800;
+
+    switch (pattern)
+    {
+    case NEOPIXEL_PATTERN_ERROR_SD:
+        // SD error: bright red, double-blink
+        baseR = 255;
+        baseG = 0;
+        baseB = 0;
+        blinkOnMs = 100;
+        blinkOffMs = 100;
+        blinkPulsesPerGroup = 2;
+        blinkGroupGapMs = 600;
+        break;
+
+    case NEOPIXEL_PATTERN_ERROR_RTC:
+        // RTC error: yellow, single short blink per second
+        baseR = 255;
+        baseG = 255;
+        baseB = 0;
+        blinkOnMs = 200;
+        blinkOffMs = 800;
+        blinkPulsesPerGroup = 1;
+        blinkGroupGapMs = 0; // handled by off duration
+        break;
+
+    case NEOPIXEL_PATTERN_ERROR_IMU:
+        // IMU error: magenta, triple fast blips
+        baseR = 255;
+        baseG = 0;
+        baseB = 255;
+        blinkOnMs = 80;
+        blinkOffMs = 80;
+        blinkPulsesPerGroup = 3;
+        blinkGroupGapMs = 600;
+        break;
+
+    case NEOPIXEL_PATTERN_ERROR_ADC:
+        // ADC error: cyan, long pulse
+        baseR = 0;
+        baseG = 255;
+        baseB = 255;
+        blinkOnMs = 500;
+        blinkOffMs = 500;
+        blinkPulsesPerGroup = 1;
+        blinkGroupGapMs = 0;
+        break;
+
+    default:
+        // Should not happen for non-error patterns
+        baseR = baseG = baseB = 0;
+        blinkOnMs = 200;
+        blinkOffMs = 200;
+        blinkPulsesPerGroup = 1;
+        blinkGroupGapMs = 800;
+        break;
+    }
+
+    blinkOn = true;
+    blinkCurrentPulse = 0;
+    lastBlinkChange = millis();
+
+    // Turn LED on immediately
     pixel.setPixelColor(0, pixel.Color(baseR, baseG, baseB));
     pixel.show();
 }
@@ -46,15 +126,15 @@ void neopixelSetPattern(NeopixelPattern pattern)
         break;
 
     case NEOPIXEL_PATTERN_INIT:
-        // Red during SD/RTC/IMU/ADC initialisation
+        // INIT: solid amber (red+green) during peripheral bring-up
         baseR = 255;
-        baseG = 0;
+        baseG = 80;
         baseB = 0;
         applyStaticColour();
         break;
 
     case NEOPIXEL_PATTERN_READY:
-        // Solid green when system is ready to log
+        // READY: solid green
         baseR = 0;
         baseG = 255;
         baseB = 0;
@@ -62,48 +142,70 @@ void neopixelSetPattern(NeopixelPattern pattern)
         break;
 
     case NEOPIXEL_PATTERN_LOGGING:
-        // For now also solid green; we can change to a breathing pattern later.
+        // LOGGING: solid green for now (can become breathing later)
         baseR = 0;
         baseG = 255;
         baseB = 0;
         applyStaticColour();
         break;
 
-    case NEOPIXEL_PATTERN_ERROR:
-        // Error base colour: blue, but blinking handled in neopixelUpdate().
-        baseR = 0;
-        baseG = 0;
-        baseB = 255;
-        errorLedOn = true;
-        errorLastToggle = millis();
-        // Turn it on immediately
-        applyStaticColour();
+    case NEOPIXEL_PATTERN_ERROR_SD:
+    case NEOPIXEL_PATTERN_ERROR_RTC:
+    case NEOPIXEL_PATTERN_ERROR_IMU:
+    case NEOPIXEL_PATTERN_ERROR_ADC:
+        // Error patterns: blinking with different colours/signatures
+        configureErrorPattern(currentPattern);
         break;
     }
 }
 
 void neopixelUpdate()
 {
-    // Only ERROR pattern currently has a time-based animation
-    if (currentPattern != NEOPIXEL_PATTERN_ERROR)
+    // Only error patterns have time-based animation
+    if (currentPattern != NEOPIXEL_PATTERN_ERROR_SD &&
+        currentPattern != NEOPIXEL_PATTERN_ERROR_RTC &&
+        currentPattern != NEOPIXEL_PATTERN_ERROR_IMU &&
+        currentPattern != NEOPIXEL_PATTERN_ERROR_ADC)
     {
         return;
     }
 
     uint32_t now = millis();
-    if (now - errorLastToggle >= ERROR_BLINK_INTERVAL_MS)
-    {
-        errorLastToggle = now;
-        errorLedOn = !errorLedOn;
 
-        if (errorLedOn)
+    if (blinkOn)
+    {
+        if (now - lastBlinkChange >= blinkOnMs)
         {
-            pixel.setPixelColor(0, pixel.Color(baseR, baseG, baseB));
-        }
-        else
-        {
+            blinkOn = false;
+            lastBlinkChange = now;
             pixel.setPixelColor(0, pixel.Color(0, 0, 0));
+            pixel.show();
         }
-        pixel.show();
+    }
+    else
+    {
+        // LED is currently off; decide when to turn back on
+        uint32_t interval = blinkOffMs;
+
+        if (blinkPulsesPerGroup > 1 && blinkCurrentPulse >= blinkPulsesPerGroup)
+        {
+            // Between groups, use the group gap
+            interval = blinkGroupGapMs;
+        }
+
+        if (now - lastBlinkChange >= interval)
+        {
+            lastBlinkChange = now;
+
+            if (blinkPulsesPerGroup > 1 && blinkCurrentPulse >= blinkPulsesPerGroup)
+            {
+                blinkCurrentPulse = 0;
+            }
+
+            blinkOn = true;
+            blinkCurrentPulse++;
+            pixel.setPixelColor(0, pixel.Color(baseR, baseG, baseB));
+            pixel.show();
+        }
     }
 }
