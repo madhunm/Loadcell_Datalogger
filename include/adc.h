@@ -48,26 +48,34 @@ enum AdcRegister : uint8_t {
     ADC_REG_SCGC_ADC = 0x18
 };
 
-// NOTE on PGA gain:
-// pgaGainCode is PGAG[2:0] from CTRL2:
+// PGA gain options (PGAG bits in CTRL2).
+// The enum value is the PGAG[2:0] code used by the ADC:
 //
-//  pgaGainCode  Analog PGA gain
-//  ------------ ----------------
-//      0        x1
-//      1        x2
-//      2        x4
-//      3        x8
-//      4        x16
-//      5        x32
-//      6        x64
-//      7        x128
+//  Code      Analog PGA gain
+//  --------  ----------------
+//  0x0       x1
+//  0x1       x2
+//  0x2       x4
+//  0x3       x8
+//  0x4       x16
+//  0x5       x32
+//  0x6       x64
+//  0x7       x128
 //
-// Until you know your load cell sensitivity, you can experiment with this
-// from main.cpp without touching the driver.
+enum AdcPgaGain : uint8_t {
+    ADC_PGA_GAIN_X1   = 0x0,
+    ADC_PGA_GAIN_X2   = 0x1,
+    ADC_PGA_GAIN_X4   = 0x2,
+    ADC_PGA_GAIN_X8   = 0x3,
+    ADC_PGA_GAIN_X16  = 0x4,
+    ADC_PGA_GAIN_X32  = 0x5,
+    ADC_PGA_GAIN_X64  = 0x6,
+    ADC_PGA_GAIN_X128 = 0x7
+};
 
 // Configure GPIOs, SPI, reset the MAX11270 and set CTRL1/2.
-// pgaGainCode: 0..7 (PGAG bits) as above.
-bool adcInit(uint8_t pgaGainCode);
+// pgaGain selects the analog PGA gain (x1..x128).
+bool adcInit(AdcPgaGain pgaGain);
 
 // Start continuous conversions at the given RATE[3:0] code.
 // Default is 0x0F = 64 ksps (continuous mode).

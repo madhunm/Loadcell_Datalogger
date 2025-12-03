@@ -113,10 +113,10 @@ static int32_t signExtend24(uint32_t raw24)
 
 // Public API
 
-bool adcInit(uint8_t pgaGainCode)
+bool adcInit(AdcPgaGain pgaGain)
 {
-    // Clamp pgaGainCode to 0..7 just in case
-    pgaGainCode &= 0x07;
+    // PGA gain code is just the enum value (0..7)
+    uint8_t pgaGainCode = static_cast<uint8_t>(pgaGain) & 0x07;
 
     // Configure GPIOs
     pinMode(ADC_CS_PIN,   OUTPUT);
@@ -169,7 +169,7 @@ bool adcInit(uint8_t pgaGainCode)
     //   BUFEN = 0   (input buffer disabled; adjust later if needed)
     //   LPMODE = 0  (normal power mode; we want speed)
     //   PGAEN = 1   (enable PGA)
-    //   PGAG[2:0] = pgaGainCode (x1..x128 depending on code)
+    //   PGAG[2:0] = pgaGainCode (x1..x128 depending on enum)
     uint8_t ctrl2 =
         (0 << 7) |                    // DGAIN1
         (0 << 6) |                    // DGAIN0

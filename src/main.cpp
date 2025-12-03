@@ -45,20 +45,30 @@ bool initPeripherals()
         return false;
     }
 
-    //  pgaGainCode  Analog PGA gain
-    //  ------------ ----------------
-    //      0        x1
-    //      1        x2
-    //      2        x4
-    //      3        x8
-    //      4        x16
-    //      5        x32
-    //      6        x64
-    //      7        x128
+    // ADC Gains available:
+    //  ADC_PGA_GAIN_X1
+    //  ADC_PGA_GAIN_X2
+    //  ADC_PGA_GAIN_X4
+    //  ADC_PGA_GAIN_X8
+    //  ADC_PGA_GAIN_X16
+    //  ADC_PGA_GAIN_X32
+    //  ADC_PGA_GAIN_X64
+    //  ADC_PGA_GAIN_X128
 
-    if (!adcInit(0x00)) // PGA gain x1
+    //  For bring-up, choose a safe gain like x4 or x8
+    AdcPgaGain gain = ADC_PGA_GAIN_X4;
+
+    if (!adcInit(gain))
     {
-        Serial.println("[INIT] ADC initialisation failed.");
+        Serial.println("[INIT][ADC] adcInit() failed.");
+        neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_ADC);
+        return false;
+    }
+
+    // Start continuous conversion at 64 ksps (RATE code 0x0F)
+    if (!adcStartContinuous(0x0F))
+    {
+        Serial.println("[INIT][ADC] adcStartContinuous() failed.");
         neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_ADC);
         return false;
     }
