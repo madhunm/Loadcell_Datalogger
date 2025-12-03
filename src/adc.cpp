@@ -1,9 +1,76 @@
 #include "adc.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 // Use the default SPI instance
 static SPIClass &adcSpi = SPI;
 
-// Internal helpers
+// --- Ring buffer ---
+
+static const size_t ADC_RING_BUFFER_SIZE = 2048; // power of two is nice
+static const size_t ADC_RING_BUFFER_MASK = ADC_RING_BUFFER_SIZE - 1;
+
+static AdcSample adcRingBuffer[ADC_RING_BUFFER_SIZE];
+static volatile uint32_t adcRingHead = 0;   // next write index
+static volatile uint32_t adcRingTail = 0;   // next read index
+static volatile uint32_t adcSampleIndexCounter = 0;
+static volatile uint32_t adcOverflowCount = 0;
+
+static TaskHandle_t adcTaskHandle = nullptr;
+
+// Push a sample into the ring buffer (called from sampling task)
+static inline void adcRingPush(int32_t code)
+{
+    uint32_t head = adcRingHead;
+    uint32_t nextHead = (head + 1) & ADC_RING_BUFFER_MASK;
+    uint32_t tail = adcRingTail;
+
+    if (nextHead == tail)
+    {
+        // Buffer full, drop sample
+        adcOverflowCount++;
+        return;
+    }
+
+    AdcSample &slot = adcRingBuffer[head];
+    slot.index = adcSampleIndexCounter++;
+    slot.code  = code;
+
+    adcRingHead = nextHead;
+}
+
+bool adcGetNextSample(AdcSample &sample)
+{
+    uint32_t tail = adcRingTail;
+    uint32_t head = adcRingHead;
+
+    if (tail == head)
+    {
+        return false; // empty
+    }
+
+    sample = adcRingBuffer[tail];
+    adcRingTail = (tail + 1) & ADC_RING_BUFFER_MASK;
+    return true;
+}
+
+size_t adcGetBufferedSampleCount()
+{
+    uint32_t head = adcRingHead;
+    uint32_t tail = adcRingTail;
+    if (head >= tail)
+        return head - tail;
+    return (ADC_RING_BUFFER_SIZE - tail + head);
+}
+
+size_t adcGetOverflowCount()
+{
+    return adcOverflowCount;
+}
+
+// --- Internal helpers ---
+
 static inline void adcSelect()
 {
     digitalWrite(ADC_CS_PIN, LOW);
@@ -111,11 +178,10 @@ static int32_t signExtend24(uint32_t raw24)
     return static_cast<int32_t>(raw24);
 }
 
-// Public API
+// --- Public API: init, start, self-cal ---
 
 bool adcInit(AdcPgaGain pgaGain)
 {
-    // PGA gain code is just the enum value (0..7)
     uint8_t pgaGainCode = static_cast<uint8_t>(pgaGain) & 0x07;
 
     // Configure GPIOs
@@ -144,11 +210,11 @@ bool adcInit(AdcPgaGain pgaGain)
     uint8_t stat = 0;
     adcReadRegister(ADC_REG_STAT, stat);
 
-    // Configure CTRL1:
+    // CTRL1:
     //   EXTCK = 0  -> use internal clock
     //   SYNCMODE = 0 -> default sync behavior
     //   PD1:0 = 00 -> active (not standby/sleep)
-    //   U/~B = 0   -> bipolar mode (better for bridge around 0V)
+    //   U/~B = 0   -> bipolar mode
     //   FORMAT = 0 -> two's complement
     //   SCYCLE = 0 -> continuous conversion mode
     //   CONTSC = 0 -> normal continuous
@@ -164,12 +230,12 @@ bool adcInit(AdcPgaGain pgaGain)
 
     adcWriteRegister(ADC_REG_CTRL1, ctrl1);
 
-    // Configure CTRL2:
+    // CTRL2:
     //   DGAIN1:0 = 00 (no extra digital gain)
     //   BUFEN = 0   (input buffer disabled; adjust later if needed)
     //   LPMODE = 0  (normal power mode; we want speed)
     //   PGAEN = 1   (enable PGA)
-    //   PGAG[2:0] = pgaGainCode (x1..x128 depending on enum)
+    //   PGAG[2:0] = pgaGainCode (x1..x128 depending on code)
     uint8_t ctrl2 =
         (0 << 7) |                    // DGAIN1
         (0 << 6) |                    // DGAIN0
@@ -180,15 +246,22 @@ bool adcInit(AdcPgaGain pgaGain)
 
     adcWriteRegister(ADC_REG_CTRL2, ctrl2);
 
-    // CTRL3, CTRL4, CTRL5: leave at defaults for now.
+    // CTRL3, CTRL4, CTRL5: leave at defaults for now; we'll adjust CTRL5 in adcSelfCalibrate().
+
+    // Run self-calibration (offset + gain) once on init.
+    // Use RATE = 0x0F (same as data rate), timeout 500 ms.
+    if (!adcSelfCalibrate(0x0F, 500))
+    {
+        // If self-cal fails (e.g. no ADC present), report failure.
+        return false;
+    }
 
     return true;
 }
 
 bool adcStartContinuous(uint8_t rateCode)
 {
-    // Ensure SCYCLE=0 in CTRL1 (continuous). We already set that in adcInit().
-    // Just issue a conversion command with RATE bits.
+    // Issue a conversion command with RATE bits (continuous mode already set in CTRL1).
     uint8_t cmd = buildConversionCommand(rateCode & 0x0F, false, false);
 
     adcSelect();
@@ -201,6 +274,48 @@ bool adcStartContinuous(uint8_t rateCode)
     delayMicroseconds(100);
 
     return true;
+}
+
+bool adcSelfCalibrate(uint8_t rateCode, uint32_t timeoutMs)
+{
+    // CTRL5: CAL1:CAL0 = bits B7:B6
+    // Self-calibration: CAL[1:0] = 00
+    uint8_t ctrl5 = 0;
+    if (!adcReadRegister(ADC_REG_CTRL5, ctrl5))
+    {
+        return false;
+    }
+
+    ctrl5 &= ~(0xC0); // clear CAL1:CAL0
+    if (!adcWriteRegister(ADC_REG_CTRL5, ctrl5))
+    {
+        return false;
+    }
+
+    // Issue calibration command (CAL bit = 1)
+    uint8_t cmd = buildConversionCommand(rateCode & 0x0F, true, false);
+
+    adcSelect();
+    adcSpi.beginTransaction(SPISettings(ADC_SPI_CLOCK_HZ, ADC_SPI_BIT_ORDER, ADC_SPI_MODE));
+    adcSpi.transfer(cmd);
+    adcSpi.endTransaction();
+    adcDeselect();
+
+    // Wait for RDYB to assert (low) with timeout; self-cal ~200 ms.
+    uint32_t startMs = millis();
+    while (millis() - startMs < timeoutMs)
+    {
+        if (adcIsDataReady())
+        {
+            // One dummy read to clear RDYB and latch calib results internally
+            int32_t dummy;
+            adcReadSample(dummy);
+            return true;
+        }
+        delay(1);
+    }
+
+    return false; // timeout
 }
 
 bool adcIsDataReady()
@@ -219,4 +334,44 @@ bool adcReadSample(int32_t &code)
 
     code = signExtend24(raw24);
     return true;
+}
+
+// --- Sampling task ---
+
+static void adcSamplingTask(void *param)
+{
+    (void)param;
+
+    for (;;)
+    {
+        if (adcIsDataReady())
+        {
+            int32_t code;
+            if (adcReadSample(code))
+            {
+                adcRingPush(code);
+            }
+            // After reading, RDYB goes high and will later go low again on next conversion.
+        }
+        // Tight loop for max throughput; add a tiny delay if you ever need to be nicer.
+        // delayMicroseconds(1);
+    }
+}
+
+void adcStartSamplingTask(UBaseType_t coreId)
+{
+    if (adcTaskHandle != nullptr)
+    {
+        return; // already running
+    }
+
+    xTaskCreatePinnedToCore(
+        adcSamplingTask,
+        "AdcSampling",
+        4096,        // stack (adjust if needed)
+        nullptr,
+        configMAX_PRIORITIES - 1, // very high priority
+        &adcTaskHandle,
+        coreId
+    );
 }

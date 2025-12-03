@@ -48,29 +48,30 @@ enum AdcRegister : uint8_t {
     ADC_REG_SCGC_ADC = 0x18
 };
 
-// PGA gain options (PGAG bits in CTRL2).
-// The enum value is the PGAG[2:0] code used by the ADC:
-//
-//  Code      Analog PGA gain
-//  --------  ----------------
-//  0x0       x1
-//  0x1       x2
-//  0x2       x4
-//  0x3       x8
-//  0x4       x16
-//  0x5       x32
-//  0x6       x64
-//  0x7       x128
-//
+// Analog PGA gain options (PGAG2:0 in CTRL2).
+// This gives you the "x" names in main.cpp.
 enum AdcPgaGain : uint8_t {
-    ADC_PGA_GAIN_X1   = 0x0,
-    ADC_PGA_GAIN_X2   = 0x1,
-    ADC_PGA_GAIN_X4   = 0x2,
-    ADC_PGA_GAIN_X8   = 0x3,
-    ADC_PGA_GAIN_X16  = 0x4,
-    ADC_PGA_GAIN_X32  = 0x5,
-    ADC_PGA_GAIN_X64  = 0x6,
-    ADC_PGA_GAIN_X128 = 0x7
+    ADC_PGA_GAIN_1   = 0,  // x1
+    ADC_PGA_GAIN_2   = 1,  // x2
+    ADC_PGA_GAIN_4   = 2,  // x4
+    ADC_PGA_GAIN_8   = 3,  // x8
+    ADC_PGA_GAIN_16  = 4,  // x16
+    ADC_PGA_GAIN_32  = 5,  // x32
+    ADC_PGA_GAIN_64  = 6,  // x64
+    ADC_PGA_GAIN_128 = 7   // x128
+};
+
+// Optional helper if you want the numeric factor:
+inline uint16_t adcPgaGainFactor(AdcPgaGain gain)
+{
+    return static_cast<uint16_t>(1U << static_cast<uint8_t>(gain));
+}
+
+// Sampling ring buffer
+struct AdcSample
+{
+    uint32_t index;  // monotonically increasing sample index
+    int32_t  code;   // raw 24-bit sign-extended code
 };
 
 // Configure GPIOs, SPI, reset the MAX11270 and set CTRL1/2.
@@ -81,6 +82,11 @@ bool adcInit(AdcPgaGain pgaGain);
 // Default is 0x0F = 64 ksps (continuous mode).
 bool adcStartContinuous(uint8_t rateCode = 0x0F);
 
+// Perform self-calibration (offset + gain).
+// rateCode: RATE3:0 for the calibration command (usually match your data rate).
+// timeoutMs: safety timeout; self-cal is ~200 ms so 500 ms is safe.
+bool adcSelfCalibrate(uint8_t rateCode = 0x0F, uint32_t timeoutMs = 500);
+
 // Return true if RDYB is asserted (active low, meaning data ready).
 bool adcIsDataReady();
 
@@ -89,9 +95,25 @@ bool adcIsDataReady();
 // Returns true on success, false if SPI fails for some reason.
 bool adcReadSample(int32_t &code);
 
-// Optional helpers if you want to tweak config later:
+// Optional low-level helpers for debugging:
 bool adcWriteRegister(uint8_t reg, uint8_t value);
 bool adcReadRegister(uint8_t reg, uint8_t &value);
+
+// ---- Ring buffer API ----
+
+// Start a high-priority sampling task, pinned to a given core.
+// This task polls RDYB and pushes samples into a ring buffer.
+void adcStartSamplingTask(UBaseType_t coreId = 0);
+
+// Pop the next sample from the ring buffer.
+// Returns true if a sample was available.
+bool adcGetNextSample(AdcSample &sample);
+
+// Approximate number of samples currently buffered.
+size_t adcGetBufferedSampleCount();
+
+// Number of times the ring buffer overflowed (samples dropped).
+size_t adcGetOverflowCount();
 
 // Convert raw ADC code to a normalized float in +/-FS range.
 // This assumes bipolar, 24-bit two's complement data.
