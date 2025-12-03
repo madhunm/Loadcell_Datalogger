@@ -1,71 +1,139 @@
 #include "imu.h"
+#include "adc.h" // for adcGetSampleCounter()
 
-// Global IMU instance
-SparkFun_LSM6DSV16X imuDevice;
+#include <SparkFun_LSM6DSV16X.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+// Global instance
+SparkFun_LSM6DSV16X g_imu;
+
+// Optional interrupt flags (unused for now, but kept for future DRDY usage)
+static volatile bool g_imuInt1Fired = false;
+static volatile bool g_imuInt2Fired = false;
+
+static void IRAM_ATTR imuInt1ISR()
+{
+    g_imuInt1Fired = true;
+}
+
+static void IRAM_ATTR imuInt2ISR()
+{
+    g_imuInt2Fired = true;
+}
+
+// --- IMU ring buffer ---
+
+static const size_t IMU_RING_BUFFER_SIZE = 1024;
+static const size_t IMU_RING_BUFFER_MASK = IMU_RING_BUFFER_SIZE - 1;
+
+static ImuSample imuRingBuffer[IMU_RING_BUFFER_SIZE];
+static volatile uint32_t imuRingHead = 0; // next write index
+static volatile uint32_t imuRingTail = 0; // next read index
+static volatile uint32_t imuSampleIndexCounter = 0;
+static volatile uint32_t imuOverflowCount = 0;
+
+static TaskHandle_t imuTaskHandle = nullptr;
+
+// Internal helper to push IMU sample into ring
+static inline void imuRingPush(const ImuSample &src)
+{
+    uint32_t head = imuRingHead;
+    uint32_t nextHead = (head + 1U) & IMU_RING_BUFFER_MASK;
+    uint32_t tail = imuRingTail;
+
+    if (nextHead == tail)
+    {
+        // Buffer full, drop sample
+        imuOverflowCount++;
+        return;
+    }
+
+    imuRingBuffer[head] = src;
+    imuRingHead = nextHead;
+}
+
+bool imuGetNextSample(ImuSample &sample)
+{
+    uint32_t tail = imuRingTail;
+    uint32_t head = imuRingHead;
+
+    if (tail == head)
+    {
+        return false; // empty
+    }
+
+    sample = imuRingBuffer[tail];
+    imuRingTail = (tail + 1U) & IMU_RING_BUFFER_MASK;
+    return true;
+}
+
+size_t imuGetBufferedSampleCount()
+{
+    uint32_t head = imuRingHead;
+    uint32_t tail = imuRingTail;
+
+    if (head >= tail)
+        return head - tail;
+    return (IMU_RING_BUFFER_SIZE - tail + head);
+}
+
+size_t imuGetOverflowCount()
+{
+    return imuOverflowCount;
+}
+
+// --- IMU init & single-read API ---
 
 bool imuInit(TwoWire &wire)
 {
-    (void)wire; // Wire is the default I2C bus used inside the SparkFun driver
+    // Assume Wire.begin(...) has already been called with correct pins.
+    (void)wire;
 
-    Serial.println("[IMU] Initialising LSM6DSV…");
-
-    if (!imuDevice.begin())
+    // Try default I2C address. If you wired SA0 differently, adjust here.
+    if (!g_imu.begin())
     {
-        Serial.println("[IMU] begin() failed – check I2C wiring / address (0x6B vs 0x6A).");
+        // If needed, you can try alternate address here, e.g. 0x6A:
+        // if (!g_imu.begin(0x6A)) { ... }
         return false;
     }
 
-    // Reset to a known state
-    imuDevice.deviceReset();
-    while (!imuDevice.getDeviceReset())
+    // Reset device to defaults.
+    g_imu.deviceReset();
+    while (!g_imu.getDeviceReset())
     {
         delay(1);
     }
-    Serial.println("[IMU] Device reset complete.");
 
-    // Make sure accel/gyro registers update only on complete samples
-    imuDevice.enableBlockDataUpdate();
+    // Ensure accelerometer and gyroscope registers are updated together.
+    g_imu.enableBlockDataUpdate();
 
-    // ---------------------------------------------------------
-    // Accelerometer: ±16 g, 960 Hz
-    // ---------------------------------------------------------
-    if (!imuDevice.setAccelFullScale(LSM6DSV16X_16g))
-    {
-        Serial.println("[IMU] setAccelFullScale(16g) failed.");
-        return false;
-    }
-    if (!imuDevice.setAccelDataRate(LSM6DSV16X_ODR_AT_960Hz))
-    {
-        Serial.println("[IMU] setAccelDataRate(960 Hz) failed.");
-        return false;
-    }
+    // High-rate configuration:
+    //   - Accel:  ±16 g,  960 Hz ODR
+    //   - Gyro:   2000 dps, 960 Hz ODR
+    g_imu.setAccelDataRate(LSM6DSV16X_ODR_AT_960Hz);
+    g_imu.setAccelFullScale(LSM6DSV16X_16g);
 
-    imuDevice.enableFilterSettling();
-    imuDevice.enableAccelLP2Filter();
-    imuDevice.setAccelLP2Bandwidth(LSM6DSV16X_XL_STRONG);
+    g_imu.setGyroDataRate(LSM6DSV16X_ODR_AT_960Hz);
+    g_imu.setGyroFullScale(LSM6DSV16X_2000dps);
 
-    // ---------------------------------------------------------
-    // Gyroscope: ±2000 dps, 960 Hz
-    // ---------------------------------------------------------
-    if (!imuDevice.setGyroFullScale(LSM6DSV16X_2000dps))
-    {
-        Serial.println("[IMU] setGyroFullScale(2000 dps) failed.");
-        return false;
-    }
-    if (!imuDevice.setGyroDataRate(LSM6DSV16X_ODR_AT_960Hz))
-    {
-        Serial.println("[IMU] setGyroDataRate(960 Hz) failed.");
-        return false;
-    }
+    // Filters: enable and pick reasonably strong accel filtering; medium gyro.
+    g_imu.enableFilterSettling();
 
-    imuDevice.enableGyroLP1Filter();
-    imuDevice.setGyroLP1Bandwidth(LSM6DSV16X_GY_ULTRA_LIGHT);
+    g_imu.enableAccelLP2Filter();
+    g_imu.setAccelLP2Bandwidth(LSM6DSV16X_XL_STRONG);
 
-    // Configure interrupt pins as plain inputs for now
-    pinMode(PIN_IMU_INT1, INPUT);
-    pinMode(PIN_IMU_INT2, INPUT);
+    g_imu.enableGyroLP1Filter();
+    g_imu.setGyroLP1Bandwidth(LSM6DSV16X_GY_MEDIUM);
 
-    Serial.println("[IMU] Init OK (FS=±16 g, 2000 dps; ODR=960 Hz).");
+    // Configure interrupt pins for future use (not required for sampling task).
+    pinMode(IMU_INT1_PIN, INPUT);
+    pinMode(IMU_INT2_PIN, INPUT);
+
+    // If/when you want DRDY interrupts:
+    // attachInterrupt(digitalPinToInterrupt(IMU_INT1_PIN), imuInt1ISR, RISING);
+    // attachInterrupt(digitalPinToInterrupt(IMU_INT2_PIN), imuInt2ISR, RISING);
+
     return true;
 }
 
@@ -75,22 +143,16 @@ bool imuRead(float &ax, float &ay, float &az,
     sfe_lsm_data_t accelData;
     sfe_lsm_data_t gyroData;
 
-    if (!imuDevice.checkStatus())
+    // Either checkStatus() first or just try the reads.
+    if (!g_imu.checkStatus())
     {
-        // No fresh data yet
         return false;
     }
 
-    if (!imuDevice.getAccel(&accelData))
-    {
-        Serial.println("[IMU] getAccel() failed.");
+    if (!g_imu.getAccel(&accelData))
         return false;
-    }
-    if (!imuDevice.getGyro(&gyroData))
-    {
-        Serial.println("[IMU] getGyro() failed.");
+    if (!g_imu.getGyro(&gyroData))
         return false;
-    }
 
     ax = accelData.xData;
     ay = accelData.yData;
@@ -101,4 +163,62 @@ bool imuRead(float &ax, float &ay, float &az,
     gz = gyroData.zData;
 
     return true;
+}
+
+// --- IMU sampling task ---
+
+static void imuSamplingTask(void *param)
+{
+    (void)param;
+
+    sfe_lsm_data_t accelData;
+    sfe_lsm_data_t gyroData;
+
+    // At 960 Hz ODR, samples are ~1.04 ms apart.
+    const TickType_t idleDelayTicks = pdMS_TO_TICKS(1);
+
+    for (;;)
+    {
+        if (g_imu.checkStatus())
+        {
+            if (g_imu.getAccel(&accelData) && g_imu.getGyro(&gyroData))
+            {
+                ImuSample s;
+                s.index = imuSampleIndexCounter++;
+                s.adcSampleIndex = adcGetSampleCounter(); // <-- alignment
+
+                s.ax = accelData.xData;
+                s.ay = accelData.yData;
+                s.az = accelData.zData;
+
+                s.gx = gyroData.xData;
+                s.gy = gyroData.yData;
+                s.gz = gyroData.zData;
+
+                imuRingPush(s);
+            }
+        }
+        else
+        {
+            // No new data yet; yield a bit so we don't hog core 0
+            vTaskDelay(idleDelayTicks);
+        }
+    }
+}
+
+void imuStartSamplingTask(UBaseType_t coreId)
+{
+    if (imuTaskHandle != nullptr)
+    {
+        return; // already running
+    }
+
+    xTaskCreatePinnedToCore(
+        imuSamplingTask,
+        "ImuSampling",
+        4096, // stack (adjust if needed)
+        nullptr,
+        configMAX_PRIORITIES - 2, // one step below ADC task
+        &imuTaskHandle,
+        coreId);
 }

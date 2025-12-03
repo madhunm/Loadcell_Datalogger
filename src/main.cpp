@@ -18,6 +18,9 @@ enum SystemState
 
 SystemState systemState = STATE_INIT;
 
+// Flag to ensure we start sampling tasks only once
+static bool samplingTasksStarted = false;
+
 // ---- Combined peripheral init ----
 bool initPeripherals()
 {
@@ -45,22 +48,22 @@ bool initPeripherals()
         return false;
     }
 
-    // ADC Gains available:
-    //  ADC_PGA_GAIN_X1
-    //  ADC_PGA_GAIN_X2
-    //  ADC_PGA_GAIN_X4
-    //  ADC_PGA_GAIN_X8
-    //  ADC_PGA_GAIN_X16
-    //  ADC_PGA_GAIN_X32
-    //  ADC_PGA_GAIN_X64
-    //  ADC_PGA_GAIN_X128
+    // ADC Gains available (from AdcPgaGain):
+    //  ADC_PGA_GAIN_1
+    //  ADC_PGA_GAIN_2
+    //  ADC_PGA_GAIN_4
+    //  ADC_PGA_GAIN_8
+    //  ADC_PGA_GAIN_16
+    //  ADC_PGA_GAIN_32
+    //  ADC_PGA_GAIN_64
+    //  ADC_PGA_GAIN_128
 
-    //  For bring-up, choose a safe gain like x4 or x8
-    AdcPgaGain gain = ADC_PGA_GAIN_X4;
+    // For bring-up, choose a safe gain like x4 or x8
+    AdcPgaGain gain = ADC_PGA_GAIN_4;
 
     if (!adcInit(gain))
     {
-        Serial.println("[INIT][ADC] adcInit() failed.");
+        Serial.println("[INIT][ADC] adcInit() (including self-cal) failed.");
         neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_ADC);
         return false;
     }
@@ -77,6 +80,10 @@ bool initPeripherals()
 }
 
 // ---- Logging stub ----
+// For now this just prints a heartbeat; later we will:
+//  - Drain adcGetNextSample()
+//  - Drain imuGetNextSample()
+//  - Write to SD
 void loggingTick()
 {
     static uint32_t lastPrint = 0;
@@ -84,7 +91,15 @@ void loggingTick()
     if (now - lastPrint > 1000)
     {
         lastPrint = now;
-        Serial.println("[LOG] Logging tick...");
+
+        size_t adcCount = adcGetBufferedSampleCount();
+        size_t adcOvfl = adcGetOverflowCount();
+        size_t imuCount = imuGetBufferedSampleCount();
+        size_t imuOvfl = imuGetOverflowCount();
+
+        Serial.printf("[LOG] tick: ADC buffered=%u ovfl=%u, IMU buffered=%u ovfl=%u\n",
+                      (unsigned)adcCount, (unsigned)adcOvfl,
+                      (unsigned)imuCount, (unsigned)imuOvfl);
     }
 }
 
@@ -103,7 +118,7 @@ void setup()
     // Logstart button: external pulldown (LOW idle, HIGH pressed)
     pinMode(PIN_LOGSTART_BUTTON, INPUT);
 
-    // ADC SPI pins
+    // ADC SPI pins (redundant with adcInit, but harmless)
     pinMode(PIN_ADC_CS, OUTPUT);
     pinMode(PIN_ADC_SCK, OUTPUT);
     pinMode(PIN_ADC_MOSI, OUTPUT);
@@ -167,6 +182,20 @@ void loop()
             systemState = STATE_LOGGING;
             Serial.println("[STATE] LOGGING: logging started.");
             neopixelSetPattern(NEOPIXEL_PATTERN_LOGGING);
+
+            // Start acquisition tasks ONCE, pinned to core 0.
+            if (!samplingTasksStarted)
+            {
+                samplingTasksStarted = true;
+
+                // Core split:
+                //   Core 0: ADC + IMU sampling (these tasks)
+                //   Core 1: this loop() + logging
+                adcStartSamplingTask(0);
+                imuStartSamplingTask(0);
+
+                Serial.println("[TASK] ADC and IMU sampling tasks started on core 0.");
+            }
         }
         else
         {
@@ -187,10 +216,11 @@ void loop()
         break;
 
     case STATE_LOGGING:
-        // Logging loop (ADC/SD/IMU hooks will go here later)
+        // Logging loop (ADC/SD/IMU hooks will go here)
         loggingTick();
         break;
     }
 
+    // Small delay; acquisition is on the other core so we can be relaxed here.
     delay(10);
 }
