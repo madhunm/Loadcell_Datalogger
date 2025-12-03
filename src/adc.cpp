@@ -13,7 +13,7 @@ static const size_t ADC_RING_BUFFER_MASK = ADC_RING_BUFFER_SIZE - 1;
 
 static AdcSample adcRingBuffer[ADC_RING_BUFFER_SIZE];
 static volatile uint32_t adcRingHead = 0; // next write index
-static volatile uint32_t adcRingTail = 0; // next read index;
+static volatile uint32_t adcRingTail = 0; // next read index
 static volatile uint32_t adcSampleIndexCounter = 0;
 static volatile uint32_t adcOverflowCount = 0;
 
@@ -29,12 +29,13 @@ static inline void adcRingPush(int32_t code)
     if (nextHead == tail)
     {
         // Buffer full, drop sample
-        adcOverflowCount++;
+        adcOverflowCount = adcOverflowCount + 1;
         return;
     }
 
     AdcSample &slot = adcRingBuffer[head];
-    slot.index = adcSampleIndexCounter++;
+    slot.index = adcSampleIndexCounter;
+    adcSampleIndexCounter = adcSampleIndexCounter + 1;
     slot.code = code;
 
     adcRingHead = nextHead;
@@ -215,14 +216,7 @@ bool adcInit(AdcPgaGain pgaGain)
     uint8_t stat = 0;
     adcReadRegister(ADC_REG_STAT, stat);
 
-    // CTRL1:
-    //   EXTCK = 0  -> use internal clock
-    //   SYNCMODE = 0 -> default sync behavior
-    //   PD1:0 = 00 -> active (not standby/sleep)
-    //   U/~B = 0   -> bipolar mode
-    //   FORMAT = 0 -> two's complement
-    //   SCYCLE = 0 -> continuous conversion mode
-    //   CONTSC = 0 -> normal continuous
+    // CTRL1: continuous, bipolar, two's complement, internal clock
     uint8_t ctrl1 =
         (0 << 7) | // EXTCK
         (0 << 6) | // SYNCMODE
@@ -235,12 +229,7 @@ bool adcInit(AdcPgaGain pgaGain)
 
     adcWriteRegister(ADC_REG_CTRL1, ctrl1);
 
-    // CTRL2:
-    //   DGAIN1:0 = 00 (no extra digital gain)
-    //   BUFEN = 0   (input buffer disabled)
-    //   LPMODE = 0  (normal power mode)
-    //   PGAEN = 1   (enable PGA)
-    //   PGAG[2:0] = pgaGainCode (x1..x128)
+    // CTRL2: PGA enabled, gain set by pgaGainCode, no digital gain, normal power
     uint8_t ctrl2 =
         (0 << 7) |            // DGAIN1
         (0 << 6) |            // DGAIN0
@@ -251,12 +240,11 @@ bool adcInit(AdcPgaGain pgaGain)
 
     adcWriteRegister(ADC_REG_CTRL2, ctrl2);
 
-    // CTRL3, CTRL4, CTRL5: left at defaults; CTRL5 is modified in adcSelfCalibrate().
+    // CTRL3, CTRL4, CTRL5: left at defaults; CTRL5 is used in adcSelfCalibrate().
 
     // Run self-calibration (offset + gain) once on init.
     if (!adcSelfCalibrate(0x0F, 500))
     {
-        // If self-cal fails (e.g. no ADC present), report failure.
         return false;
     }
 
@@ -356,9 +344,7 @@ static void adcSamplingTask(void *param)
             }
             // RDYB will go high until the next conversion completes
         }
-        // Core 0 is basically dedicated to this and the IMU; no delay here
-        // to maximize throughput. If you ever need to be nicer, add a tiny
-        // delayMicroseconds(1) here.
+        // Core 0 is basically dedicated to this and the IMU; no delay here.
     }
 }
 

@@ -1,14 +1,13 @@
 #include "imu.h"
 #include "adc.h" // for adcGetSampleCounter()
 
-#include <SparkFun_LSM6DSV16X.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 // Global instance
 SparkFun_LSM6DSV16X g_imu;
 
-// Optional interrupt flags (unused for now, but kept for future DRDY usage)
+// Optional interrupt flags (unused for now)
 static volatile bool g_imuInt1Fired = false;
 static volatile bool g_imuInt2Fired = false;
 
@@ -45,7 +44,7 @@ static inline void imuRingPush(const ImuSample &src)
     if (nextHead == tail)
     {
         // Buffer full, drop sample
-        imuOverflowCount++;
+        imuOverflowCount = imuOverflowCount + 1;
         return;
     }
 
@@ -90,22 +89,19 @@ bool imuInit(TwoWire &wire)
     // Assume Wire.begin(...) has already been called with correct pins.
     (void)wire;
 
-    // Try default I2C address. If you wired SA0 differently, adjust here.
     if (!g_imu.begin())
     {
-        // If needed, you can try alternate address here, e.g. 0x6A:
+        // If needed, try alternate address here, e.g. 0x6A
         // if (!g_imu.begin(0x6A)) { ... }
         return false;
     }
 
-    // Reset device to defaults.
     g_imu.deviceReset();
     while (!g_imu.getDeviceReset())
     {
         delay(1);
     }
 
-    // Ensure accelerometer and gyroscope registers are updated together.
     g_imu.enableBlockDataUpdate();
 
     // High-rate configuration:
@@ -117,7 +113,7 @@ bool imuInit(TwoWire &wire)
     g_imu.setGyroDataRate(LSM6DSV16X_ODR_AT_960Hz);
     g_imu.setGyroFullScale(LSM6DSV16X_2000dps);
 
-    // Filters: enable and pick reasonably strong accel filtering; medium gyro.
+    // Filters
     g_imu.enableFilterSettling();
 
     g_imu.enableAccelLP2Filter();
@@ -126,11 +122,9 @@ bool imuInit(TwoWire &wire)
     g_imu.enableGyroLP1Filter();
     g_imu.setGyroLP1Bandwidth(LSM6DSV16X_GY_MEDIUM);
 
-    // Configure interrupt pins for future use (not required for sampling task).
+    // Interrupt pins prepared for possible future DRDY use.
     pinMode(IMU_INT1_PIN, INPUT);
     pinMode(IMU_INT2_PIN, INPUT);
-
-    // If/when you want DRDY interrupts:
     // attachInterrupt(digitalPinToInterrupt(IMU_INT1_PIN), imuInt1ISR, RISING);
     // attachInterrupt(digitalPinToInterrupt(IMU_INT2_PIN), imuInt2ISR, RISING);
 
@@ -143,7 +137,6 @@ bool imuRead(float &ax, float &ay, float &az,
     sfe_lsm_data_t accelData;
     sfe_lsm_data_t gyroData;
 
-    // Either checkStatus() first or just try the reads.
     if (!g_imu.checkStatus())
     {
         return false;
@@ -174,8 +167,7 @@ static void imuSamplingTask(void *param)
     sfe_lsm_data_t accelData;
     sfe_lsm_data_t gyroData;
 
-    // At 960 Hz ODR, samples are ~1.04 ms apart.
-    const TickType_t idleDelayTicks = pdMS_TO_TICKS(1);
+    const TickType_t idleDelayTicks = pdMS_TO_TICKS(1); // ~1 ms
 
     for (;;)
     {
@@ -184,8 +176,9 @@ static void imuSamplingTask(void *param)
             if (g_imu.getAccel(&accelData) && g_imu.getGyro(&gyroData))
             {
                 ImuSample s;
-                s.index = imuSampleIndexCounter++;
-                s.adcSampleIndex = adcGetSampleCounter(); // <-- alignment
+                s.index = imuSampleIndexCounter;
+                imuSampleIndexCounter = imuSampleIndexCounter + 1;
+                s.adcSampleIndex = adcGetSampleCounter();
 
                 s.ax = accelData.xData;
                 s.ay = accelData.yData;
@@ -200,7 +193,7 @@ static void imuSamplingTask(void *param)
         }
         else
         {
-            // No new data yet; yield a bit so we don't hog core 0
+            // No new data yet; yield a bit
             vTaskDelay(idleDelayTicks);
         }
     }

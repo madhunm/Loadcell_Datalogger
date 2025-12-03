@@ -2,32 +2,30 @@
 
 #include <Arduino.h>
 #include <Wire.h>
-
-// SparkFun IMU driver
 #include <SparkFun_LSM6DSV16X.h>
 
 // Global IMU instance (defined in imu.cpp)
 extern SparkFun_LSM6DSV16X g_imu;
 
 // Pin definitions for the IMU interrupts.
-constexpr int IMU_INT1_PIN = 39; // Connected to LSM6DSV INT1
-constexpr int IMU_INT2_PIN = 40; // Connected to LSM6DSV INT2
+constexpr int IMU_INT1_PIN = 39;   // Connected to LSM6DSV INT1
+constexpr int IMU_INT2_PIN = 40;   // Connected to LSM6DSV INT2
 
 // Call once during startup, after Wire.begin().
 bool imuInit(TwoWire &wire = Wire);
 
 // Optional helper to read one sample of accel/gyro (for testing).
 bool imuRead(float &ax, float &ay, float &az,
-              float &gx, float &gy, float &gz);
+             float &gx, float &gy, float &gz);
 
 // ---- IMU sampling ring buffer ----
 
 struct ImuSample
 {
-    uint32_t index;          // IMU sample index
-    uint32_t adcSampleIndex; // ADC sample index at time of read
-    float ax, ay, az;        // accelerometer (units from SparkFun lib)
-    float gx, gy, gz;        // gyro (units from SparkFun lib)
+    uint32_t index;           // IMU sample index
+    uint32_t adcSampleIndex;  // ADC sample index at time of read
+    float ax, ay, az;         // accelerometer
+    float gx, gy, gz;         // gyro
 };
 
 // Start IMU sampling task pinned to a given core (core 0 for you).
