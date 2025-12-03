@@ -9,6 +9,9 @@
 static RX8900 rtcDevice;
 static volatile bool rtcUpdatePending = false;
 
+// RX8900 I2C 7-bit address (our own name to avoid conflicts)
+static const uint8_t RTC_I2C_ADDRESS = 0x32;
+
 // Register addresses (basic time/calendar bank)
 static const uint8_t RX8900_REG_SEC = 0x00;
 static const uint8_t RX8900_REG_MIN = 0x01;
@@ -71,7 +74,7 @@ static uint8_t weekRegToWeekdayIndex(uint8_t weekReg)
 // I2C write sequence: addr, startReg, data[len]
 static bool rtcWriteRegisters(uint8_t startReg, const uint8_t *data, size_t length)
 {
-    Wire.beginTransmission(RX8900_I2C_ADDRESS);
+    Wire.beginTransmission(RTC_I2C_ADDRESS);
     Wire.write(startReg);
     Wire.write(data, length);
     return (Wire.endTransmission() == 0);
@@ -80,14 +83,14 @@ static bool rtcWriteRegisters(uint8_t startReg, const uint8_t *data, size_t leng
 // I2C read sequence: write startReg, then read len bytes
 static bool rtcReadRegisters(uint8_t startReg, uint8_t *data, size_t length)
 {
-    Wire.beginTransmission(RX8900_I2C_ADDRESS);
+    Wire.beginTransmission(RTC_I2C_ADDRESS);
     Wire.write(startReg);
     if (Wire.endTransmission(false) != 0)
     {
         return false;
     }
 
-    size_t readCount = Wire.requestFrom(RX8900_I2C_ADDRESS, (uint8_t)length);
+    size_t readCount = Wire.requestFrom(RTC_I2C_ADDRESS, (uint8_t)length);
     if (readCount != length)
     {
         return false;
@@ -309,7 +312,6 @@ void rtcInitSampleTimebase(SampleTimebase &timebase,
 double rtcSampleIndexToSeconds(const SampleTimebase &timebase,
                                uint64_t sampleIndex)
 {
-    // Positive for future samples, negative for past samples (if any).
     int64_t deltaSamples = (int64_t)sampleIndex - (int64_t)timebase.anchorSampleIndex;
     return (double)deltaSamples / (double)timebase.sampleRate;
 }
