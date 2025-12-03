@@ -9,12 +9,10 @@
 extern SparkFun_LSM6DSV16X imuDevice;
 
 // Initialise the IMU.
-// - Assumes Wire.begin(...) was already called in main.cpp with the correct SDA/SCL pins.
-// - Returns true on success, false if the device does not respond or config fails.
+// Assumes Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL) was already called.
 bool imuInit(TwoWire &wire = Wire);
 
 // Read one accel/gyro sample if new data is available.
-// Returns true and fills the output refs if a fresh sample was read,
-// or false if no new data was ready.
+// Returns true and fills the outputs, or false if no fresh sample.
 bool imuRead(float &ax, float &ay, float &az,
              float &gx, float &gy, float &gz);
