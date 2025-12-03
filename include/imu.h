@@ -2,22 +2,19 @@
 
 #include <Arduino.h>
 #include <Wire.h>
-
-// Forward declare the IMU object type so users of this header don't need
-// to include the SparkFun header directly unless they want to.
 #include <SparkFun_LSM6DSV16X.h>
+#include "pins.h"
 
 // Global IMU instance (defined in imu.cpp)
-extern SparkFun_LSM6DSV16X g_imu;
+extern SparkFun_LSM6DSV16X imuDevice;
 
-// Pin definitions for the IMU interrupts.
-// Adjust these if your pin naming is different.
-constexpr int IMU_INT1_PIN = 39;   // Connected to LSM6DSV INT1
-constexpr int IMU_INT2_PIN = 40;   // Connected to LSM6DSV INT2
+// Initialise the IMU.
+// - Assumes Wire.begin(...) was already called in main.cpp with the correct SDA/SCL pins.
+// - Returns true on success, false if the device does not respond or config fails.
+bool imuInit(TwoWire &wire = Wire);
 
-// Call once during startup, after Wire.begin().
-bool imu_init(TwoWire &wire = Wire);
-
-// Optional helper to read one sample of accel/gyro (for testing)
-bool imu_read(float &ax, float &ay, float &az,
-              float &gx, float &gy, float &gz);
+// Read one accel/gyro sample if new data is available.
+// Returns true and fills the output refs if a fresh sample was read,
+// or false if no new data was ready.
+bool imuRead(float &ax, float &ay, float &az,
+             float &gx, float &gy, float &gz);
