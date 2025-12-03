@@ -6,6 +6,7 @@
 #include "rtc.h"
 #include "imu.h"
 #include "neopixel.h"
+#include "adc.h"
 
 // ---- System state machine ----
 enum SystemState
@@ -16,13 +17,6 @@ enum SystemState
 };
 
 SystemState systemState = STATE_INIT;
-
-// ---- ADC init stub ----
-bool initAdc()
-{
-    Serial.println("[INIT][ADC] (stub) MAX11270 not initialised yet.");
-    return true;
-}
 
 // ---- Combined peripheral init ----
 bool initPeripherals()
@@ -51,7 +45,18 @@ bool initPeripherals()
         return false;
     }
 
-    if (!initAdc())
+    //  pgaGainCode  Analog PGA gain
+    //  ------------ ----------------
+    //      0        x1
+    //      1        x2
+    //      2        x4
+    //      3        x8
+    //      4        x16
+    //      5        x32
+    //      6        x64
+    //      7        x128
+
+    if (!adcInit(0x00)) // PGA gain x1
     {
         Serial.println("[INIT] ADC initialisation failed.");
         neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_ADC);
