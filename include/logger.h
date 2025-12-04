@@ -52,8 +52,11 @@ struct AdcLogFileHeader
     // Sample timebase anchor: ADC sample index at log start
     uint32_t adcIndexAtStart;
 
+    // Data integrity: CRC32 checksum of all data records (calculated at session end)
+    uint32_t dataCrc32;
+
     // Reserved for future expansion (e.g. calibration constants)
-    uint8_t  reserved2[16];
+    uint8_t  reserved2[12];
 };
 #pragma pack(pop)
 
@@ -84,8 +87,11 @@ struct ImuLogFileHeader
     // Sample timebase anchor: ADC sample index at log start (for correlation)
     uint32_t adcIndexAtStart;
 
+    // Data integrity: CRC32 checksum of all data records (calculated at session end)
+    uint32_t dataCrc32;
+
     // Reserved for future expansion
-    uint8_t  reserved2[16];
+    uint8_t  reserved2[12];
 };
 #pragma pack(pop)
 
@@ -131,6 +137,19 @@ bool loggerIsSessionOpen();
 
 // Get current logger state (IDLE / SESSION_OPEN / CONVERTING).
 LoggerState loggerGetState();
+
+// Get write failure statistics (for status endpoint)
+struct LoggerWriteStats
+{
+    uint32_t adcWriteFailures;      // Total ADC write failures
+    uint32_t imuWriteFailures;      // Total IMU write failures
+    uint32_t adcConsecutiveFailures; // Current consecutive ADC failures
+    uint32_t imuConsecutiveFailures; // Current consecutive IMU failures
+    uint32_t adcRecordsWritten;      // Total ADC records written successfully
+    uint32_t imuRecordsWritten;      // Total IMU records written successfully
+};
+
+LoggerWriteStats loggerGetWriteStats();
 
 // Called regularly from STATE_LOGGING in main.cpp.
 // Drains ADC and IMU ring buffers and writes records to respective binary files.

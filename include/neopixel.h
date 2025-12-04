@@ -15,7 +15,11 @@ enum NeopixelPattern
     NEOPIXEL_PATTERN_ERROR_SD,  // SD card error
     NEOPIXEL_PATTERN_ERROR_RTC, // RTC error
     NEOPIXEL_PATTERN_ERROR_IMU, // IMU error
-    NEOPIXEL_PATTERN_ERROR_ADC  // ADC error
+    NEOPIXEL_PATTERN_ERROR_ADC, // ADC error
+    
+    NEOPIXEL_PATTERN_ERROR_WRITE_FAILURE,  // Write failure (red fast blink)
+    NEOPIXEL_PATTERN_ERROR_LOW_SPACE,      // Low SD card space (orange/yellow)
+    NEOPIXEL_PATTERN_ERROR_BUFFER_FULL    // Buffer overflow (purple/magenta)
 };
 
 // Must be called once at startup

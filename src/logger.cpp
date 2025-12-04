@@ -8,6 +8,7 @@
 
 #include "FS.h"
 #include <cstring>
+#include "esp_crc.h"  // For CRC32 calculation
 
 // Internal logger state
 static LoggerState   s_loggerState        = LOGGER_IDLE;
@@ -38,6 +39,18 @@ static uint8_t       s_adcWriteBuffer[WRITE_BUFFER_SIZE];
 static uint8_t       s_imuWriteBuffer[WRITE_BUFFER_SIZE];
 static size_t        s_adcBufferPos        = 0;
 static size_t        s_imuBufferPos        = 0;
+
+// Write failure tracking and retry logic
+static const uint32_t MAX_CONSECUTIVE_FAILURES = 10;  // Stop session after this many consecutive failures
+static const uint32_t MAX_RETRY_ATTEMPTS = 4;          // Retry up to 4 times with exponential backoff
+static const uint32_t INITIAL_RETRY_DELAY_MS = 1;      // Initial retry delay: 1ms
+
+// Write statistics
+static LoggerWriteStats s_writeStats = {0};
+
+// CRC32 calculation for data integrity
+static uint32_t s_adcCrc32 = 0;  // Running CRC32 for ADC data
+static uint32_t s_imuCrc32 = 0;  // Running CRC32 for IMU data
 
 // ---- Internal helpers ----
 
@@ -92,6 +105,9 @@ static void fillAdcLogFileHeader(AdcLogFileHeader &hdr,
     // Sample timebase anchor
     hdr.adcIndexAtStart = adcIndexAtStart;
 
+    // Initialize CRC32 to 0 (will be updated at session end)
+    hdr.dataCrc32 = 0;
+
     // reserved2[] already zeroed by memset()
 }
 
@@ -131,30 +147,94 @@ static void fillImuLogFileHeader(ImuLogFileHeader &hdr,
     // Sample timebase anchor (for correlation with ADC samples)
     hdr.adcIndexAtStart = adcIndexAtStart;
 
+    // Initialize CRC32 to 0 (will be updated at session end)
+    hdr.dataCrc32 = 0;
+
     // reserved2[] already zeroed by memset()
 }
 
-// Flush ADC write buffer to file
-static void flushAdcBuffer()
+// Flush ADC write buffer to file with retry logic
+// Returns true on success, false on failure
+static bool flushAdcBuffer()
 {
-    if (s_adcBufferPos > 0 && s_adcFile)
+    if (s_adcBufferPos == 0 || !s_adcFile)
     {
-        s_adcFile.write(s_adcWriteBuffer, s_adcBufferPos);
-        s_adcBufferPos = 0;
+        return true;  // Nothing to flush or file not open
     }
+
+    // Retry with exponential backoff
+    uint32_t delayMs = INITIAL_RETRY_DELAY_MS;
+    for (uint32_t attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt++)
+    {
+        size_t written = s_adcFile.write(s_adcWriteBuffer, s_adcBufferPos);
+        
+        if (written == s_adcBufferPos)
+        {
+            // Success - update CRC32 and reset failure counter
+            s_adcCrc32 = esp_crc32_le(s_adcCrc32, s_adcWriteBuffer, s_adcBufferPos);
+            s_writeStats.adcConsecutiveFailures = 0;
+            s_adcBufferPos = 0;
+            return true;
+        }
+        
+        // Write failed - retry with exponential backoff
+        s_writeStats.adcWriteFailures++;
+        s_writeStats.adcConsecutiveFailures++;
+        
+        if (attempt < MAX_RETRY_ATTEMPTS - 1)
+        {
+            delay(delayMs);
+            delayMs *= 2;  // Exponential backoff: 1ms, 2ms, 4ms, 8ms
+        }
+    }
+    
+    // All retries failed
+    Serial.printf("[LOGGER] ERROR: Failed to flush ADC buffer after %d attempts\n", MAX_RETRY_ATTEMPTS);
+    return false;
 }
 
-// Flush IMU write buffer to file
-static void flushImuBuffer()
+// Flush IMU write buffer to file with retry logic
+// Returns true on success, false on failure
+static bool flushImuBuffer()
 {
-    if (s_imuBufferPos > 0 && s_imuFile)
+    if (s_imuBufferPos == 0 || !s_imuFile)
     {
-        s_imuFile.write(s_imuWriteBuffer, s_imuBufferPos);
-        s_imuBufferPos = 0;
+        return true;  // Nothing to flush or file not open
     }
+
+    // Retry with exponential backoff
+    uint32_t delayMs = INITIAL_RETRY_DELAY_MS;
+    for (uint32_t attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt++)
+    {
+        size_t written = s_imuFile.write(s_imuWriteBuffer, s_imuBufferPos);
+        
+        if (written == s_imuBufferPos)
+        {
+            // Success - update CRC32 and reset failure counter
+            s_imuCrc32 = esp_crc32_le(s_imuCrc32, s_imuWriteBuffer, s_imuBufferPos);
+            s_writeStats.imuConsecutiveFailures = 0;
+            s_imuBufferPos = 0;
+            return true;
+        }
+        
+        // Write failed - retry with exponential backoff
+        s_writeStats.imuWriteFailures++;
+        s_writeStats.imuConsecutiveFailures++;
+        
+        if (attempt < MAX_RETRY_ATTEMPTS - 1)
+        {
+            delay(delayMs);
+            delayMs *= 2;  // Exponential backoff: 1ms, 2ms, 4ms, 8ms
+        }
+    }
+    
+    // All retries failed
+    Serial.printf("[LOGGER] ERROR: Failed to flush IMU buffer after %d attempts\n", MAX_RETRY_ATTEMPTS);
+    return false;
 }
 
 // Write ADC record to buffer (flushes buffer if full)
+// Returns true on success, false on failure
 static bool writeAdcRecord(const AdcLogRecord &record)
 {
     const size_t recordSize = sizeof(AdcLogRecord);
@@ -162,17 +242,23 @@ static bool writeAdcRecord(const AdcLogRecord &record)
     // Check if record fits in remaining buffer space
     if (s_adcBufferPos + recordSize > WRITE_BUFFER_SIZE)
     {
-        flushAdcBuffer();
+        // Buffer full - flush it first
+        if (!flushAdcBuffer())
+        {
+            return false;  // Flush failed
+        }
     }
     
     // Copy record to buffer
     memcpy(&s_adcWriteBuffer[s_adcBufferPos], &record, recordSize);
     s_adcBufferPos += recordSize;
+    s_writeStats.adcRecordsWritten++;
     
     return true;
 }
 
 // Write IMU record to buffer (flushes buffer if full)
+// Returns true on success, false on failure
 static bool writeImuRecord(const ImuLogRecord &record)
 {
     const size_t recordSize = sizeof(ImuLogRecord);
@@ -180,12 +266,17 @@ static bool writeImuRecord(const ImuLogRecord &record)
     // Check if record fits in remaining buffer space
     if (s_imuBufferPos + recordSize > WRITE_BUFFER_SIZE)
     {
-        flushImuBuffer();
+        // Buffer full - flush it first
+        if (!flushImuBuffer())
+        {
+            return false;  // Flush failed
+        }
     }
     
     // Copy record to buffer
     memcpy(&s_imuWriteBuffer[s_imuBufferPos], &record, recordSize);
     s_imuBufferPos += recordSize;
+    s_writeStats.imuRecordsWritten++;
     
     return true;
 }
@@ -206,6 +297,13 @@ void loggerInit()
     s_csvFilename     = "";
     s_adcBufferPos    = 0;
     s_imuBufferPos    = 0;
+    
+    // Reset write statistics
+    memset(&s_writeStats, 0, sizeof(s_writeStats));
+    
+    // Initialize CRC32
+    s_adcCrc32 = 0;
+    s_imuCrc32 = 0;
 }
 
 bool loggerStartSession(const LoggerConfig &config)
@@ -214,8 +312,34 @@ bool loggerStartSession(const LoggerConfig &config)
     if (!sdCardIsMounted())
     {
         Serial.println("[LOGGER] Cannot start session: SD card is not mounted.");
+        neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_SD);
         return false;
     }
+
+    // Check available SD card space
+    // Estimate space needed: assume 1 minute of logging as minimum
+    // ADC: 64k samples/sec * 8 bytes/sample = 512 KB/sec
+    // IMU: 960 samples/sec * 28 bytes/sample = ~27 KB/sec
+    // Total: ~539 KB/sec = ~32 MB/min
+    // Require at least 10 MB free (safety margin) or 1 minute worth, whichever is larger
+    uint64_t freeSpace = sdCardGetFreeSpace();
+    uint64_t minRequiredSpace = 10ULL * 1024 * 1024;  // 10 MB minimum
+    uint64_t oneMinuteSpace = 32ULL * 1024 * 1024;     // ~32 MB for 1 minute
+    
+    if (freeSpace < minRequiredSpace && freeSpace < oneMinuteSpace)
+    {
+        Serial.printf("[LOGGER] ERROR: Insufficient SD card space. Free: %llu bytes, Required: %llu bytes\n",
+                     freeSpace, minRequiredSpace > oneMinuteSpace ? minRequiredSpace : oneMinuteSpace);
+        neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_LOW_SPACE);
+        return false;
+    }
+    
+    Serial.printf("[LOGGER] SD card free space: %llu MB\n", freeSpace / (1024ULL * 1024ULL));
+
+    // Reset write statistics and CRC32
+    memset(&s_writeStats, 0, sizeof(s_writeStats));
+    s_adcCrc32 = 0;
+    s_imuCrc32 = 0;
 
     // Get filesystem
     s_fs = &sdCardGetFs();
@@ -383,16 +507,26 @@ void loggerTick()
         
         if (!writeAdcRecord(record))
         {
-            Serial.println("[LOGGER] ERROR: Failed to write ADC record!");
             // Check if SD card was removed
             if (!sdCardCheckPresent())
             {
                 Serial.println("[LOGGER] SD card removed - stopping session");
                 loggerStopSessionAndFlush();
                 s_loggerState = LOGGER_IDLE;
+                neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_SD);
                 return;
             }
-            // Continue anyway to avoid blocking (will retry on next tick)
+            
+            // Check for too many consecutive failures
+            if (s_writeStats.adcConsecutiveFailures >= MAX_CONSECUTIVE_FAILURES)
+            {
+                Serial.printf("[LOGGER] ERROR: Too many consecutive ADC write failures (%u). Stopping session.\n",
+                             s_writeStats.adcConsecutiveFailures);
+                loggerStopSessionAndFlush();
+                s_loggerState = LOGGER_IDLE;
+                neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_WRITE_FAILURE);
+                return;
+            }
         }
         adcSamplesProcessed++;
     }
@@ -414,16 +548,26 @@ void loggerTick()
         
         if (!writeImuRecord(record))
         {
-            Serial.println("[LOGGER] ERROR: Failed to write IMU record!");
             // Check if SD card was removed
             if (!sdCardCheckPresent())
             {
                 Serial.println("[LOGGER] SD card removed - stopping session");
                 loggerStopSessionAndFlush();
                 s_loggerState = LOGGER_IDLE;
+                neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_SD);
                 return;
             }
-            // Continue anyway to avoid blocking
+            
+            // Check for too many consecutive failures
+            if (s_writeStats.imuConsecutiveFailures >= MAX_CONSECUTIVE_FAILURES)
+            {
+                Serial.printf("[LOGGER] ERROR: Too many consecutive IMU write failures (%u). Stopping session.\n",
+                             s_writeStats.imuConsecutiveFailures);
+                loggerStopSessionAndFlush();
+                s_loggerState = LOGGER_IDLE;
+                neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_WRITE_FAILURE);
+                return;
+            }
         }
         imuSamplesProcessed++;
     }
@@ -434,8 +578,29 @@ void loggerTick()
     uint32_t nowMs = millis();
     if (nowMs - lastFlushMs > 100)  // Flush every 100ms
     {
-        flushAdcBuffer();
-        flushImuBuffer();
+        // Flush buffers and check for failures
+        bool adcFlushOk = flushAdcBuffer();
+        bool imuFlushOk = flushImuBuffer();
+        
+        // Check for consecutive flush failures
+        if (!adcFlushOk && s_writeStats.adcConsecutiveFailures >= MAX_CONSECUTIVE_FAILURES)
+        {
+            Serial.printf("[LOGGER] ERROR: Too many consecutive ADC flush failures. Stopping session.\n");
+            loggerStopSessionAndFlush();
+            s_loggerState = LOGGER_IDLE;
+            neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_WRITE_FAILURE);
+            return;
+        }
+        
+        if (!imuFlushOk && s_writeStats.imuConsecutiveFailures >= MAX_CONSECUTIVE_FAILURES)
+        {
+            Serial.printf("[LOGGER] ERROR: Too many consecutive IMU flush failures. Stopping session.\n");
+            loggerStopSessionAndFlush();
+            s_loggerState = LOGGER_IDLE;
+            neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_WRITE_FAILURE);
+            return;
+        }
+        
         lastFlushMs = nowMs;
     }
 }
@@ -479,16 +644,40 @@ bool loggerStopSessionAndFlush()
     flushAdcBuffer();
     flushImuBuffer();
 
-    // Flush and close files
+    // Write CRC32 checksums back to file headers before closing
     if (s_adcFile)
     {
-        s_adcFile.flush();
+        // Seek to CRC32 field in header (offset of dataCrc32 from start of header)
+        size_t crc32Offset = offsetof(AdcLogFileHeader, dataCrc32);
+        if (s_adcFile.seek(crc32Offset))
+        {
+            s_adcFile.write(reinterpret_cast<const uint8_t *>(&s_adcCrc32), sizeof(uint32_t));
+            s_adcFile.flush();  // Ensure CRC32 is written to disk
+            Serial.printf("[LOGGER] ADC CRC32 written: 0x%08X (%u records)\n", 
+                         s_adcCrc32, s_writeStats.adcRecordsWritten);
+        }
+        else
+        {
+            Serial.println("[LOGGER] WARNING: Failed to seek to ADC CRC32 field");
+        }
         s_adcFile.close();
     }
 
     if (s_imuFile)
     {
-        s_imuFile.flush();
+        // Seek to CRC32 field in header (offset of dataCrc32 from start of header)
+        size_t crc32Offset = offsetof(ImuLogFileHeader, dataCrc32);
+        if (s_imuFile.seek(crc32Offset))
+        {
+            s_imuFile.write(reinterpret_cast<const uint8_t *>(&s_imuCrc32), sizeof(uint32_t));
+            s_imuFile.flush();  // Ensure CRC32 is written to disk
+            Serial.printf("[LOGGER] IMU CRC32 written: 0x%08X (%u records)\n", 
+                         s_imuCrc32, s_writeStats.imuRecordsWritten);
+        }
+        else
+        {
+            Serial.println("[LOGGER] WARNING: Failed to seek to IMU CRC32 field");
+        }
         s_imuFile.close();
     }
 
@@ -498,8 +687,15 @@ bool loggerStopSessionAndFlush()
     s_imuBufferPos = 0;
 
     Serial.println("[LOGGER] Session stopped and files closed.");
+    Serial.printf("[LOGGER] Write statistics: ADC failures=%u, IMU failures=%u\n",
+                 s_writeStats.adcWriteFailures, s_writeStats.imuWriteFailures);
 
     return true;
+}
+
+LoggerWriteStats loggerGetWriteStats()
+{
+    return s_writeStats;
 }
 
 bool loggerConvertLastSessionToCsv()

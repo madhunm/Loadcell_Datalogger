@@ -86,6 +86,39 @@ static void configureErrorPattern(NeopixelPattern pattern)
         blinkGroupGapMs = 0;
         break;
 
+    case NEOPIXEL_PATTERN_ERROR_WRITE_FAILURE:
+        // Write failure: bright red, very fast blink (critical error)
+        baseR = 255;
+        baseG = 0;
+        baseB = 0;
+        blinkOnMs = 50;
+        blinkOffMs = 50;
+        blinkPulsesPerGroup = 1;
+        blinkGroupGapMs = 0;
+        break;
+
+    case NEOPIXEL_PATTERN_ERROR_LOW_SPACE:
+        // Low SD card space: orange/yellow, slow double-blink
+        baseR = 255;
+        baseG = 165;
+        baseB = 0;
+        blinkOnMs = 200;
+        blinkOffMs = 200;
+        blinkPulsesPerGroup = 2;
+        blinkGroupGapMs = 400;
+        break;
+
+    case NEOPIXEL_PATTERN_ERROR_BUFFER_FULL:
+        // Buffer overflow: purple/magenta, rapid triple-blink
+        baseR = 255;
+        baseG = 0;
+        baseB = 128;
+        blinkOnMs = 60;
+        blinkOffMs = 60;
+        blinkPulsesPerGroup = 3;
+        blinkGroupGapMs = 500;
+        break;
+
     default:
         // Should not happen for non-error patterns
         baseR = baseG = baseB = 0;
@@ -185,6 +218,9 @@ void neopixelSetPattern(NeopixelPattern pattern)
     case NEOPIXEL_PATTERN_ERROR_RTC:
     case NEOPIXEL_PATTERN_ERROR_IMU:
     case NEOPIXEL_PATTERN_ERROR_ADC:
+    case NEOPIXEL_PATTERN_ERROR_WRITE_FAILURE:
+    case NEOPIXEL_PATTERN_ERROR_LOW_SPACE:
+    case NEOPIXEL_PATTERN_ERROR_BUFFER_FULL:
         // Error patterns: blinking with different colours/signatures
         configureErrorPattern(currentPattern);
         break;
@@ -198,6 +234,9 @@ void neopixelUpdate()
         currentPattern != NEOPIXEL_PATTERN_ERROR_RTC &&
         currentPattern != NEOPIXEL_PATTERN_ERROR_IMU &&
         currentPattern != NEOPIXEL_PATTERN_ERROR_ADC &&
+        currentPattern != NEOPIXEL_PATTERN_ERROR_WRITE_FAILURE &&
+        currentPattern != NEOPIXEL_PATTERN_ERROR_LOW_SPACE &&
+        currentPattern != NEOPIXEL_PATTERN_ERROR_BUFFER_FULL &&
         currentPattern != NEOPIXEL_PATTERN_CONVERTING &&
         currentPattern != NEOPIXEL_PATTERN_SAFE_TO_REMOVE)
     {

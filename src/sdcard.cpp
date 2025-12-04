@@ -120,3 +120,21 @@ bool sdCardCheckPresent()
     
     return cardPresent;
 }
+
+uint64_t sdCardGetFreeSpace()
+{
+    if (!sdCardMounted)
+    {
+        return 0;
+    }
+    return SD_MMC.totalBytes() - SD_MMC.usedBytes();
+}
+
+uint64_t sdCardGetTotalSpace()
+{
+    if (!sdCardMounted)
+    {
+        return 0;
+    }
+    return SD_MMC.totalBytes();
+}

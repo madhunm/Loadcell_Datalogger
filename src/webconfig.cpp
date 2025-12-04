@@ -87,9 +87,13 @@ static const char* htmlPage = R"HTML_PAGE(
         .status { padding: 10px; margin: 10px 0; border-radius: 4px; }
         .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
         .info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
-        #chartContainer { margin-top: 20px; height: 400px; }
+        .status-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
+        .status-label { font-weight: bold; color: #666; }
+        .status-value { color: #333; }
+        .status-value.status-ok { color: #28a745; font-weight: bold; }
+        .status-value.status-warning { color: #ffc107; font-weight: bold; }
+        .status-value.status-error { color: #dc3545; font-weight: bold; }
     </style>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
 </head>
 <body>
     <div class="container">
@@ -143,24 +147,43 @@ static const char* htmlPage = R"HTML_PAGE(
         <div class="section">
             <button onclick="saveConfig()">Save Configuration</button>
             <button onclick="loadConfig()">Load Current Config</button>
-            <button onclick="toggleChart()">Toggle Live Chart</button>
+        </div>
+
+        <div class="section">
+            <h2>System Status</h2>
+            <div id="statusIndicators">
+                <div class="status-item">
+                    <span class="status-label">SD Card:</span>
+                    <span id="sdStatus" class="status-value">Checking...</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Free Space:</span>
+                    <span id="sdSpace" class="status-value">-</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">ADC Buffer:</span>
+                    <span id="adcBuffer" class="status-value">-</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">IMU Buffer:</span>
+                    <span id="imuBuffer" class="status-value">-</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Write Failures:</span>
+                    <span id="writeFailures" class="status-value">-</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Logger State:</span>
+                    <span id="loggerState" class="status-value">-</span>
+                </div>
+            </div>
         </div>
 
         <div id="status"></div>
 
-        <div id="chartSection" style="display: none;">
-            <div class="section">
-                <h2>Live Data Chart</h2>
-                <canvas id="chartContainer"></canvas>
-            </div>
-        </div>
     </div>
 
     <script>
-        let chart = null;
-        let chartVisible = false;
-        let dataUpdateInterval = null;
-
         function showStatus(message, type) {
             const statusDiv = document.getElementById('status');
             statusDiv.className = 'status ' + type;
@@ -209,102 +232,104 @@ static const char* htmlPage = R"HTML_PAGE(
             }
         }
 
-        function toggleChart() {
-            chartVisible = !chartVisible;
-            const chartSection = document.getElementById('chartSection');
-            
-            if (chartVisible) {
-                chartSection.style.display = 'block';
-                initChart();
-                startDataUpdates();
-            } else {
-                chartSection.style.display = 'none';
-                stopDataUpdates();
-                if (chart) {
-                    chart.destroy();
-                    chart = null;
-                }
-            }
-        }
-
-        function initChart() {
-            const ctx = document.getElementById('chartContainer').getContext('2d');
-            chart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [
-                        { label: 'ADC Code', data: [], borderColor: 'rgb(75, 192, 192)', backgroundColor: 'rgba(75, 192, 192, 0.2)', yAxisID: 'y' },
-                        { label: 'AX (g)', data: [], borderColor: 'rgb(255, 99, 132)', backgroundColor: 'rgba(255, 99, 132, 0.2)', yAxisID: 'y1', hidden: true },
-                        { label: 'AY (g)', data: [], borderColor: 'rgb(54, 162, 235)', backgroundColor: 'rgba(54, 162, 235, 0.2)', yAxisID: 'y1', hidden: true },
-                        { label: 'AZ (g)', data: [], borderColor: 'rgb(255, 206, 86)', backgroundColor: 'rgba(255, 206, 86, 0.2)', yAxisID: 'y1', hidden: true }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: { position: 'left', title: { display: true, text: 'ADC Code' } },
-                        y1: { position: 'right', title: { display: true, text: 'Acceleration (g)' }, grid: { drawOnChartArea: false } }
-                    },
-                    animation: { duration: 0 },
-                    elements: { point: { radius: 0 } }
-                }
-            });
-        }
-
-        async function updateChart() {
+    <script>
+        // Update system status indicators
+        async function updateStatusIndicators() {
             try {
-                const response = await fetch('/data');
+                const response = await fetch('/status');
                 const data = await response.json();
                 
-                if (!chart) return;
-                
-                const maxPoints = 100;
-                const time = new Date().toLocaleTimeString();
-                
-                // Add ADC data
-                chart.data.datasets[0].data.push({x: time, y: data.adcCode || 0});
-                if (chart.data.datasets[0].data.length > maxPoints) {
-                    chart.data.datasets[0].data.shift();
+                // SD Card status
+                const sdStatusEl = document.getElementById('sdStatus');
+                if (data.sd && data.sd.mounted && data.sd.present) {
+                    sdStatusEl.textContent = 'OK';
+                    sdStatusEl.className = 'status-value status-ok';
+                } else {
+                    sdStatusEl.textContent = 'ERROR';
+                    sdStatusEl.className = 'status-value status-error';
                 }
                 
-                // Add IMU data if available
+                // SD Card free space
+                const sdSpaceEl = document.getElementById('sdSpace');
+                if (data.sd && data.sd.totalSpace > 0) {
+                    const freeMB = (data.sd.freeSpace / (1024 * 1024)).toFixed(1);
+                    const totalMB = (data.sd.totalSpace / (1024 * 1024)).toFixed(1);
+                    const percent = data.sd.freePercent.toFixed(1);
+                    sdSpaceEl.textContent = freeMB + ' MB / ' + totalMB + ' MB (' + percent + '%)';
+                    if (data.sd.freePercent < 10) {
+                        sdSpaceEl.className = 'status-value status-warning';
+                    } else {
+                        sdSpaceEl.className = 'status-value status-ok';
+                    }
+                } else {
+                    sdSpaceEl.textContent = 'N/A';
+                    sdSpaceEl.className = 'status-value';
+                }
+                
+                // ADC Buffer
+                const adcBufferEl = document.getElementById('adcBuffer');
+                if (data.adc) {
+                    const fillPercent = (data.adc.buffered / 2048 * 100).toFixed(1);
+                    adcBufferEl.textContent = data.adc.buffered + ' (' + fillPercent + '%)';
+                    if (fillPercent > 90) {
+                        adcBufferEl.className = 'status-value status-error';
+                    } else if (fillPercent > 75) {
+                        adcBufferEl.className = 'status-value status-warning';
+                    } else {
+                        adcBufferEl.className = 'status-value status-ok';
+                    }
+                }
+                
+                // IMU Buffer
+                const imuBufferEl = document.getElementById('imuBuffer');
                 if (data.imu) {
-                    chart.data.datasets[1].data.push({x: time, y: data.imu.ax || 0});
-                    chart.data.datasets[2].data.push({x: time, y: data.imu.ay || 0});
-                    chart.data.datasets[3].data.push({x: time, y: data.imu.az || 0});
-                    
-                    chart.data.datasets[1].data = chart.data.datasets[1].data.slice(-maxPoints);
-                    chart.data.datasets[2].data = chart.data.datasets[2].data.slice(-maxPoints);
-                    chart.data.datasets[3].data = chart.data.datasets[3].data.slice(-maxPoints);
+                    const fillPercent = (data.imu.buffered / 1024 * 100).toFixed(1);
+                    imuBufferEl.textContent = data.imu.buffered + ' (' + fillPercent + '%)';
+                    if (fillPercent > 90) {
+                        imuBufferEl.className = 'status-value status-error';
+                    } else if (fillPercent > 75) {
+                        imuBufferEl.className = 'status-value status-warning';
+                    } else {
+                        imuBufferEl.className = 'status-value status-ok';
+                    }
                 }
                 
-                chart.data.labels.push(time);
-                if (chart.data.labels.length > maxPoints) {
-                    chart.data.labels.shift();
+                // Write Failures
+                const writeFailuresEl = document.getElementById('writeFailures');
+                if (data.writes) {
+                    const totalFailures = data.writes.adcFailures + data.writes.imuFailures;
+                    const consecutive = Math.max(data.writes.adcConsecutiveFailures, data.writes.imuConsecutiveFailures);
+                    writeFailuresEl.textContent = 'Total: ' + totalFailures + ', Consecutive: ' + consecutive;
+                    if (consecutive >= 5) {
+                        writeFailuresEl.className = 'status-value status-error';
+                    } else if (consecutive > 0) {
+                        writeFailuresEl.className = 'status-value status-warning';
+                    } else {
+                        writeFailuresEl.className = 'status-value status-ok';
+                    }
                 }
                 
-                chart.update('none');
+                // Logger State
+                const loggerStateEl = document.getElementById('loggerState');
+                const states = ['IDLE', 'SESSION_OPEN', 'CONVERTING'];
+                loggerStateEl.textContent = states[data.logger.state] || 'UNKNOWN';
+                if (data.logger.sessionOpen) {
+                    loggerStateEl.className = 'status-value status-ok';
+                } else {
+                    loggerStateEl.className = 'status-value';
+                }
             } catch (error) {
-                console.error('Error updating chart:', error);
+                console.error('Error updating status indicators:', error);
             }
         }
-
-        function startDataUpdates() {
-            dataUpdateInterval = setInterval(updateChart, 100); // Update every 100ms
-        }
-
-        function stopDataUpdates() {
-            if (dataUpdateInterval) {
-                clearInterval(dataUpdateInterval);
-                dataUpdateInterval = null;
-            }
-        }
-
+        
+        // Update status indicators every 2 seconds
+        setInterval(updateStatusIndicators, 2000);
+        
         // Load config on page load
         window.onload = function() {
             loadConfig();
+            updateStatusIndicators();  // Initial update
         };
     </script>
 </body>
@@ -432,54 +457,27 @@ static void handleConfigPost()
     currentConfig.imuAccelRange = imuAccel;
     currentConfig.imuGyroRange = imuGyro;
     
+    // Persist configuration to NVS
+    Preferences preferences;
+    if (preferences.begin("webconfig", false))  // Read-write mode
+    {
+        preferences.putUInt("adcSampleRate", adcRate);
+        preferences.putUInt("adcPgaGain", adcGain);
+        preferences.putUInt("imuOdr", imuOdr);
+        preferences.putUShort("imuAccelRange", imuAccel);
+        preferences.putUShort("imuGyroRange", imuGyro);
+        preferences.end();
+        Serial.println("[WEBCONFIG] Configuration saved to NVS");
+    }
+    else
+    {
+        Serial.println("[WEBCONFIG] WARNING: Failed to open NVS for writing");
+    }
+    
     server.send(200, "text/plain", "OK");
     Serial.println("[WEBCONFIG] Configuration updated and validated via web interface");
 }
 
-// Handle data endpoint (for charting)
-// Note: This reads samples directly from sensors to avoid interfering with logging buffer
-static void handleData()
-{
-    // Rate limiting: max 20 requests per second (50ms minimum interval)
-    static uint32_t lastDataRequest = 0;
-    uint32_t now = millis();
-    if (now - lastDataRequest < 50)
-    {
-        server.send(429, "text/plain", "Too many requests");
-        return;
-    }
-    lastDataRequest = now;
-    
-    // Optimize JSON generation using snprintf instead of string concatenation
-    char jsonBuffer[256];
-    
-    // Read ADC directly (if data is ready)
-    int32_t adcCode = 0;
-    uint32_t adcIndex = adcGetSampleCounter();
-    if (adcIsDataReady())
-    {
-        adcReadSample(adcCode);
-    }
-    
-    // Read IMU directly (non-blocking)
-    float ax = 0, ay = 0, az = 0, gx = 0, gy = 0, gz = 0;
-    bool hasImu = imuRead(ax, ay, az, gx, gy, gz);
-    
-    if (hasImu)
-    {
-        snprintf(jsonBuffer, sizeof(jsonBuffer),
-            "{\"adcCode\":%ld,\"adcIndex\":%lu,\"imu\":{\"ax\":%.3f,\"ay\":%.3f,\"az\":%.3f,\"gx\":%.3f,\"gy\":%.3f,\"gz\":%.3f}}",
-            adcCode, adcIndex, ax, ay, az, gx, gy, gz);
-    }
-    else
-    {
-        snprintf(jsonBuffer, sizeof(jsonBuffer),
-            "{\"adcCode\":%ld,\"adcIndex\":%lu}",
-            adcCode, adcIndex);
-    }
-    
-    server.send(200, "application/json", jsonBuffer);
-}
 
 // Handle system status endpoint
 static void handleStatus()
@@ -508,13 +506,18 @@ static void handleStatus()
     // Get SD card status
     bool sdMounted = sdCardIsMounted();
     bool sdPresent = sdCardCheckPresent();
+    uint64_t sdFreeSpace = sdCardGetFreeSpace();
+    uint64_t sdTotalSpace = sdCardGetTotalSpace();
+    
+    // Get write statistics
+    LoggerWriteStats writeStats = loggerGetWriteStats();
     
     // Get free heap
     uint32_t freeHeap = ESP.getFreeHeap();
     uint32_t totalHeap = ESP.getHeapSize();
     
-    // Build JSON response
-    char jsonBuffer[512];
+    // Build JSON response (expanded buffer for additional fields)
+    char jsonBuffer[768];
     snprintf(jsonBuffer, sizeof(jsonBuffer),
         "{"
         "\"adc\":{"
@@ -532,7 +535,18 @@ static void handleStatus()
         "},"
         "\"sd\":{"
             "\"mounted\":%s,"
-            "\"present\":%s"
+            "\"present\":%s,"
+            "\"freeSpace\":%llu,"
+            "\"totalSpace\":%llu,"
+            "\"freePercent\":%.1f"
+        "},"
+        "\"writes\":{"
+            "\"adcFailures\":%u,"
+            "\"imuFailures\":%u,"
+            "\"adcConsecutiveFailures\":%u,"
+            "\"imuConsecutiveFailures\":%u,"
+            "\"adcRecordsWritten\":%u,"
+            "\"imuRecordsWritten\":%u"
         "},"
         "\"memory\":{"
             "\"freeHeap\":%u,"
@@ -544,6 +558,11 @@ static void handleStatus()
         (unsigned)imuBuffered, (unsigned)imuOverflow,
         (int)loggerState, sessionOpen ? "true" : "false",
         sdMounted ? "true" : "false", sdPresent ? "true" : "false",
+        (unsigned long long)sdFreeSpace, (unsigned long long)sdTotalSpace,
+        sdTotalSpace > 0 ? (100.0f * sdFreeSpace / sdTotalSpace) : 0.0f,
+        writeStats.adcWriteFailures, writeStats.imuWriteFailures,
+        writeStats.adcConsecutiveFailures, writeStats.imuConsecutiveFailures,
+        writeStats.adcRecordsWritten, writeStats.imuRecordsWritten,
         freeHeap, totalHeap, (100.0f * freeHeap / totalHeap));
     
     server.send(200, "application/json", jsonBuffer);
@@ -551,6 +570,45 @@ static void handleStatus()
 
 bool webConfigInit()
 {
+    // Load saved configuration from NVS (if available)
+    Preferences preferences;
+    if (preferences.begin("webconfig", true))  // Read-only mode
+    {
+        uint32_t savedAdcRate = preferences.getUInt("adcSampleRate", 0);
+        uint8_t savedAdcGain = preferences.getUInt("adcPgaGain", 255);  // 255 = not set
+        uint32_t savedImuOdr = preferences.getUInt("imuOdr", 0);
+        uint16_t savedImuAccel = preferences.getUShort("imuAccelRange", 0);
+        uint16_t savedImuGyro = preferences.getUShort("imuGyroRange", 0);
+        preferences.end();
+        
+        // Apply saved configuration if valid
+        if (savedAdcRate >= 1000 && savedAdcRate <= 64000 && savedAdcGain <= 7)
+        {
+            currentConfig.adcSampleRate = savedAdcRate;
+            currentConfig.adcPgaGain = static_cast<AdcPgaGain>(savedAdcGain);
+            Serial.println("[WEBCONFIG] Loaded saved ADC configuration from NVS");
+        }
+        
+        if (savedImuOdr >= 15 && savedImuOdr <= 960)
+        {
+            currentConfig.imuOdr = savedImuOdr;
+            Serial.println("[WEBCONFIG] Loaded saved IMU ODR from NVS");
+        }
+        
+        if (savedImuAccel == 2 || savedImuAccel == 4 || savedImuAccel == 8 || savedImuAccel == 16)
+        {
+            currentConfig.imuAccelRange = savedImuAccel;
+            Serial.println("[WEBCONFIG] Loaded saved IMU accel range from NVS");
+        }
+        
+        if (savedImuGyro == 125 || savedImuGyro == 250 || savedImuGyro == 500 || 
+            savedImuGyro == 1000 || savedImuGyro == 2000)
+        {
+            currentConfig.imuGyroRange = savedImuGyro;
+            Serial.println("[WEBCONFIG] Loaded saved IMU gyro range from NVS");
+        }
+    }
+    
     // Get SSID from NVS (or generate and store if first boot)
     String ssid = getOrGenerateSSID();
     
@@ -574,7 +632,6 @@ bool webConfigInit()
     server.on("/", handleRoot);
     server.on("/config", HTTP_GET, handleConfigGet);
     server.on("/config", HTTP_POST, handleConfigPost);
-    server.on("/data", handleData);
     server.on("/status", handleStatus);  // System status endpoint
     
     // Start server
