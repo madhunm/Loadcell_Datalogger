@@ -2077,11 +2077,19 @@ static void handleAdcOptimizeMultipoint()
         return;
     }
     
-    // Progress callback
-    static String lastProgressStatus = "";
+    // Progress callback for SSE support
+    s_progressState.active = true;
+    s_progressState.current = 0;
+    s_progressState.total = 100;
+    s_progressState.status = "Starting multi-point optimization...";
+    s_progressState.lastUpdate = millis();
+    
     auto progressCallback = [](size_t current, size_t total, const char* status) {
-        lastProgressStatus = String(status) + " (" + String(current) + "/" + String(total) + ")";
-        Serial.printf("[ADC_OPT] Progress: %s\n", status);
+        s_progressState.current = current;
+        s_progressState.total = total;
+        s_progressState.status = String(status);
+        s_progressState.lastUpdate = millis();
+        Serial.printf("[ADC_OPT] Progress: %s (%d/%d)\n", status, current, total);
     };
     
     // Perform multi-point optimization
