@@ -2145,6 +2145,52 @@ static void handleAdcOptimizeMultipoint()
     Serial.println("[WEBCONFIG] Multi-point ADC optimization complete, settings updated");
 }
 
+// Handle SSE progress stream (Server-Sent Events)
+static void handleProgressSSE()
+{
+    server.sendHeader("Content-Type", "text/event-stream");
+    server.sendHeader("Cache-Control", "no-cache");
+    server.sendHeader("Connection", "keep-alive");
+    server.send(200, "text/event-stream", "");
+    
+    uint32_t lastSent = 0;
+    uint32_t startTime = millis();
+    
+    // Send progress updates every 200ms while optimization is active
+    while (s_progressState.active || (millis() - s_progressState.lastUpdate < 1000))
+    {
+        uint32_t now = millis();
+        
+        // Send update if progress changed or every 200ms
+        if (now - lastSent >= 200)
+        {
+            char eventData[256];
+            snprintf(eventData, sizeof(eventData),
+                "{\"current\":%d,\"total\":%d,\"status\":\"%s\"}",
+                s_progressState.current,
+                s_progressState.total,
+                s_progressState.status.c_str());
+            
+            server.sendContent("data: ");
+            server.sendContent(eventData);
+            server.sendContent("\n\n");
+            
+            lastSent = now;
+        }
+        
+        // Timeout after 10 minutes
+        if (now - startTime > 600000)
+        {
+            break;
+        }
+        
+        delay(50);  // Small delay to prevent CPU spinning
+    }
+    
+    // Send final message
+    server.sendContent("data: {\"current\":100,\"total\":100,\"status\":\"Complete\"}\n\n");
+}
+
 // Handle load point measurement (for multi-point optimization)
 static void handleMeasureLoadPoint()
 {
