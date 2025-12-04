@@ -29,6 +29,17 @@ static String cachedSSID = "";
 static float loadcellScale = LOADCELL_SCALING_FACTOR_N_PER_ADC;
 static uint32_t loadcellOffset = LOADCELL_ADC_BASELINE;
 
+// Progress state for SSE (Server-Sent Events)
+struct ProgressState
+{
+    size_t current;
+    size_t total;
+    String status;
+    bool active;
+    uint32_t lastUpdate;
+};
+static ProgressState s_progressState = {0, 0, "", false, 0};
+
 // Get or generate SSID (stored in NVS, generated once per device)
 static String getOrGenerateSSID()
 {
@@ -2103,6 +2114,9 @@ static void handleAdcOptimizeMultipoint()
     
     server.send(200, "application/json", json);
     
+    // Clear progress state
+    s_progressState.active = false;
+    
     // Update current config with optimal settings
     currentConfig.adcPgaGain = result.optimalGain;
     currentConfig.adcSampleRate = result.optimalSampleRate;
@@ -2439,11 +2453,106 @@ static void handleCalibrationPage()
             </div>
             
             <div class="form-group" style="margin-top: 30px; padding-top: 25px; border-top: 2px solid #e2e8f0;">
-                <h3 style="margin-top: 0; color: #2d3748; font-size: 18px;">📊 Multi-Point SNR Optimization (Recommended)</h3>
+                <h3 style="margin-top: 0; color: #2d3748; font-size: 18px;">🔄 Integrated 5-Point Calibration Workflow</h3>
                 <p style="color: #4a5568; margin-bottom: 20px;">
-                    Optimize for maximum Signal-to-Noise Ratio across multiple load points. 
-                    This provides better results than noise-only optimization.
-                    <strong>Follow the 5-point loading sequence below.</strong>
+                    <strong>Recommended:</strong> Complete guided workflow that automatically measures all 5 load points and optimizes ADC settings.
+                    This provides the best results by optimizing across the full measurement range.
+                </p>
+                
+                <div class="form-group">
+                    <label for="workflowSamples">Samples per Test:</label>
+                    <input type="number" id="workflowSamples" value="5000" min="1000" max="50000" step="1000">
+                    <small>More samples = more accurate but slower (default: 5000)</small>
+                </div>
+                
+                <div class="form-group">
+                    <label for="workflowStrategy">Search Strategy:</label>
+                    <select id="workflowStrategy">
+                        <option value="1" selected>Adaptive (Recommended - 60% faster)</option>
+                        <option value="0">Exhaustive (Slow but guaranteed optimal)</option>
+                        <option value="2">Gradient (Fastest - 10-20x faster)</option>
+                    </select>
+                    <small>Adaptive provides best balance of speed and accuracy</small>
+                </div>
+                
+                <div style="background: #fff; border: 2px solid #e2e8f0; border-radius: 8px; padding: 20px; margin: 20px 0;">
+                    <h4 style="margin-top: 0; color: #2d3748;">Workflow Steps</h4>
+                    <div id="workflowSteps" style="margin: 15px 0;">
+                        <div class="workflow-step" data-step="0" style="padding: 12px; margin: 8px 0; border-radius: 6px; border: 2px solid #e2e8f0; background: #f7fafc;">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span class="step-number" style="width: 30px; height: 30px; border-radius: 50%; background: #667eea; color: white; display: flex; align-items: center; justify-content: center; font-weight: 600;">1</span>
+                                <div style="flex: 1;">
+                                    <strong>Baseline (0N)</strong> - Ensure loadcell is unloaded
+                                    <div class="step-status" style="font-size: 12px; color: #718096; margin-top: 4px;">Waiting...</div>
+                                </div>
+                                <button class="step-button" onclick="measureWorkflowStep(0)" style="padding: 6px 12px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer;">Measure</button>
+                            </div>
+                        </div>
+                        <div class="workflow-step" data-step="1" style="padding: 12px; margin: 8px 0; border-radius: 6px; border: 2px solid #e2e8f0; background: #f7fafc;">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span class="step-number" style="width: 30px; height: 30px; border-radius: 50%; background: #e2e8f0; color: #4a5568; display: flex; align-items: center; justify-content: center; font-weight: 600;">2</span>
+                                <div style="flex: 1;">
+                                    <strong>25% Full Scale</strong> - Apply 25% of maximum load
+                                    <div class="step-status" style="font-size: 12px; color: #718096; margin-top: 4px;">Waiting...</div>
+                                </div>
+                                <button class="step-button" onclick="measureWorkflowStep(1)" style="padding: 6px 12px; background: #e2e8f0; color: #4a5568; border: none; border-radius: 4px; cursor: pointer; disabled: true;" disabled>Measure</button>
+                            </div>
+                        </div>
+                        <div class="workflow-step" data-step="2" style="padding: 12px; margin: 8px 0; border-radius: 6px; border: 2px solid #e2e8f0; background: #f7fafc;">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span class="step-number" style="width: 30px; height: 30px; border-radius: 50%; background: #e2e8f0; color: #4a5568; display: flex; align-items: center; justify-content: center; font-weight: 600;">3</span>
+                                <div style="flex: 1;">
+                                    <strong>50% Full Scale</strong> - Apply 50% of maximum load
+                                    <div class="step-status" style="font-size: 12px; color: #718096; margin-top: 4px;">Waiting...</div>
+                                </div>
+                                <button class="step-button" onclick="measureWorkflowStep(2)" style="padding: 6px 12px; background: #e2e8f0; color: #4a5568; border: none; border-radius: 4px; cursor: pointer; disabled: true;" disabled>Measure</button>
+                            </div>
+                        </div>
+                        <div class="workflow-step" data-step="3" style="padding: 12px; margin: 8px 0; border-radius: 6px; border: 2px solid #e2e8f0; background: #f7fafc;">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span class="step-number" style="width: 30px; height: 30px; border-radius: 50%; background: #e2e8f0; color: #4a5568; display: flex; align-items: center; justify-content: center; font-weight: 600;">4</span>
+                                <div style="flex: 1;">
+                                    <strong>75% Full Scale</strong> - Apply 75% of maximum load
+                                    <div class="step-status" style="font-size: 12px; color: #718096; margin-top: 4px;">Waiting...</div>
+                                </div>
+                                <button class="step-button" onclick="measureWorkflowStep(3)" style="padding: 6px 12px; background: #e2e8f0; color: #4a5568; border: none; border-radius: 4px; cursor: pointer; disabled: true;" disabled>Measure</button>
+                            </div>
+                        </div>
+                        <div class="workflow-step" data-step="4" style="padding: 12px; margin: 8px 0; border-radius: 6px; border: 2px solid #e2e8f0; background: #f7fafc;">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span class="step-number" style="width: 30px; height: 30px; border-radius: 50%; background: #e2e8f0; color: #4a5568; display: flex; align-items: center; justify-content: center; font-weight: 600;">5</span>
+                                <div style="flex: 1;">
+                                    <strong>100% Full Scale</strong> - Apply 100% of maximum load
+                                    <div class="step-status" style="font-size: 12px; color: #718096; margin-top: 4px;">Waiting...</div>
+                                </div>
+                                <button class="step-button" onclick="measureWorkflowStep(4)" style="padding: 6px 12px; background: #e2e8f0; color: #4a5568; border: none; border-radius: 4px; cursor: pointer; disabled: true;" disabled>Measure</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #e2e8f0;">
+                        <button type="button" class="button" onclick="startIntegratedWorkflow()" id="workflowButton" style="background: linear-gradient(135deg, #48bb78 0%, #38a169 100%); width: 100%;">
+                            🚀 Start Integrated 5-Point Calibration
+                        </button>
+                        <button type="button" class="button" onclick="resetWorkflow()" style="background: #e2e8f0; color: #4a5568; margin-top: 10px; width: 100%;">
+                            🔄 Reset Workflow
+                        </button>
+                    </div>
+                    
+                    <div id="workflowStatus" style="margin-top: 15px;"></div>
+                    <div id="workflowProgress" style="margin-top: 10px; display: none;">
+                        <div style="background: #e2e8f0; border-radius: 4px; height: 20px; overflow: hidden;">
+                            <div id="workflowProgressBar" style="background: linear-gradient(90deg, #667eea, #764ba2); height: 100%; width: 0%; transition: width 0.3s;"></div>
+                        </div>
+                        <div id="workflowProgressText" style="margin-top: 8px; font-size: 12px; color: #718096;"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="form-group" style="margin-top: 30px; padding-top: 25px; border-top: 2px solid #e2e8f0;">
+                <h3 style="margin-top: 0; color: #2d3748; font-size: 18px;">📊 Manual Multi-Point SNR Optimization</h3>
+                <p style="color: #4a5568; margin-bottom: 20px;">
+                    <strong>Advanced:</strong> Manually measure load points and optimize. Use this if you prefer manual control.
                 </p>
                 
                 <div class="form-group">
@@ -2689,6 +2798,431 @@ static void handleCalibrationPage()
                 button.textContent = '🚀 Start Optimization';
             }
         }
+        
+        // ========================================================================
+        // Integrated 5-Point Calibration Workflow
+        // ========================================================================
+        let workflowState = {
+            currentStep: 0,
+            loadPoints: [
+                { step: 0, label: 'Baseline (0N)', baselineAdc: 0, measured: false, weight: 0.15 },
+                { step: 1, label: '25% Full Scale', baselineAdc: 0, measured: false, weight: 0.20 },
+                { step: 2, label: '50% Full Scale', baselineAdc: 0, measured: false, weight: 0.30 },
+                { step: 3, label: '75% Full Scale', baselineAdc: 0, measured: false, weight: 0.20 },
+                { step: 4, label: '100% Full Scale', baselineAdc: 0, measured: false, weight: 0.15 }
+            ],
+            workflowActive: false,
+            eventSource: null
+        };
+        
+        // Update workflow step UI
+        function updateWorkflowStepUI(stepIndex) {
+            const step = document.querySelector(`.workflow-step[data-step="${stepIndex}"]`);
+            if (!step) return;
+            
+            const point = workflowState.loadPoints[stepIndex];
+            const stepNumber = step.querySelector('.step-number');
+            const stepStatus = step.querySelector('.step-status');
+            const stepButton = step.querySelector('.step-button');
+            
+            if (point.measured) {
+                step.style.borderColor = '#48bb78';
+                step.style.background = '#c6f6d5';
+                stepNumber.style.background = '#48bb78';
+                stepStatus.textContent = `✓ Measured: ADC = ${point.baselineAdc}`;
+                stepStatus.style.color = '#22543d';
+                stepButton.disabled = true;
+                stepButton.style.background = '#cbd5e0';
+                stepButton.style.color = '#718096';
+            } else if (stepIndex === workflowState.currentStep && workflowState.workflowActive) {
+                step.style.borderColor = '#667eea';
+                step.style.background = '#e6f2ff';
+                stepNumber.style.background = '#667eea';
+                stepStatus.textContent = '⏳ Measuring...';
+                stepStatus.style.color = '#2c5282';
+                stepButton.disabled = true;
+            } else if (stepIndex <= workflowState.currentStep) {
+                step.style.borderColor = '#667eea';
+                step.style.background = '#f7fafc';
+                stepNumber.style.background = '#667eea';
+                stepStatus.textContent = 'Ready';
+                stepStatus.style.color = '#4a5568';
+                stepButton.disabled = false;
+                stepButton.style.background = '#667eea';
+                stepButton.style.color = 'white';
+            } else {
+                step.style.borderColor = '#e2e8f0';
+                step.style.background = '#f7fafc';
+                stepNumber.style.background = '#e2e8f0';
+                stepStatus.textContent = 'Waiting...';
+                stepStatus.style.color = '#718096';
+                stepButton.disabled = true;
+                stepButton.style.background = '#e2e8f0';
+                stepButton.style.color = '#4a5568';
+            }
+        }
+        
+        // Measure a single workflow step
+        async function measureWorkflowStep(stepIndex) {
+            if (workflowState.workflowActive) return;
+            
+            const point = workflowState.loadPoints[stepIndex];
+            if (point.measured) return;
+            
+            workflowState.currentStep = stepIndex;
+            updateWorkflowStepUI(stepIndex);
+            
+            const statusDiv = document.getElementById('workflowStatus');
+            statusDiv.className = 'status info';
+            statusDiv.textContent = `📊 Measuring ${point.label}... Please ensure load is applied and stable.`;
+            
+            try {
+                // Use auto-detect with wait for stability
+                const response = await fetch(`/cal/measure-load-point?autodetect=1&waitStable=1&samples=5000&changeThreshold=1000&stabilityThreshold=100`);
+                
+                if (!response.ok) {
+                    throw new Error('Measurement failed: ' + response.statusText);
+                }
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    point.baselineAdc = result.baselineAdc;
+                    point.measured = true;
+                    point.snrDb = result.snrDb || 0;
+                    point.signalRms = result.signalRms || 0;
+                    point.noiseRms = result.noiseRms || 0;
+                    
+                    updateWorkflowStepUI(stepIndex);
+                    
+                    // Enable next step
+                    if (stepIndex < 4) {
+                        workflowState.currentStep = stepIndex + 1;
+                        updateWorkflowStepUI(stepIndex + 1);
+                    }
+                    
+                    statusDiv.className = 'status success';
+                    statusDiv.textContent = `✅ ${point.label} measured successfully! ADC: ${result.baselineAdc}, SNR: ${result.snrDb.toFixed(2)} dB`;
+                } else {
+                    throw new Error(result.error || 'Measurement failed');
+                }
+            } catch (error) {
+                statusDiv.className = 'status error';
+                statusDiv.textContent = `❌ Error measuring ${point.label}: ${error.message}`;
+                updateWorkflowStepUI(stepIndex);
+            }
+        }
+        
+        // Start integrated workflow
+        async function startIntegratedWorkflow() {
+            if (workflowState.workflowActive) return;
+            
+            // Check if all points are measured
+            const allMeasured = workflowState.loadPoints.every(p => p.measured);
+            
+            if (!allMeasured) {
+                // Start measuring from first unmeasured point
+                const firstUnmeasured = workflowState.loadPoints.findIndex(p => !p.measured);
+                if (firstUnmeasured >= 0) {
+                    await measureWorkflowStep(firstUnmeasured);
+                    return;
+                }
+            }
+            
+            // All points measured - start optimization
+            const button = document.getElementById('workflowButton');
+            const statusDiv = document.getElementById('workflowStatus');
+            const progressDiv = document.getElementById('workflowProgress');
+            const progressBar = document.getElementById('workflowProgressBar');
+            const progressText = document.getElementById('workflowProgressText');
+            
+            button.disabled = true;
+            button.textContent = '⏳ Optimizing...';
+            workflowState.workflowActive = true;
+            
+            progressDiv.style.display = 'block';
+            progressBar.style.width = '0%';
+            progressText.textContent = 'Starting optimization...';
+            
+            statusDiv.className = 'status info';
+            statusDiv.textContent = '🚀 Starting multi-point optimization with all measured load points...';
+            
+            // Connect to SSE for progress updates
+            if (workflowState.eventSource) {
+                workflowState.eventSource.close();
+            }
+            
+            workflowState.eventSource = new EventSource('/cal/progress');
+            workflowState.eventSource.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.current !== undefined && data.total !== undefined) {
+                        const percent = Math.round((data.current / data.total) * 100);
+                        progressBar.style.width = percent + '%';
+                        progressText.textContent = data.status || `Progress: ${data.current}/${data.total}`;
+                    }
+                } catch (e) {
+                    console.error('Error parsing SSE data:', e);
+                }
+            };
+            
+            workflowState.eventSource.onerror = function() {
+                console.error('SSE connection error');
+            };
+            
+            try {
+                const samples = parseInt(document.getElementById('workflowSamples').value);
+                const strategy = parseInt(document.getElementById('workflowStrategy').value);
+                
+                // Build query parameters for all load points
+                let params = `samples=${samples}&strategy=${strategy}`;
+                workflowState.loadPoints.forEach((point, idx) => {
+                    if (point.measured) {
+                        params += `&baseline${idx}=${point.baselineAdc}&weight${idx}=${point.weight}&measured${idx}=1`;
+                    }
+                });
+                
+                const response = await fetch(`/cal/optimize-multipoint?${params}`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Optimization failed: ' + response.statusText);
+                }
+                
+                const result = await response.json();
+                
+                if (workflowState.eventSource) {
+                    workflowState.eventSource.close();
+                    workflowState.eventSource = null;
+                }
+                
+                if (result.success) {
+                    progressBar.style.width = '100%';
+                    progressText.textContent = 'Complete!';
+                    
+                    // Update form fields with optimal values
+                    document.getElementById('adcSampleRate').value = result.optimalSampleRate;
+                    document.getElementById('adcPgaGain').value = result.optimalGain;
+                    
+                    statusDiv.className = 'status success';
+                    statusDiv.innerHTML = '✅ Optimization complete!<br>' +
+                        'Optimal Gain: x' + (1 << result.optimalGain) + '<br>' +
+                        'Optimal Sample Rate: ' + result.optimalSampleRate + ' Hz<br>' +
+                        'Weighted SNR: ' + result.weightedSnrDb.toFixed(2) + ' dB<br><br>' +
+                        '<strong>Settings have been updated. Click "Save All Settings" to persist.</strong>';
+                } else {
+                    throw new Error(result.error || 'Optimization failed');
+                }
+            } catch (error) {
+                if (workflowState.eventSource) {
+                    workflowState.eventSource.close();
+                    workflowState.eventSource = null;
+                }
+                statusDiv.className = 'status error';
+                statusDiv.textContent = '❌ Error: ' + error.message;
+                progressBar.style.width = '0%';
+                progressText.textContent = 'Failed';
+            } finally {
+                button.disabled = false;
+                button.textContent = '🚀 Start Integrated 5-Point Calibration';
+                workflowState.workflowActive = false;
+            }
+        }
+        
+        // Reset workflow
+        function resetWorkflow() {
+            if (workflowState.eventSource) {
+                workflowState.eventSource.close();
+                workflowState.eventSource = null;
+            }
+            
+            workflowState.currentStep = 0;
+            workflowState.loadPoints.forEach(point => {
+                point.baselineAdc = 0;
+                point.measured = false;
+                point.snrDb = 0;
+                point.signalRms = 0;
+                point.noiseRms = 0;
+            });
+            
+            for (let i = 0; i < 5; i++) {
+                updateWorkflowStepUI(i);
+            }
+            
+            document.getElementById('workflowStatus').textContent = '';
+            document.getElementById('workflowProgress').style.display = 'none';
+            document.getElementById('workflowButton').disabled = false;
+            workflowState.workflowActive = false;
+        }
+        
+        // ========================================================================
+        // Manual Multi-Point Optimization (existing functions)
+        // ========================================================================
+        function updateMultiPointUI() {
+            const container = document.getElementById('loadPointsContainer');
+            container.innerHTML = '';
+            
+            const points = [
+                { label: 'Point 1 (0N)', weight: 0.15 },
+                { label: 'Point 2 (25%)', weight: 0.20 },
+                { label: 'Point 3 (50%)', weight: 0.30 },
+                { label: 'Point 4 (75%)', weight: 0.20 },
+                { label: 'Point 5 (100%)', weight: 0.15 }
+            ];
+            
+            points.forEach((point, idx) => {
+                const div = document.createElement('div');
+                div.style.cssText = 'padding: 12px; margin: 8px 0; background: white; border-radius: 6px; border: 2px solid #e2e8f0;';
+                div.innerHTML = `
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div style="flex: 1;">
+                            <strong>${point.label}</strong>
+                            <div style="font-size: 12px; color: #718096;">Weight: ${point.weight}</div>
+                        </div>
+                        <input type="number" id="lpBaseline${idx}" placeholder="Baseline ADC" style="width: 150px; padding: 6px; border: 1px solid #e2e8f0; border-radius: 4px;">
+                        <button onclick="measureLoadPoint(${idx})" style="padding: 6px 12px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer;">Measure</button>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        }
+        
+        async function measureLoadPoint(index) {
+            const input = document.getElementById(`lpBaseline${index}`);
+            input.disabled = true;
+            input.value = 'Measuring...';
+            
+            try {
+                const response = await fetch(`/cal/measure-load-point?autodetect=1&waitStable=1&samples=5000`);
+                const result = await response.json();
+                
+                if (result.success) {
+                    input.value = result.baselineAdc;
+                } else {
+                    throw new Error(result.error || 'Measurement failed');
+                }
+            } catch (error) {
+                input.value = '';
+                alert('Error: ' + error.message);
+            } finally {
+                input.disabled = false;
+            }
+        }
+        
+        async function startMultipointOptimization() {
+            const button = document.getElementById('mpOptButton');
+            const statusDiv = document.getElementById('mpOptStatus');
+            const progressDiv = document.getElementById('mpOptProgress');
+            const progressBar = document.getElementById('mpOptProgressBar');
+            const progressText = document.getElementById('mpOptProgressText');
+            
+            // Collect load points
+            const loadPoints = [];
+            for (let i = 0; i < 5; i++) {
+                const input = document.getElementById(`lpBaseline${i}`);
+                if (input && input.value) {
+                    const baseline = parseInt(input.value);
+                    if (!isNaN(baseline)) {
+                        const weights = [0.15, 0.20, 0.30, 0.20, 0.15];
+                        loadPoints.push({
+                            baseline: baseline,
+                            weight: weights[i],
+                            index: i
+                        });
+                    }
+                }
+            }
+            
+            if (loadPoints.length < 2) {
+                statusDiv.className = 'status error';
+                statusDiv.textContent = '❌ Please measure at least 2 load points';
+                return;
+            }
+            
+            button.disabled = true;
+            button.textContent = '⏳ Optimizing...';
+            progressDiv.style.display = 'block';
+            progressBar.style.width = '0%';
+            progressText.textContent = 'Starting optimization...';
+            
+            // Connect to SSE
+            const eventSource = new EventSource('/cal/progress');
+            eventSource.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.current !== undefined && data.total !== undefined) {
+                        const percent = Math.round((data.current / data.total) * 100);
+                        progressBar.style.width = percent + '%';
+                        progressText.textContent = data.status || `Progress: ${data.current}/${data.total}`;
+                    }
+                } catch (e) {
+                    console.error('Error parsing SSE data:', e);
+                }
+            };
+            
+            try {
+                const samples = parseInt(document.getElementById('mpOptSamples').value);
+                let params = `samples=${samples}`;
+                loadPoints.forEach((point, idx) => {
+                    params += `&baseline${idx}=${point.baseline}&weight${idx}=${point.weight}&measured${idx}=1`;
+                });
+                
+                const response = await fetch(`/cal/optimize-multipoint?${params}`, {
+                    method: 'POST'
+                });
+                
+                eventSource.close();
+                
+                if (!response.ok) {
+                    throw new Error('Optimization failed: ' + response.statusText);
+                }
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    progressBar.style.width = '100%';
+                    progressText.textContent = 'Complete!';
+                    
+                    document.getElementById('adcSampleRate').value = result.optimalSampleRate;
+                    document.getElementById('adcPgaGain').value = result.optimalGain;
+                    
+                    statusDiv.className = 'status success';
+                    statusDiv.innerHTML = '✅ Optimization complete!<br>' +
+                        'Optimal Gain: x' + (1 << result.optimalGain) + '<br>' +
+                        'Optimal Sample Rate: ' + result.optimalSampleRate + ' Hz<br>' +
+                        'Weighted SNR: ' + result.weightedSnrDb.toFixed(2) + ' dB';
+                } else {
+                    throw new Error(result.error || 'Optimization failed');
+                }
+            } catch (error) {
+                eventSource.close();
+                statusDiv.className = 'status error';
+                statusDiv.textContent = '❌ Error: ' + error.message;
+                progressBar.style.width = '0%';
+                progressText.textContent = 'Failed';
+            } finally {
+                button.disabled = false;
+                button.textContent = '🚀 Start Multi-Point Optimization';
+            }
+        }
+        
+        function resetLoadPoints() {
+            for (let i = 0; i < 5; i++) {
+                const input = document.getElementById(`lpBaseline${i}`);
+                if (input) input.value = '';
+            }
+            document.getElementById('mpOptStatus').textContent = '';
+            document.getElementById('mpOptProgress').style.display = 'none';
+        }
+        
+        // Initialize workflow UI on page load
+        window.addEventListener('load', function() {
+            updateMultiPointUI();
+            for (let i = 0; i < 5; i++) {
+                updateWorkflowStepUI(i);
+            }
+        });
         
         // Load calibration on page load
         loadAllConfig();
