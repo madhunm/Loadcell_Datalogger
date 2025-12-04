@@ -2,18 +2,22 @@
 #include <Wire.h>
 
 #include "pins.h"
+#include "gpio.h"
 #include "sdcard.h"
 #include "rtc.h"
 #include "imu.h"
 #include "neopixel.h"
 #include "adc.h"
+#include "logger.h"
+#include "webconfig.h"
 
 // ---- System state machine ----
 enum SystemState
 {
     STATE_INIT = 0,
     STATE_READY,
-    STATE_LOGGING
+    STATE_LOGGING,
+    STATE_CONVERTING  // Converting binary logs to CSV
 };
 
 SystemState systemState = STATE_INIT;
@@ -79,28 +83,17 @@ bool initPeripherals()
     return true;
 }
 
-// ---- Logging stub ----
-// For now this just prints a heartbeat; later we will:
-//  - Drain adcGetNextSample()
-//  - Drain imuGetNextSample()
-//  - Write to SD
-void loggingTick()
+// ---- Logger configuration ----
+// This will be passed to loggerStartSession()
+static LoggerConfig makeLoggerConfig()
 {
-    static uint32_t lastPrint = 0;
-    uint32_t now = millis();
-    if (now - lastPrint > 1000)
-    {
-        lastPrint = now;
-
-        size_t adcCount = adcGetBufferedSampleCount();
-        size_t adcOvfl = adcGetOverflowCount();
-        size_t imuCount = imuGetBufferedSampleCount();
-        size_t imuOvfl = imuGetOverflowCount();
-
-        Serial.printf("[LOG] tick: ADC buffered=%u ovfl=%u, IMU buffered=%u ovfl=%u\n",
-                      (unsigned)adcCount, (unsigned)adcOvfl,
-                      (unsigned)imuCount, (unsigned)imuOvfl);
-    }
+    LoggerConfig config;
+    config.adcSampleRate = 64000;  // 64 ksps
+    config.adcPgaGain    = ADC_PGA_GAIN_4;  // Matches initPeripherals()
+    config.imuAccelRange = 16;      // ±16 g
+    config.imuGyroRange  = 2000;    // 2000 dps
+    config.imuOdr        = 960;     // 960 Hz
+    return config;
 }
 
 void setup()
@@ -113,35 +106,26 @@ void setup()
     Serial.println("Loadcell Logger – ESP32-S3 bring-up");
     Serial.println("------------------------------------");
 
-    // ---- GPIO directions ----
-
-    // Logstart button: external pulldown (LOW idle, HIGH pressed)
-    pinMode(PIN_LOGSTART_BUTTON, INPUT);
-
-    // ADC SPI pins (redundant with adcInit, but harmless)
-    pinMode(PIN_ADC_CS, OUTPUT);
-    pinMode(PIN_ADC_SCK, OUTPUT);
-    pinMode(PIN_ADC_MOSI, OUTPUT);
-    pinMode(PIN_ADC_MISO, INPUT);
-
-    pinMode(PIN_ADC_SYNC, OUTPUT);
-    pinMode(PIN_ADC_RSTB, OUTPUT);
-    pinMode(PIN_ADC_RDYB, INPUT);
-
-    // RTC pins
-    pinMode(PIN_RTC_FOUT, INPUT); // FOUT routed but not used yet
-
-    // IMU interrupt pins as inputs (IMU module also sets them)
-    pinMode(PIN_IMU_INT1, INPUT);
-    pinMode(PIN_IMU_INT2, INPUT);
-
-    // I2C bus for RTC + IMU + gauge, etc.
-    Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
-    Serial.printf("I2C started on SDA=%d SCL=%d\n", PIN_I2C_SDA, PIN_I2C_SCL);
+    // Initialize GPIO pins
+    gpioInit();
+    Serial.printf("GPIO initialized. I2C started on SDA=%d SCL=%d\n", PIN_I2C_SDA, PIN_I2C_SCL);
 
     // NeoPixel
     neopixelInit();
     neopixelSetPattern(NEOPIXEL_PATTERN_INIT);
+
+    // Logger initialisation
+    loggerInit();
+
+    // WiFi Access Point and Web Server initialization
+    if (webConfigInit())
+    {
+        Serial.println("[WEBCONFIG] Web configuration interface started");
+    }
+    else
+    {
+        Serial.println("[WEBCONFIG] Warning: Failed to start web configuration interface");
+    }
 
     // Peripheral initialisation
     systemState = STATE_INIT;
@@ -164,6 +148,9 @@ void setup()
 
 void loop()
 {
+    // Handle web server requests
+    webConfigHandleClient();
+
     // Update NeoPixel animations (for error patterns)
     neopixelUpdate();
 
@@ -179,10 +166,6 @@ void loop()
         Serial.println("[BUTTON] Logstart pressed.");
         if (systemState == STATE_READY)
         {
-            systemState = STATE_LOGGING;
-            Serial.println("[STATE] LOGGING: logging started.");
-            neopixelSetPattern(NEOPIXEL_PATTERN_LOGGING);
-
             // Start acquisition tasks ONCE, pinned to core 0.
             if (!samplingTasksStarted)
             {
@@ -196,7 +179,43 @@ void loop()
 
                 Serial.println("[TASK] ADC and IMU sampling tasks started on core 0.");
             }
+
+            // Start logging session (use web config if available, otherwise default)
+            LoggerConfig config = webConfigIsActive() ? webConfigGetLoggerConfig() : makeLoggerConfig();
+            if (loggerStartSession(config))
+            {
+                systemState = STATE_LOGGING;
+                Serial.println("[STATE] LOGGING: logging started.");
+                neopixelSetPattern(NEOPIXEL_PATTERN_LOGGING);
+            }
+            else
+            {
+                Serial.println("[ERROR] Failed to start logging session.");
+                neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_SD);
+            }
         }
+        else if (systemState == STATE_LOGGING)
+        {
+            // Stop logging session and start conversion
+            if (loggerStopSessionAndFlush())
+            {
+                systemState = STATE_CONVERTING;
+                Serial.println("[STATE] CONVERTING: logging stopped, starting CSV conversion...");
+                neopixelSetPattern(NEOPIXEL_PATTERN_CONVERTING);
+            }
+            else
+            {
+                Serial.println("[ERROR] Failed to stop logging session.");
+            }
+        }
+        else if (systemState == STATE_CONVERTING)
+        {
+            // Conversion in progress - ignore button press
+            Serial.println("[BUTTON] Conversion in progress, button press ignored.");
+        }
+        // Note: STATE_READY button press is already handled above (starts logging)
+        // If we're in STATE_READY with SAFE_TO_REMOVE pattern, pressing button will start a new logging session
+        // To reset the pattern without starting logging, user would need to wait or we could add a timeout
         else
         {
             Serial.printf("[STATE] Button press ignored (state=%d)\n", systemState);
@@ -216,8 +235,26 @@ void loop()
         break;
 
     case STATE_LOGGING:
-        // Logging loop (ADC/SD/IMU hooks will go here)
-        loggingTick();
+        // Logging loop: drain buffers and write to SD card
+        loggerTick();
+        break;
+
+    case STATE_CONVERTING:
+        // Convert binary logs to CSV
+        // This is a blocking operation, but we update neopixel in the conversion function
+        Serial.println("[CONVERT] Starting CSV conversion...");
+        if (loggerConvertLastSessionToCsv())
+        {
+            systemState = STATE_READY;
+            Serial.println("[STATE] READY: CSV conversion complete. Safe to remove SD card.");
+            neopixelSetPattern(NEOPIXEL_PATTERN_SAFE_TO_REMOVE);
+        }
+        else
+        {
+            systemState = STATE_READY;
+            Serial.println("[ERROR] CSV conversion failed. Returning to ready state.");
+            neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_SD);
+        }
         break;
     }
 

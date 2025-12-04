@@ -9,6 +9,8 @@ enum NeopixelPattern
     NEOPIXEL_PATTERN_INIT,    // board powering up / peripherals initialising
     NEOPIXEL_PATTERN_READY,   // ready to log
     NEOPIXEL_PATTERN_LOGGING, // actively logging
+    NEOPIXEL_PATTERN_CONVERTING,  // converting binary logs to CSV (not safe to remove SD)
+    NEOPIXEL_PATTERN_SAFE_TO_REMOVE, // CSV conversion complete (safe to remove SD)
 
     NEOPIXEL_PATTERN_ERROR_SD,  // SD card error
     NEOPIXEL_PATTERN_ERROR_RTC, // RTC error

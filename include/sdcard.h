@@ -13,3 +13,8 @@ namespace fs
 bool sdCardInit();
 bool sdCardIsMounted();
 fs::FS &sdCardGetFs();
+
+// Check if SD card is physically present using card detect pin
+// Returns true if card is present, false if removed
+// This should be called periodically during logging to detect removal
+bool sdCardCheckPresent();

@@ -149,6 +149,38 @@ void neopixelSetPattern(NeopixelPattern pattern)
         applyStaticColour();
         break;
 
+    case NEOPIXEL_PATTERN_CONVERTING:
+        // CONVERTING: orange/yellow blinking (not safe to remove SD card)
+        baseR = 255;
+        baseG = 100;
+        baseB = 0;
+        blinkOnMs = 150;
+        blinkOffMs = 150;
+        blinkPulsesPerGroup = 1;
+        blinkGroupGapMs = 0;
+        blinkOn = true;
+        blinkCurrentPulse = 0;
+        lastBlinkChange = millis();
+        pixel.setPixelColor(0, pixel.Color(baseR, baseG, baseB));
+        pixel.show();
+        break;
+
+    case NEOPIXEL_PATTERN_SAFE_TO_REMOVE:
+        // SAFE_TO_REMOVE: green double-blink pattern (safe to remove SD card)
+        baseR = 0;
+        baseG = 255;
+        baseB = 0;
+        blinkOnMs = 100;
+        blinkOffMs = 100;
+        blinkPulsesPerGroup = 2;
+        blinkGroupGapMs = 800;
+        blinkOn = true;
+        blinkCurrentPulse = 0;
+        lastBlinkChange = millis();
+        pixel.setPixelColor(0, pixel.Color(baseR, baseG, baseB));
+        pixel.show();
+        break;
+
     case NEOPIXEL_PATTERN_ERROR_SD:
     case NEOPIXEL_PATTERN_ERROR_RTC:
     case NEOPIXEL_PATTERN_ERROR_IMU:
@@ -161,11 +193,13 @@ void neopixelSetPattern(NeopixelPattern pattern)
 
 void neopixelUpdate()
 {
-    // Only error patterns have time-based animation
+    // Patterns with time-based animation (blinking)
     if (currentPattern != NEOPIXEL_PATTERN_ERROR_SD &&
         currentPattern != NEOPIXEL_PATTERN_ERROR_RTC &&
         currentPattern != NEOPIXEL_PATTERN_ERROR_IMU &&
-        currentPattern != NEOPIXEL_PATTERN_ERROR_ADC)
+        currentPattern != NEOPIXEL_PATTERN_ERROR_ADC &&
+        currentPattern != NEOPIXEL_PATTERN_CONVERTING &&
+        currentPattern != NEOPIXEL_PATTERN_SAFE_TO_REMOVE)
     {
         return;
     }

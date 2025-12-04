@@ -102,3 +102,21 @@ fs::FS &sdCardGetFs()
     // SD_MMC is a global FS-like object provided by the core
     return SD_MMC;
 }
+
+bool sdCardCheckPresent()
+{
+    // Card-detect pin is active-low: LOW = card present, HIGH = card removed
+    // Pin has internal pullup, so when card is removed, pin goes HIGH
+    bool cardPresent = (digitalRead(PIN_SD_CD) == LOW);
+    
+    // Update mounted state if card was removed
+    if (!cardPresent && sdCardMounted)
+    {
+        Serial.println("[SD] Card removal detected via CD pin!");
+        sdCardMounted = false;
+        // Note: We don't unmount here to avoid issues if card is reinserted quickly
+        // The filesystem will handle errors on next access
+    }
+    
+    return cardPresent;
+}

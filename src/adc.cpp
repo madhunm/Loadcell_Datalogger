@@ -333,6 +333,26 @@ static void adcSamplingTask(void *param)
 {
     (void)param;
 
+    // Explanation of ADC Busy Wait Issue:
+    // When adcIsDataReady() returns false (no new sample ready), the task
+    // immediately loops back and checks again without any delay. This creates
+    // a "busy wait" that consumes 100% CPU on Core 0, wasting power and
+    // potentially affecting other tasks on the same core (like IMU sampling).
+    //
+    // At 64 ksps, samples arrive every ~15.6 microseconds. When RDYB is high
+    // (not ready), we should yield the CPU briefly rather than spinning.
+    //
+    // Solution: Use a very small delay (10 microseconds) when data is not ready.
+    // This is:
+    // - Much smaller than sample period (15.6µs), so we won't miss samples
+    // - Large enough to yield CPU and prevent 100% usage
+    // - The ring buffer (2048 samples) provides headroom for any timing variations
+    //
+    // IMPORTANT: The ADC hardware continues sampling at 64 ksps regardless of
+    // our task timing. As long as we process samples faster than they arrive
+    // on average, the 64 ksps rate is maintained. The ring buffer ensures no
+    // samples are lost during brief delays.
+
     for (;;)
     {
         if (adcIsDataReady())
@@ -342,9 +362,17 @@ static void adcSamplingTask(void *param)
             {
                 adcRingPush(code);
             }
-            // RDYB will go high until the next conversion completes
+            // RDYB will go high until the next conversion completes (~15.6µs)
+            // No delay here - we want to check again immediately for next sample
+            // This ensures we catch samples as soon as they're ready
         }
-        // Core 0 is basically dedicated to this and the IMU; no delay here.
+        else
+        {
+            // No data ready - yield CPU briefly to other tasks
+            // 10µs delay is much smaller than sample period (15.6µs), so we
+            // won't miss samples. The ring buffer provides safety margin.
+            delayMicroseconds(10);
+        }
     }
 }
 
