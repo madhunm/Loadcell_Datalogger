@@ -204,7 +204,7 @@ static bool flushAdcBuffer()
     }
     
     // All retries failed
-    Serial.printf("[LOGGER] ERROR: Failed to flush ADC buffer after %d attempts\n", MAX_RETRY_ATTEMPTS);
+    LOG_ERROR("[LOGGER] ERROR: Failed to flush ADC buffer after %d attempts\n", MAX_RETRY_ATTEMPTS);
     return false;
 }
 
@@ -244,7 +244,7 @@ static bool flushImuBuffer()
     }
     
     // All retries failed
-    Serial.printf("[LOGGER] ERROR: Failed to flush IMU buffer after %d attempts\n", MAX_RETRY_ATTEMPTS);
+    LOG_ERROR("[LOGGER] ERROR: Failed to flush IMU buffer after %d attempts\n", MAX_RETRY_ATTEMPTS);
     return false;
 }
 
@@ -479,7 +479,7 @@ void loggerTick()
     // This provides early detection before write failures occur
     if (!sdCardCheckPresent())
     {
-        Serial.println("[LOGGER] ERROR: SD card removed during logging!");
+        LOG_ERROR("[LOGGER] ERROR: SD card removed during logging!\n");
         // Stop logging session gracefully
         loggerStopSessionAndFlush();
         s_loggerState = LOGGER_IDLE;
@@ -623,7 +623,7 @@ bool loggerStopSessionAndFlush()
 {
     if (!s_sessionOpen)
     {
-        Serial.println("[LOGGER] No open session to stop.");
+        LOG_DEBUG("[LOGGER] No open session to stop.\n");
         return false;
     }
 
@@ -667,12 +667,12 @@ bool loggerStopSessionAndFlush()
         {
             s_adcFile.write(reinterpret_cast<const uint8_t *>(&s_adcCrc32), sizeof(uint32_t));
             s_adcFile.flush();  // Ensure CRC32 is written to disk
-            Serial.printf("[LOGGER] ADC CRC32 written: 0x%08X (%u records)\n", 
-                         s_adcCrc32, s_writeStats.adcRecordsWritten);
+            LOG_DEBUG("[LOGGER] ADC CRC32 written: 0x%08X (%u records)\n", 
+                     s_adcCrc32, s_writeStats.adcRecordsWritten);
         }
         else
         {
-            Serial.println("[LOGGER] WARNING: Failed to seek to ADC CRC32 field");
+            LOG_ERROR("[LOGGER] WARNING: Failed to seek to ADC CRC32 field\n");
         }
         s_adcFile.close();
     }
@@ -685,12 +685,12 @@ bool loggerStopSessionAndFlush()
         {
             s_imuFile.write(reinterpret_cast<const uint8_t *>(&s_imuCrc32), sizeof(uint32_t));
             s_imuFile.flush();  // Ensure CRC32 is written to disk
-            Serial.printf("[LOGGER] IMU CRC32 written: 0x%08X (%u records)\n", 
-                         s_imuCrc32, s_writeStats.imuRecordsWritten);
+            LOG_DEBUG("[LOGGER] IMU CRC32 written: 0x%08X (%u records)\n", 
+                     s_imuCrc32, s_writeStats.imuRecordsWritten);
         }
         else
         {
-            Serial.println("[LOGGER] WARNING: Failed to seek to IMU CRC32 field");
+            LOG_ERROR("[LOGGER] WARNING: Failed to seek to IMU CRC32 field\n");
         }
         s_imuFile.close();
     }
@@ -773,9 +773,13 @@ static void csvConversionTask(void *param)
     File imuFile = s_fs->open(imuFilename, FILE_READ);
     if (!imuFile)
     {
-        Serial.println("[LOGGER] Failed to open IMU binary file for reading.");
+        LOG_ERROR("[LOGGER] Failed to open IMU binary file for reading.\n");
         adcFile.close();
-        return false;
+        s_csvConversionResult = false;
+        s_csvConversionInProgress = false;
+        s_loggerState = LOGGER_IDLE;
+        vTaskDelete(NULL);
+        return;
     }
 
     // Read IMU header
@@ -873,7 +877,6 @@ static void csvConversionTask(void *param)
     };
     ImuBufferEntry imuBuffer[IMU_BUFFER_SIZE];
     size_t imuBufferCount = 0;
-    size_t imuBufferIndex = 0;
     
     LOG_DEBUG("[LOGGER] Pre-reading IMU records into buffer...\n");
     while (imuBufferCount < IMU_BUFFER_SIZE && imuFile.available() >= sizeof(ImuLogRecord))

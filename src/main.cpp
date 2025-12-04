@@ -243,6 +243,14 @@ void loop()
                 systemState = STATE_CONVERTING;
                 Serial.println("[STATE] CONVERTING: logging stopped, starting CSV conversion...");
                 neopixelSetPattern(NEOPIXEL_PATTERN_CONVERTING);
+                
+                // Start CSV conversion task (non-blocking)
+                if (!loggerConvertLastSessionToCsv())
+                {
+                    Serial.println("[ERROR] Failed to start CSV conversion task.");
+                    systemState = STATE_READY;
+                    neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_SD);
+                }
             }
             else
             {
