@@ -1,3 +1,16 @@
+/**
+ * @file main.cpp
+ * @brief Main application entry point and system state machine
+ * @details This file implements the main control loop, system state machine,
+ *          peripheral initialization, and button handling for the Loadcell
+ *          Datalogger. The system uses a dual-core architecture:
+ *          - Core 0: High-priority sampling tasks (ADC, IMU)
+ *          - Core 1: Main loop (logging, web server, state machine)
+ * 
+ * @author Loadcell Datalogger Project
+ * @date December 2024
+ */
+
 #include <Arduino.h>
 #include <Wire.h>
 #include <cstring>  // For memset
@@ -13,21 +26,41 @@
 #include "logger.h"
 #include "webconfig.h"
 
-// ---- System state machine ----
+// ============================================================================
+// SYSTEM STATE MACHINE
+// ============================================================================
+
+/**
+ * @brief System operational states
+ * @details The system transitions through these states based on user input
+ *          (button presses) and internal events (conversion completion).
+ */
 enum SystemState
 {
-    STATE_INIT = 0,
-    STATE_READY,
-    STATE_LOGGING,
-    STATE_CONVERTING  // Converting binary logs to CSV
+    STATE_INIT = 0,        ///< Initialization state - bringing up peripherals
+    STATE_READY,           ///< Ready state - waiting for user to start logging
+    STATE_LOGGING,         ///< Logging state - actively recording data
+    STATE_CONVERTING       ///< Converting state - converting binary logs to CSV
 };
 
+/** @brief Current system state - initialized to INIT on boot */
 SystemState systemState = STATE_INIT;
 
-// Flag to ensure we start sampling tasks only once
+/** @brief Flag to ensure sampling tasks are started only once per session */
 static bool samplingTasksStarted = false;
 
-// ---- Combined peripheral init ----
+// ============================================================================
+// PERIPHERAL INITIALIZATION
+// ============================================================================
+
+/**
+ * @brief Initialize all system peripherals
+ * @details Initializes SD card, IMU, RTC, and ADC in sequence. On failure,
+ *          sets appropriate NeoPixel error pattern and returns false.
+ *          This function should be called once during system startup.
+ * 
+ * @return true if all peripherals initialized successfully, false otherwise
+ */
 bool initPeripherals()
 {
     // Try each peripheral in turn; on failure, select a per-peripheral
@@ -85,25 +118,57 @@ bool initPeripherals()
     return true;
 }
 
-// ---- Logger configuration ----
-// This will be passed to loggerStartSession()
+// ============================================================================
+// LOGGER CONFIGURATION
+// ============================================================================
+
+/**
+ * @brief Create default logger configuration
+ * @details Creates a LoggerConfig structure with default values. This is used
+ *          if web configuration is not available. The configuration can be
+ *          overridden via the web portal.
+ * 
+ * @return LoggerConfig structure with default values:
+ *         - ADC: 64 ksps, PGA gain x4
+ *         - IMU: 960 Hz, ±16g accel, ±2000 dps gyro
+ */
 static LoggerConfig makeLoggerConfig()
 {
     LoggerConfig config;
-    config.adcSampleRate = 64000;  // 64 ksps
-    config.adcPgaGain    = ADC_PGA_GAIN_4;  // Matches initPeripherals()
-    config.imuAccelRange = 16;      // ±16 g
-    config.imuGyroRange  = 2000;    // 2000 dps
-    config.imuOdr        = 960;     // 960 Hz
+    config.adcSampleRate = 64000;        // 64,000 samples per second
+    config.adcPgaGain    = ADC_PGA_GAIN_4;  // x4 gain (matches initPeripherals())
+    config.imuAccelRange = 16;           // ±16 g accelerometer range
+    config.imuGyroRange  = 2000;         // ±2000 degrees per second
+    config.imuOdr        = 960;          // 960 Hz output data rate
     return config;
 }
 
+// ============================================================================
+// ARDUINO SETUP FUNCTION
+// ============================================================================
+
+/**
+ * @brief Arduino setup function - called once on boot
+ * @details Performs system initialization:
+ *          1. Serial communication setup
+ *          2. Watchdog timer initialization
+ *          3. GPIO initialization
+ *          4. NeoPixel initialization
+ *          5. Logger initialization
+ *          6. Web server initialization
+ *          7. Peripheral initialization
+ * 
+ *          On successful initialization, system enters READY state.
+ *          On failure, system remains in INIT state with error pattern.
+ */
 void setup()
 {
+    // Allow hardware to stabilize
     delay(500);
 
+    // Initialize serial communication for debugging
     Serial.begin(115200);
-    delay(500);
+    delay(500);  // Wait for serial port to be ready
     Serial.println();
     Serial.println("Loadcell Logger – ESP32-S3 bring-up");
     Serial.println("------------------------------------");
@@ -167,19 +232,35 @@ void setup()
     }
 }
 
+// ============================================================================
+// ARDUINO LOOP FUNCTION
+// ============================================================================
+
+/**
+ * @brief Arduino main loop - called repeatedly
+ * @details Main control loop that:
+ *          1. Resets watchdog timer
+ *          2. Handles web server requests
+ *          3. Updates NeoPixel animations
+ *          4. Services RTC interrupts
+ *          5. Handles button presses
+ *          6. Executes state-specific actions
+ * 
+ *          This loop runs on Core 1, while sampling tasks run on Core 0.
+ */
 void loop()
 {
     // Reset watchdog timer - must be called regularly to prevent reset
     // This ensures the main loop is running and not stuck
     esp_task_wdt_reset();
 
-    // Handle web server requests
+    // Handle web server requests (non-blocking)
     webConfigHandleClient();
 
-    // Update NeoPixel animations (for error patterns)
+    // Update NeoPixel animations (for blinking/breathing patterns)
     neopixelUpdate();
 
-    // Service RTC 1 Hz update (if a tick occurred)
+    // Service RTC 1 Hz update interrupt (if a tick occurred)
     rtcHandleUpdate();
 
     // ---- Logstart button handling ----
