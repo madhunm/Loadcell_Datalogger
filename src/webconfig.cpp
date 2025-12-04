@@ -1956,6 +1956,9 @@ static void handleAdcOptimize()
     
     server.send(200, "application/json", json);
     
+    // Clear progress state
+    s_progressState.active = false;
+    
     // Update current config with optimal settings
     currentConfig.adcPgaGain = result.optimalGain;
     currentConfig.adcSampleRate = result.optimalSampleRate;
@@ -3510,6 +3513,9 @@ bool webConfigInit()
     server.on("/cal", HTTP_POST, handleCalibrationPost);  // Save calibration values
     server.on("/cal/values", HTTP_GET, handleCalibrationGet);  // Get calibration values (JSON)
     server.on("/cal/optimize", HTTP_POST, handleAdcOptimize);  // ADC optimization endpoint
+    server.on("/cal/optimize-multipoint", HTTP_POST, handleAdcOptimizeMultipoint);  // Multi-point optimization
+    server.on("/cal/measure-load-point", HTTP_GET, handleMeasureLoadPoint);  // Measure load point
+    server.on("/cal/progress", HTTP_GET, handleProgressSSE);  // SSE progress stream
     
     // Start server
     server.begin();
