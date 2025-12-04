@@ -1944,8 +1944,8 @@ static void handleAdcOptimize()
         samplesPerTest,
         baselineAdc,
         nullptr, 0,  // No load points for single-point modes
-        progressCallback,
-        result);
+        result,
+        progressCallback);
     
     if (!success || !result.success)
     {
@@ -2103,8 +2103,8 @@ static void handleAdcOptimizeMultipoint()
         0,  // Baseline not used in multi-point mode
         loadPoints,
         numLoadPoints,
-        progressCallback,
-        result);
+        result,
+        progressCallback);
     
     if (!success || !result.success)
     {
