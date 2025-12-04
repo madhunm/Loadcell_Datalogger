@@ -122,3 +122,99 @@ inline float adcCodeToNormalized(int32_t code)
     const float denom = 8388608.0f; // 2^23
     return static_cast<float>(code) / denom;
 }
+
+// ---- Calibration Optimization API ----
+
+/**
+ * @brief Result structure for ADC optimization
+ */
+/**
+ * @brief Optimization mode for ADC settings
+ */
+enum AdcOptimizationMode
+{
+    ADC_OPT_MODE_NOISE_ONLY = 0,  ///< Optimize for minimum noise (unloaded)
+    ADC_OPT_MODE_SNR = 1          ///< Optimize for maximum SNR (requires known load)
+};
+
+struct AdcOptimizationResult
+{
+    AdcPgaGain optimalGain;      ///< Optimal PGA gain setting
+    uint32_t optimalSampleRate;  ///< Optimal sample rate (Hz)
+    float noiseLevel;            ///< Noise level (ADC counts, standard deviation) - for NOISE_ONLY mode
+    float snrDb;                 ///< Signal-to-Noise Ratio in dB - for SNR mode
+    float signalRms;             ///< Signal RMS in ADC counts - for SNR mode
+    bool success;                ///< True if optimization completed successfully
+};
+
+/**
+ * @brief Change ADC PGA gain and sample rate without full reinitialization
+ * @details This function allows changing ADC settings during runtime for optimization.
+ *          It updates CTRL2 register for PGA gain and restarts continuous conversion
+ *          with new sample rate. Performs self-calibration after change.
+ * 
+ * @param pgaGain New PGA gain setting
+ * @param sampleRate New sample rate in Hz (will be converted to RATE code)
+ * @return true if change successful, false otherwise
+ */
+bool adcChangeSettings(AdcPgaGain pgaGain, uint32_t sampleRate);
+
+/**
+ * @brief Collect samples and calculate noise (standard deviation)
+ * @details Collects a specified number of samples and calculates the standard
+ *          deviation as a measure of noise. Assumes loadcell is at zero force
+ *          (unloaded) during measurement.
+ * 
+ * @param numSamples Number of samples to collect (recommended: 1000-10000)
+ * @param noiseStdDev Output: calculated standard deviation in ADC counts
+ * @param timeoutMs Maximum time to wait for samples (milliseconds)
+ * @return true if measurement successful, false on timeout or error
+ */
+bool adcMeasureNoise(size_t numSamples, float &noiseStdDev, uint32_t timeoutMs = 5000);
+
+/**
+ * @brief Measure signal and calculate SNR (Signal-to-Noise Ratio)
+ * @details Measures signal RMS at current load and noise RMS from baseline,
+ *          then calculates SNR in dB. Requires known load to be applied.
+ * 
+ * @param numSamples Number of samples to collect (recommended: 1000-10000)
+ * @param baselineAdc Baseline ADC value at zero force (for noise reference)
+ * @param signalRms Output: RMS value of signal in ADC counts
+ * @param noiseRms Output: RMS value of noise in ADC counts
+ * @param snrDb Output: Signal-to-Noise Ratio in dB
+ * @param timeoutMs Maximum time to wait for samples (milliseconds)
+ * @return true if measurement successful, false on timeout or error
+ */
+bool adcMeasureSnr(size_t numSamples, int32_t baselineAdc, 
+                   float &signalRms, float &noiseRms, float &snrDb, 
+                   uint32_t timeoutMs = 5000);
+
+/**
+ * @brief Optimize ADC settings by testing all combinations
+ * @details Tests all combinations of PGA gain and sample rate and selects optimal.
+ *          Three modes available:
+ *          - NOISE_ONLY: Measures noise at zero force (unloaded), minimizes noise
+ *          - SNR_SINGLE: Measures SNR at single known load, maximizes SNR
+ *          - SNR_MULTIPOINT: Measures SNR at multiple load points, maximizes weighted SNR
+ * 
+ * @param mode Optimization mode
+ * @param testGains Array of PGA gains to test (nullptr = test all)
+ * @param numGains Number of gains in testGains array (0 = test all 8 gains)
+ * @param testRates Array of sample rates to test in Hz (nullptr = test common rates)
+ * @param numRates Number of rates in testRates array (0 = test default set)
+ * @param samplesPerTest Number of samples to collect per test (default: 5000)
+ * @param baselineAdc Baseline ADC value at zero force (required for SNR modes, ignored for NOISE_ONLY)
+ * @param loadPoints Array of load points for multi-point optimization (required for SNR_MULTIPOINT, nullptr otherwise)
+ * @param numLoadPoints Number of load points (required for SNR_MULTIPOINT, 0 otherwise)
+ * @param result Output: optimal settings and performance metric
+ * @return true if optimization completed, false on error
+ */
+bool adcOptimizeSettings(
+    AdcOptimizationMode mode,
+    const AdcPgaGain *testGains, size_t numGains,
+    const uint32_t *testRates, size_t numRates,
+    size_t samplesPerTest,
+    int32_t baselineAdc,
+    AdcLoadPoint *loadPoints,
+    size_t numLoadPoints,
+    AdcOptimizationResult &result);

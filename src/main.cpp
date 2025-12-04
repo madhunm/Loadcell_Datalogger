@@ -273,6 +273,8 @@ void loop()
         if (systemState == STATE_READY)
         {
             // Start acquisition tasks ONCE, pinned to core 0.
+            // Note: If ADC optimization was run, the sampling task may have been stopped.
+            // This check ensures we restart it if needed.
             if (!samplingTasksStarted)
             {
                 samplingTasksStarted = true;

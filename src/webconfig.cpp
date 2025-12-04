@@ -1781,6 +1781,26 @@ static void saveCalibrationToNVS()
     }
 }
 
+// Save current logger configuration to NVS
+static void saveConfigToNVS()
+{
+    Preferences preferences;
+    if (preferences.begin("webconfig", false))  // Read-write mode
+    {
+        preferences.putUInt("adcSampleRate", currentConfig.adcSampleRate);
+        preferences.putUInt("adcPgaGain", static_cast<uint8_t>(currentConfig.adcPgaGain));
+        preferences.putUInt("imuOdr", currentConfig.imuOdr);
+        preferences.putUShort("imuAccelRange", currentConfig.imuAccelRange);
+        preferences.putUShort("imuGyroRange", currentConfig.imuGyroRange);
+        preferences.end();
+        Serial.println("[WEBCONFIG] Configuration saved to NVS");
+    }
+    else
+    {
+        Serial.println("[WEBCONFIG] WARNING: Failed to open NVS for writing");
+    }
+}
+
 // Get calibration values as JSON
 static void handleCalibrationGet()
 {
@@ -1829,6 +1849,267 @@ static void handleCalibrationPost()
     
     server.send(200, "text/plain", "OK");
     Serial.println("[WEBCONFIG] Calibration values updated");
+}
+
+// Handle ADC optimization request
+static void handleAdcOptimize()
+{
+    // Rate limiting: max 1 request per 30 seconds (optimization takes time)
+    static uint32_t lastOptRequest = 0;
+    uint32_t now = millis();
+    if (now - lastOptRequest < 30000)
+    {
+        server.send(429, "text/plain", "Too many requests. Please wait 30 seconds.");
+        return;
+    }
+    lastOptRequest = now;
+    
+    // Get parameters (optional - use defaults if not provided)
+    size_t samplesPerTest = 5000;  // Default: 5000 samples per test
+    if (server.hasArg("samples"))
+    {
+        samplesPerTest = server.arg("samples").toInt();
+        if (samplesPerTest < 100 || samplesPerTest > 50000)
+        {
+            server.send(400, "text/plain", "Invalid samples parameter (100-50000)");
+            return;
+        }
+    }
+    
+    // Get optimization mode
+    AdcOptimizationMode mode = ADC_OPT_MODE_NOISE_ONLY;
+    int32_t baselineAdc = 0;
+    if (server.hasArg("mode"))
+    {
+        int modeInt = server.arg("mode").toInt();
+        if (modeInt == 1) mode = ADC_OPT_MODE_SNR_SINGLE;
+        else if (modeInt == 2) mode = ADC_OPT_MODE_SNR_MULTIPOINT;
+    }
+    
+    if (server.hasArg("baseline"))
+    {
+        baselineAdc = server.arg("baseline").toInt();
+    }
+    
+    // For multi-point mode, we need to handle it differently (see separate endpoint)
+    if (mode == ADC_OPT_MODE_SNR_MULTIPOINT)
+    {
+        server.send(400, "text/plain", "Use /cal/optimize-multipoint endpoint for multi-point optimization");
+        return;
+    }
+    
+    // Perform optimization (adc.h already included at top of file)
+    AdcOptimizationResult result;
+    bool success = adcOptimizeSettings(
+        mode,
+        nullptr, 0,  // Use default gains (all 8)
+        nullptr, 0,  // Use default rates (common values)
+        samplesPerTest,
+        baselineAdc,
+        nullptr, 0,  // No load points for single-point modes
+        result);
+    
+    if (!success || !result.success)
+    {
+        server.send(500, "application/json", "{\"success\":false,\"error\":\"Optimization failed\"}");
+        return;
+    }
+    
+    // Return result as JSON
+    char json[256];
+    snprintf(json, sizeof(json),
+        "{\"success\":true,\"optimalGain\":%d,\"optimalSampleRate\":%lu,\"noiseLevel\":%.2f}",
+        static_cast<int>(result.optimalGain),
+        result.optimalSampleRate,
+        result.noiseLevel);
+    
+    server.send(200, "application/json", json);
+    
+    // Update current config with optimal settings
+    currentConfig.adcPgaGain = result.optimalGain;
+    currentConfig.adcSampleRate = result.optimalSampleRate;
+    
+    // Save to NVS
+    saveConfigToNVS();
+    
+    Serial.println("[WEBCONFIG] ADC optimization complete, settings updated");
+    
+    // Note: ADC sampling task was stopped during optimization and needs to be
+    // restarted by the user (by starting a new logging session). This is intentional
+    // to prevent interference during calibration.
+}
+
+// Handle multi-point ADC optimization
+static void handleAdcOptimizeMultipoint()
+{
+    // Rate limiting: max 1 request per 30 seconds
+    static uint32_t lastOptRequest = 0;
+    uint32_t now = millis();
+    if (now - lastOptRequest < 30000)
+    {
+        server.send(429, "text/plain", "Too many requests. Please wait 30 seconds.");
+        return;
+    }
+    lastOptRequest = now;
+    
+    // Get parameters
+    size_t samplesPerTest = 5000;
+    if (server.hasArg("samples"))
+    {
+        samplesPerTest = server.arg("samples").toInt();
+        if (samplesPerTest < 100 || samplesPerTest > 50000)
+        {
+            server.send(400, "text/plain", "Invalid samples parameter (100-50000)");
+            return;
+        }
+    }
+    
+    // Parse load points from JSON body
+    if (!server.hasArg("plain"))
+    {
+        server.send(400, "text/plain", "Missing load points data");
+        return;
+    }
+    
+    String jsonData = server.arg("plain");
+    
+    // Parse JSON (simple parsing - expecting array of load points)
+    // Format: {"loadPoints":[{"baseline":8388608,"weight":0.2,"measured":true},...]}
+    // For now, we'll use a simpler approach: parse from query parameters
+    
+    // Alternative: Use query parameters for each load point
+    // ?baseline0=X&weight0=Y&baseline1=X&weight1=Y...
+    const size_t MAX_LOAD_POINTS = 10;
+    AdcLoadPoint loadPoints[MAX_LOAD_POINTS];
+    size_t numLoadPoints = 0;
+    
+    // Parse load points from query parameters
+    for (size_t i = 0; i < MAX_LOAD_POINTS; i++)
+    {
+        String baselineKey = "baseline" + String(i);
+        String weightKey = "weight" + String(i);
+        String measuredKey = "measured" + String(i);
+        
+        if (server.hasArg(baselineKey) && server.hasArg(weightKey))
+        {
+            loadPoints[numLoadPoints].baselineAdc = server.arg(baselineKey).toInt();
+            loadPoints[numLoadPoints].weight = server.arg(weightKey).toFloat();
+            loadPoints[numLoadPoints].measured = server.hasArg(measuredKey) ? 
+                                                 (server.arg(measuredKey).toInt() != 0) : true;
+            loadPoints[numLoadPoints].snrDb = 0.0f;
+            loadPoints[numLoadPoints].signalRms = 0.0f;
+            loadPoints[numLoadPoints].noiseRms = 0.0f;
+            numLoadPoints++;
+        }
+    }
+    
+    if (numLoadPoints == 0)
+    {
+        server.send(400, "text/plain", "No load points provided");
+        return;
+    }
+    
+    // Perform multi-point optimization
+    AdcOptimizationResult result;
+    bool success = adcOptimizeSettings(
+        ADC_OPT_MODE_SNR_MULTIPOINT,
+        nullptr, 0,  // Use default gains
+        nullptr, 0,  // Use default rates
+        samplesPerTest,
+        0,  // Baseline not used in multi-point mode
+        loadPoints,
+        numLoadPoints,
+        result);
+    
+    if (!success || !result.success)
+    {
+        server.send(500, "application/json", "{\"success\":false,\"error\":\"Optimization failed\"}");
+        return;
+    }
+    
+    // Return result as JSON with load point details
+    String json = "{\"success\":true,\"optimalGain\":" + String(static_cast<int>(result.optimalGain)) +
+                  ",\"optimalSampleRate\":" + String(result.optimalSampleRate) +
+                  ",\"weightedSnrDb\":" + String(result.snrDb, 2) +
+                  ",\"loadPoints\":[";
+    
+    for (size_t i = 0; i < numLoadPoints; i++)
+    {
+        if (i > 0) json += ",";
+        json += "{\"baseline\":" + String(loadPoints[i].baselineAdc) +
+                ",\"snrDb\":" + String(loadPoints[i].snrDb, 2) +
+                ",\"signalRms\":" + String(loadPoints[i].signalRms, 2) +
+                ",\"noiseRms\":" + String(loadPoints[i].noiseRms, 2) +
+                ",\"weight\":" + String(loadPoints[i].weight, 2) + "}";
+    }
+    
+    json += "]}";
+    
+    server.send(200, "application/json", json);
+    
+    // Update current config with optimal settings
+    currentConfig.adcPgaGain = result.optimalGain;
+    currentConfig.adcSampleRate = result.optimalSampleRate;
+    
+    // Save to NVS
+    saveConfigToNVS();
+    
+    Serial.println("[WEBCONFIG] Multi-point ADC optimization complete, settings updated");
+}
+
+// Handle load point measurement (for multi-point optimization)
+static void handleMeasureLoadPoint()
+{
+    // Rate limiting: max 10 requests per second
+    static uint32_t lastRequest = 0;
+    uint32_t now = millis();
+    if (now - lastRequest < 100)
+    {
+        server.send(429, "text/plain", "Too many requests");
+        return;
+    }
+    lastRequest = now;
+    
+    // Get parameters
+    size_t numSamples = 5000;
+    if (server.hasArg("samples"))
+    {
+        numSamples = server.arg("samples").toInt();
+        if (numSamples < 100 || numSamples > 50000)
+        {
+            server.send(400, "text/plain", "Invalid samples parameter");
+            return;
+        }
+    }
+    
+    int32_t baselineAdc = 0;
+    if (server.hasArg("baseline"))
+    {
+        baselineAdc = server.arg("baseline").toInt();
+    }
+    else
+    {
+        server.send(400, "text/plain", "Missing baseline parameter");
+        return;
+    }
+    
+    // Measure SNR at current load
+    float signalRms = 0.0f, noiseRms = 0.0f, snrDb = 0.0f;
+    bool success = adcMeasureSnr(numSamples, baselineAdc, signalRms, noiseRms, snrDb, 10000);
+    
+    if (!success)
+    {
+        server.send(500, "application/json", "{\"success\":false,\"error\":\"Measurement failed\"}");
+        return;
+    }
+    
+    // Return result as JSON
+    char json[256];
+    snprintf(json, sizeof(json),
+        "{\"success\":true,\"snrDb\":%.2f,\"signalRms\":%.2f,\"noiseRms\":%.2f}",
+        snrDb, signalRms, noiseRms);
+    
+    server.send(200, "application/json", json);
 }
 
 // Handle calibration portal page (hidden route /cal)
@@ -2013,6 +2294,73 @@ static void handleCalibrationPage()
                     </select>
                 </div>
             </form>
+            
+            <div class="form-group" style="margin-top: 25px; padding-top: 20px; border-top: 2px solid #e2e8f0;">
+                <h3 style="margin-top: 0; color: #2d3748; font-size: 18px;">🔍 Auto-Optimize ADC Settings</h3>
+                <p style="color: #4a5568; margin-bottom: 15px;">
+                    Automatically find the optimal PGA gain and sample rate combination with lowest noise.
+                    <strong>Ensure loadcell is at ZERO FORCE (unloaded) before starting!</strong>
+                </p>
+                <div class="form-group">
+                    <label for="optSamples">Samples per Test:</label>
+                    <input type="number" id="optSamples" value="5000" min="1000" max="50000" step="1000">
+                    <small>More samples = more accurate but slower (default: 5000)</small>
+                </div>
+                <button type="button" class="button" onclick="startOptimization()" id="optButton" style="background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);">
+                    🚀 Start Optimization
+                </button>
+                <div id="optStatus" style="margin-top: 15px;"></div>
+                <div id="optProgress" style="margin-top: 10px; display: none;">
+                    <div style="background: #e2e8f0; border-radius: 4px; height: 20px; overflow: hidden;">
+                        <div id="optProgressBar" style="background: linear-gradient(90deg, #667eea, #764ba2); height: 100%; width: 0%; transition: width 0.3s;"></div>
+                    </div>
+                    <div id="optProgressText" style="margin-top: 8px; font-size: 12px; color: #718096;"></div>
+                </div>
+            </div>
+            
+            <div class="form-group" style="margin-top: 30px; padding-top: 25px; border-top: 2px solid #e2e8f0;">
+                <h3 style="margin-top: 0; color: #2d3748; font-size: 18px;">📊 Multi-Point SNR Optimization (Recommended)</h3>
+                <p style="color: #4a5568; margin-bottom: 20px;">
+                    Optimize for maximum Signal-to-Noise Ratio across multiple load points. 
+                    This provides better results than noise-only optimization.
+                    <strong>Follow the 5-point loading sequence below.</strong>
+                </p>
+                
+                <div class="form-group">
+                    <label for="mpOptSamples">Samples per Test:</label>
+                    <input type="number" id="mpOptSamples" value="5000" min="1000" max="50000" step="1000">
+                    <small>More samples = more accurate but slower (default: 5000)</small>
+                </div>
+                
+                <div style="background: #fff; border: 2px solid #e2e8f0; border-radius: 8px; padding: 20px; margin: 20px 0;">
+                    <h4 style="margin-top: 0; color: #2d3748;">5-Point Measurement Sequence</h4>
+                    <p style="color: #4a5568; font-size: 14px; margin-bottom: 15px;">
+                        <strong>Loading Phase:</strong> Apply weights in increasing order (0N → 25% → 50% → 75% → 100%)<br>
+                        <strong>Unloading Phase:</strong> Remove weights in decreasing order (100% → 75% → 50% → 25% → 0N)
+                    </p>
+                    
+                    <div id="loadPointsContainer">
+                        <!-- Load points will be generated here -->
+                    </div>
+                    
+                    <div style="margin-top: 20px;">
+                        <button type="button" class="button" onclick="startMultipointOptimization()" id="mpOptButton" style="background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);">
+                            🚀 Start Multi-Point Optimization
+                        </button>
+                        <button type="button" class="button" onclick="resetLoadPoints()" style="background: #e2e8f0; color: #4a5568; margin-left: 10px;">
+                            🔄 Reset
+                        </button>
+                    </div>
+                    
+                    <div id="mpOptStatus" style="margin-top: 15px;"></div>
+                    <div id="mpOptProgress" style="margin-top: 10px; display: none;">
+                        <div style="background: #e2e8f0; border-radius: 4px; height: 20px; overflow: hidden;">
+                            <div id="mpOptProgressBar" style="background: linear-gradient(90deg, #667eea, #764ba2); height: 100%; width: 0%; transition: width 0.3s;"></div>
+                        </div>
+                        <div id="mpOptProgressText" style="margin-top: 8px; font-size: 12px; color: #718096;"></div>
+                    </div>
+                </div>
+            </div>
         </div>
         
         <div class="section">
@@ -2157,6 +2505,68 @@ static void handleCalibrationPage()
             } catch (error) {
                 statusDiv.className = 'status error';
                 statusDiv.textContent = '❌ Error: ' + error;
+            }
+        }
+        
+        // ADC Optimization function
+        async function startOptimization() {
+            const button = document.getElementById('optButton');
+            const statusDiv = document.getElementById('optStatus');
+            const progressDiv = document.getElementById('optProgress');
+            const progressBar = document.getElementById('optProgressBar');
+            const progressText = document.getElementById('optProgressText');
+            
+            // Disable button
+            button.disabled = true;
+            button.textContent = '⏳ Optimizing...';
+            
+            // Show progress
+            progressDiv.style.display = 'block';
+            progressBar.style.width = '0%';
+            progressText.textContent = 'Starting optimization...';
+            
+            statusDiv.className = 'status info';
+            statusDiv.textContent = '🔍 Starting optimization. This may take 2-5 minutes. Please wait...';
+            
+            try {
+                const samples = parseInt(document.getElementById('optSamples').value);
+                const response = await fetch('/cal/optimize?samples=' + samples, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Optimization failed: ' + response.statusText);
+                }
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Update form fields with optimal values
+                    document.getElementById('adcSampleRate').value = result.optimalSampleRate;
+                    document.getElementById('adcPgaGain').value = result.optimalGain;
+                    
+                    // Update progress
+                    progressBar.style.width = '100%';
+                    progressText.textContent = 'Complete!';
+                    
+                    statusDiv.className = 'status success';
+                    statusDiv.innerHTML = '✅ Optimization complete!<br>' +
+                        'Optimal Gain: x' + (1 << result.optimalGain) + '<br>' +
+                        'Optimal Sample Rate: ' + result.optimalSampleRate + ' Hz<br>' +
+                        'Noise Level: ' + result.noiseLevel.toFixed(2) + ' ADC counts<br><br>' +
+                        '<strong>Settings have been updated. Click "Save All Settings" to persist.</strong>';
+                } else {
+                    throw new Error(result.error || 'Optimization failed');
+                }
+            } catch (error) {
+                statusDiv.className = 'status error';
+                statusDiv.textContent = '❌ Error: ' + error.message;
+                progressBar.style.width = '0%';
+                progressText.textContent = 'Failed';
+            } finally {
+                // Re-enable button
+                button.disabled = false;
+                button.textContent = '🚀 Start Optimization';
             }
         }
         
@@ -2445,6 +2855,7 @@ bool webConfigInit()
     server.on("/cal", HTTP_GET, handleCalibrationPage);  // Calibration portal page
     server.on("/cal", HTTP_POST, handleCalibrationPost);  // Save calibration values
     server.on("/cal/values", HTTP_GET, handleCalibrationGet);  // Get calibration values (JSON)
+    server.on("/cal/optimize", HTTP_POST, handleAdcOptimize);  // ADC optimization endpoint
     
     // Start server
     server.begin();
