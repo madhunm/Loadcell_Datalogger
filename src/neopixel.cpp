@@ -1,7 +1,12 @@
 #include "neopixel.h"
 
 #include <Adafruit_NeoPixel.h>
+#include <math.h>
 #include "pins.h"
+
+#ifndef PI
+#define PI 3.14159265359f
+#endif
 
 #define NEOPIXEL_NUMPIXELS 1
 
@@ -23,6 +28,12 @@ static uint32_t blinkOffMs = 0;
 static uint8_t blinkPulsesPerGroup = 0;
 static uint8_t blinkCurrentPulse = 0;
 static uint32_t blinkGroupGapMs = 0;
+
+// Breathing animation state (for READY pattern)
+static uint32_t breathingStartTime = 0;
+static const uint32_t BREATHING_PERIOD_MS = 2000; // 2 second cycle (1s fade in, 1s fade out)
+static const uint8_t BREATHING_MIN_BRIGHTNESS = 30;  // Minimum brightness (dim)
+static const uint8_t BREATHING_MAX_BRIGHTNESS = 255; // Maximum brightness (full)
 
 // Apply base colour immediately (no blinking logic)
 static void applyStaticColour()
@@ -168,11 +179,12 @@ void neopixelSetPattern(NeopixelPattern pattern)
         break;
 
     case NEOPIXEL_PATTERN_READY:
-        // READY: solid green
+        // READY: breathing green pattern (smooth fade in/out)
         baseR = 0;
         baseG = 255;
         baseB = 0;
-        applyStaticColour();
+        breathingStartTime = millis();
+        // Initial brightness will be set in neopixelUpdate()
         break;
 
     case NEOPIXEL_PATTERN_LOGGING:
@@ -230,6 +242,29 @@ void neopixelSetPattern(NeopixelPattern pattern)
 
 void neopixelUpdate()
 {
+    uint32_t now = millis();
+
+    // Handle breathing pattern for READY state
+    if (currentPattern == NEOPIXEL_PATTERN_READY)
+    {
+        // Calculate phase in breathing cycle (0 to BREATHING_PERIOD_MS)
+        uint32_t elapsed = (now - breathingStartTime) % BREATHING_PERIOD_MS;
+        
+        // Use sine wave for smooth breathing effect
+        // Map elapsed time (0 to BREATHING_PERIOD_MS) to angle (0 to 2π)
+        float phase = (float)elapsed / (float)BREATHING_PERIOD_MS * 2.0f * PI;
+        
+        // Sine wave: -1 to +1, shift to 0 to 1, then scale to brightness range
+        float sineValue = (sin(phase) + 1.0f) / 2.0f; // 0.0 to 1.0
+        uint8_t brightness = BREATHING_MIN_BRIGHTNESS + 
+                             (uint8_t)(sineValue * (BREATHING_MAX_BRIGHTNESS - BREATHING_MIN_BRIGHTNESS));
+        
+        // Apply brightness to green channel (keep red and blue at 0)
+        pixel.setPixelColor(0, pixel.Color(0, brightness, 0));
+        pixel.show();
+        return;
+    }
+
     // Patterns with time-based animation (blinking)
     if (currentPattern != NEOPIXEL_PATTERN_ERROR_SD &&
         currentPattern != NEOPIXEL_PATTERN_ERROR_RTC &&
@@ -243,8 +278,6 @@ void neopixelUpdate()
     {
         return;
     }
-
-    uint32_t now = millis();
 
     if (blinkOn)
     {

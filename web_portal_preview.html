@@ -539,15 +539,50 @@
                          <input type="number" id="maxPoints" value="5000" min="100" max="50000" step="100"
                               onchange="updateChart()">
                          <button class="secondary" onclick="reloadLatestCsv()">🔄 Reload Latest</button>
+                         <button class="secondary" onclick="showFileSelector()">📁 Compare Files</button>
+                    </div>
+                    <div id="fileComparisonPanel"
+                         style="display: none; margin-top: 15px; padding: 15px; background: #f7fafc; border-radius: 8px;">
+                         <h3 style="margin-top: 0; font-size: 16px;">File Comparison</h3>
+                         <div id="selectedFiles" style="margin-bottom: 10px;"></div>
+                         <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                              <button class="secondary" onclick="loadFileList()">🔄 Refresh File List</button>
+                              <button class="secondary" onclick="clearComparison()">🗑️ Clear All</button>
+                         </div>
+                         <div id="fileListContainer" style="margin-top: 10px; max-height: 200px; overflow-y: auto;">
+                         </div>
+                    </div>
+                    <div class="chart-controls"
+                         style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e2e8f0;">
+                         <label style="display: flex; align-items: center; gap: 10px;">
+                              <input type="checkbox" id="autoRefreshToggle" onchange="toggleAutoRefresh()">
+                              <span>Auto-refresh</span>
+                         </label>
+                         <label>Refresh Interval:</label>
+                         <select id="refreshInterval" onchange="updateAutoRefresh()" disabled>
+                              <option value="1000">1 second</option>
+                              <option value="2000" selected>2 seconds</option>
+                              <option value="5000">5 seconds</option>
+                              <option value="10000">10 seconds</option>
+                              <option value="30000">30 seconds</option>
+                              <option value="60000">1 minute</option>
+                         </select>
+                         <span id="autoRefreshStatus" style="color: #718096; font-size: 12px;">Auto-refresh: OFF</span>
                     </div>
                     <div class="chart-container">
                          <canvas id="dataChart"></canvas>
                     </div>
                     <div class="chart-legend" id="chartLegend"></div>
                     <div class="chart-stats" id="chartStats"
-                         style="margin-top: 15px; padding: 15px; background: #f7fafc; border-radius: 8px; font-size: 14px; line-height: 1.8;">
-                         <div><strong>Max Force (ADC):</strong> <span id="maxForce">-</span></div>
-                         <div><strong>Max Deceleration:</strong> <span id="maxDecel">-</span></div>
+                         style="margin-top: 15px; padding: 15px; background: #f7fafc; border-radius: 8px; font-size: 14px;">
+                         <div style="margin-bottom: 15px;">
+                              <strong style="display: block; margin-bottom: 8px;">Max Force (N):</strong>
+                              <div id="maxForce" style="display: flex; flex-wrap: wrap; gap: 8px;"></div>
+                         </div>
+                         <div>
+                              <strong style="display: block; margin-bottom: 8px;">Max Deceleration:</strong>
+                              <div id="maxDecel" style="display: flex; flex-wrap: wrap; gap: 8px;"></div>
+                         </div>
                     </div>
                </div>
           </div>
@@ -598,6 +633,24 @@
           let dataChart = null;
           let csvData = null;
           let rawData = null;
+
+          // Data comparison: store multiple datasets
+          let comparisonData = []; // Array of {filename, data, color}
+          let availableFiles = []; // List of available CSV files
+          let autoRefreshInterval = null;
+          let autoRefreshEnabled = false;
+
+          // Color palette for comparison datasets
+          const comparisonColors = [
+               'rgb(75, 192, 192)',   // Teal
+               'rgb(255, 99, 132)',   // Red
+               'rgb(54, 162, 235)',   // Blue
+               'rgb(255, 206, 86)',   // Yellow
+               'rgb(153, 102, 255)',  // Purple
+               'rgb(255, 159, 64)',   // Orange
+               'rgb(201, 203, 207)', // Grey
+               'rgb(255, 99, 255)'    // Magenta
+          ];
 
           // Initialize chart
           function initChart() {
@@ -817,7 +870,7 @@
                return filtered;
           }
 
-          // Update chart with data
+          // Update chart with data (supports comparison mode)
           function updateChart() {
                if (!dataChart) {
                     console.error('Chart not initialized!');
@@ -825,25 +878,8 @@
                     return;
                }
 
-               if (!rawData || rawData.length === 0) {
-                    console.error('No data to display!');
-                    showStatus('❌ No data available to display', 'error');
-                    return;
-               }
-
-               console.log('Updating chart with', rawData.length, 'data points');
-
                const avgWindow = parseInt(document.getElementById('avgWindow').value);
                const maxPoints = parseInt(document.getElementById('maxPoints').value);
-
-               // Apply moving average filter
-               let processedData = applyMovingAverage(rawData, avgWindow);
-
-               // Limit points if needed
-               if (processedData.length > maxPoints) {
-                    const step = Math.ceil(processedData.length / maxPoints);
-                    processedData = processedData.filter((_, i) => i % step === 0);
-               }
 
                // Loadcell calibration constants (hardcoded in firmware)
                const scalingFactor = 0.00667; // N per ADC count
@@ -854,27 +890,139 @@
                     return (adcCode - adcBaseline) * scalingFactor;
                };
 
-               // Update chart data
-               dataChart.data.labels = processedData.map(d => d.time.toFixed(6));
-               dataChart.data.datasets[0].data = processedData.map(d => ({ x: d.time, y: convertAdcToForce(d.adcCode) }));
-               dataChart.data.datasets[1].data = processedData.map(d => ({ x: d.time, y: d.ax !== null ? d.ax : null }));
-               dataChart.data.datasets[2].data = processedData.map(d => ({ x: d.time, y: d.ay !== null ? d.ay : null }));
-               dataChart.data.datasets[3].data = processedData.map(d => ({ x: d.time, y: d.az !== null ? d.az : null }));
+               // Clear existing datasets (keep base structure)
+               const baseDatasets = [];
+               let allLabels = [];
 
+               // Process main dataset if available
+               if (rawData && rawData.length > 0) {
+                    let processedData = applyMovingAverage(rawData, avgWindow);
+                    if (processedData.length > maxPoints) {
+                         const step = Math.ceil(processedData.length / maxPoints);
+                         processedData = processedData.filter((_, i) => i % step === 0);
+                    }
+                    allLabels = processedData.map(d => d.time.toFixed(6));
+
+                    // Add main dataset
+                    baseDatasets.push({
+                         label: 'Force (N) - Current',
+                         data: processedData.map(d => ({ x: d.time, y: convertAdcToForce(d.adcCode) })),
+                         borderColor: 'rgb(75, 192, 192)',
+                         backgroundColor: 'rgba(75, 192, 192, 0.1)',
+                         yAxisID: 'y',
+                         borderWidth: 1.5,
+                         pointRadius: 0,
+                         tension: 0.1
+                    });
+                    baseDatasets.push({
+                         label: 'AX (g)',
+                         data: processedData.map(d => ({ x: d.time, y: d.ax !== null ? d.ax : null })),
+                         borderColor: 'rgb(255, 99, 132)',
+                         backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                         yAxisID: 'y1',
+                         borderWidth: 1.5,
+                         pointRadius: 0,
+                         tension: 0.1,
+                         hidden: false
+                    });
+                    baseDatasets.push({
+                         label: 'AY (g)',
+                         data: processedData.map(d => ({ x: d.time, y: d.ay !== null ? d.ay : null })),
+                         borderColor: 'rgb(54, 162, 235)',
+                         backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                         yAxisID: 'y1',
+                         borderWidth: 1.5,
+                         pointRadius: 0,
+                         tension: 0.1,
+                         hidden: false
+                    });
+                    baseDatasets.push({
+                         label: 'AZ (g)',
+                         data: processedData.map(d => ({ x: d.time, y: d.az !== null ? d.az : null })),
+                         borderColor: 'rgb(255, 206, 86)',
+                         backgroundColor: 'rgba(255, 206, 86, 0.1)',
+                         yAxisID: 'y1',
+                         borderWidth: 1.5,
+                         pointRadius: 0,
+                         tension: 0.1,
+                         hidden: false
+                    });
+
+               }
+
+               // Add comparison datasets
+               const allProcessedDatasets = []; // Store processed data with labels for stats calculation
+               if (rawData && rawData.length > 0) {
+                    let processedData = applyMovingAverage(rawData, avgWindow);
+                    if (processedData.length > maxPoints) {
+                         const step = Math.ceil(processedData.length / maxPoints);
+                         processedData = processedData.filter((_, i) => i % step === 0);
+                    }
+                    allProcessedDatasets.push({ label: 'Current', data: processedData });
+               }
+
+               comparisonData.forEach((comp, idx) => {
+                    if (comp.data && comp.data.length > 0) {
+                         let processedComp = applyMovingAverage(comp.data, avgWindow);
+                         if (processedComp.length > maxPoints) {
+                              const step = Math.ceil(processedComp.length / maxPoints);
+                              processedComp = processedComp.filter((_, i) => i % step === 0);
+                         }
+
+                         // Store for stats calculation
+                         allProcessedDatasets.push({ label: comp.filename, data: processedComp });
+
+                         // Use comparison color
+                         const color = comp.color || comparisonColors[idx % comparisonColors.length];
+
+                         baseDatasets.push({
+                              label: `Force (N) - ${comp.filename}`,
+                              data: processedComp.map(d => ({ x: d.time, y: convertAdcToForce(d.adcCode) })),
+                              borderColor: color,
+                              backgroundColor: color.replace('rgb', 'rgba').replace(')', ', 0.1)'),
+                              yAxisID: 'y',
+                              borderWidth: 1.5,
+                              pointRadius: 0,
+                              tension: 0.1,
+                              borderDash: [5, 5] // Dashed line for comparison
+                         });
+                    }
+               });
+
+               // Update chart
+               dataChart.data.labels = allLabels;
+               dataChart.data.datasets = baseDatasets;
                dataChart.update('none');
                updateChartLegend();
 
-               // Calculate and display max values
-               updateChartStats(processedData);
+               // Calculate and display max values for all datasets (main + comparison)
+               // Map dataset labels to their colors
+               const datasetColors = {};
+               baseDatasets.forEach((ds, idx) => {
+                    // Only track Force datasets (yAxisID === 'y')
+                    if (ds.yAxisID === 'y') {
+                         let label = ds.label.replace('Force (N) - ', '');
+                         // Map "Current" to match the dataset label
+                         if (label === 'Current') {
+                              label = 'Current';
+                         }
+                         datasetColors[label] = ds.borderColor;
+                    }
+               });
+               updateChartStats(allProcessedDatasets, datasetColors);
 
-               showStatus(`✅ Chart updated: ${processedData.length} points (${rawData.length} original)`, 'success');
+               const totalPoints = (rawData ? rawData.length : 0) + comparisonData.reduce((sum, comp) => sum + (comp.data ? comp.data.length : 0), 0);
+               showStatus(`✅ Chart updated: ${baseDatasets.length} datasets, ${totalPoints} total points`, 'success');
           }
 
-          // Update chart statistics (max force and max deceleration)
-          function updateChartStats(data) {
-               if (!data || data.length === 0) {
-                    document.getElementById('maxForce').textContent = '-';
-                    document.getElementById('maxDecel').textContent = '-';
+          // Update chart statistics (max force and max deceleration) for all datasets
+          function updateChartStats(datasets, datasetColors = {}) {
+               const maxForceEl = document.getElementById('maxForce');
+               const maxDecelEl = document.getElementById('maxDecel');
+
+               if (!datasets || datasets.length === 0) {
+                    if (maxForceEl) maxForceEl.innerHTML = '<span style="color: #718096;">-</span>';
+                    if (maxDecelEl) maxDecelEl.innerHTML = '<span style="color: #718096;">-</span>';
                     return;
                }
 
@@ -882,42 +1030,75 @@
                const scalingFactor = 0.00667; // N per ADC count
                const adcBaseline = 8388608;    // 24-bit ADC mid-point (0N reference)
 
-               // Find max ADC and convert to Force (N)
-               let maxAdc = data[0].adcCode;
-               let maxAdcTime = data[0].time;
-               for (let i = 1; i < data.length; i++) {
-                    if (data[i].adcCode > maxAdc) {
-                         maxAdc = data[i].adcCode;
-                         maxAdcTime = data[i].time;
+               // Calculate stats for each dataset
+               const stats = [];
+               datasets.forEach(dataset => {
+                    if (!dataset.data || dataset.data.length === 0) return;
+
+                    // Find max ADC and convert to Force (N)
+                    let maxAdc = dataset.data[0].adcCode;
+                    let maxAdcTime = dataset.data[0].time;
+                    for (let i = 1; i < dataset.data.length; i++) {
+                         if (dataset.data[i].adcCode > maxAdc) {
+                              maxAdc = dataset.data[i].adcCode;
+                              maxAdcTime = dataset.data[i].time;
+                         }
                     }
-               }
+                    const maxForceN = (maxAdc - adcBaseline) * scalingFactor;
 
-               // Convert max ADC to Force (N)
-               const maxForceN = (maxAdc - adcBaseline) * scalingFactor;
-
-               // Find max deceleration (max AZ value)
-               let maxDecel = null;
-               let maxDecelTime = null;
-               for (let i = 0; i < data.length; i++) {
-                    if (data[i].az !== null && (maxDecel === null || data[i].az > maxDecel)) {
-                         maxDecel = data[i].az;
-                         maxDecelTime = data[i].time;
+                    // Find max deceleration (max AZ value)
+                    let maxDecel = null;
+                    let maxDecelTime = null;
+                    for (let i = 0; i < dataset.data.length; i++) {
+                         if (dataset.data[i].az !== null && (maxDecel === null || dataset.data[i].az > maxDecel)) {
+                              maxDecel = dataset.data[i].az;
+                              maxDecelTime = dataset.data[i].time;
+                         }
                     }
-               }
 
-               // Update display
-               const maxForceEl = document.getElementById('maxForce');
-               const maxDecelEl = document.getElementById('maxDecel');
+                    // Get color for this dataset
+                    const color = datasetColors[dataset.label] || 'rgb(75, 192, 192)';
 
+                    stats.push({
+                         label: dataset.label,
+                         maxForce: maxForceN,
+                         maxForceTime: maxAdcTime,
+                         maxDecel: maxDecel,
+                         maxDecelTime: maxDecelTime,
+                         color: color
+                    });
+               });
+
+               // Update display - show stats in color-coded containers
                if (maxForceEl) {
-                    maxForceEl.textContent = maxForceN.toFixed(2) + ' N at ' + maxAdcTime.toFixed(6) + 's';
+                    maxForceEl.innerHTML = '';
+                    if (stats.length === 0) {
+                         maxForceEl.innerHTML = '<span style="color: #718096;">-</span>';
+                    } else {
+                         stats.forEach(stat => {
+                              const badge = document.createElement('div');
+                              badge.style.cssText = `display: inline-block; padding: 6px 12px; margin: 4px 0; background: ${stat.color.replace('rgb', 'rgba').replace(')', ', 0.15)')}; border-left: 4px solid ${stat.color}; border-radius: 4px; font-size: 13px; color: #2d3748;`;
+                              badge.innerHTML = `<strong style="color: ${stat.color};">${stat.label}:</strong> ${stat.maxForce.toFixed(2)} N at ${stat.maxForceTime.toFixed(6)}s`;
+                              maxForceEl.appendChild(badge);
+                         });
+                    }
                }
 
                if (maxDecelEl) {
-                    if (maxDecel !== null) {
-                         maxDecelEl.textContent = maxDecel.toFixed(3) + 'g at ' + maxDecelTime.toFixed(6) + 's';
+                    maxDecelEl.innerHTML = '';
+                    if (stats.length === 0) {
+                         maxDecelEl.innerHTML = '<span style="color: #718096;">-</span>';
                     } else {
-                         maxDecelEl.textContent = 'N/A';
+                         stats.forEach(stat => {
+                              const badge = document.createElement('div');
+                              badge.style.cssText = `display: inline-block; padding: 6px 12px; margin: 4px 0; background: ${stat.color.replace('rgb', 'rgba').replace(')', ', 0.15)')}; border-left: 4px solid ${stat.color}; border-radius: 4px; font-size: 13px; color: #2d3748;`;
+                              if (stat.maxDecel !== null) {
+                                   badge.innerHTML = `<strong style="color: ${stat.color};">${stat.label}:</strong> ${stat.maxDecel.toFixed(3)}g at ${stat.maxDecelTime.toFixed(6)}s`;
+                              } else {
+                                   badge.innerHTML = `<strong style="color: ${stat.color};">${stat.label}:</strong> N/A`;
+                              }
+                              maxDecelEl.appendChild(badge);
+                         });
                     }
                }
           }
@@ -1230,57 +1411,17 @@
                          sdFreeEl.textContent = freeMB + ' MB';
                          sdUsedEl.textContent = usedMB + ' MB';
 
-                         // Update pie chart
-                         if (!window.sdSpaceChart) {
-                              const ctx = document.getElementById('sdSpaceChart').getContext('2d');
-                              window.sdSpaceChart = new Chart(ctx, {
-                                   type: 'doughnut',
-                                   data: {
-                                        labels: ['Used', 'Free'],
-                                        datasets: [{
-                                             data: [100 - percent, percent],
-                                             backgroundColor: [
-                                                  percent < 10 ? 'rgba(245, 101, 101, 0.8)' :
-                                                       percent < 25 ? 'rgba(237, 137, 54, 0.8)' :
-                                                            'rgba(75, 192, 192, 0.8)',
-                                                  percent < 10 ? 'rgba(245, 101, 101, 0.3)' :
-                                                       percent < 25 ? 'rgba(237, 137, 54, 0.3)' :
-                                                            'rgba(72, 187, 120, 0.8)'
-                                             ],
-                                             borderWidth: 2,
-                                             borderColor: '#fff'
-                                        }]
-                                   },
-                                   options: {
-                                        responsive: true,
-                                        maintainAspectRatio: true,
-                                        plugins: {
-                                             legend: {
-                                                  display: false
-                                             },
-                                             tooltip: {
-                                                  callbacks: {
-                                                       label: function (context) {
-                                                            const label = context.label || '';
-                                                            const value = context.parsed || 0;
-                                                            return label + ': ' + value.toFixed(1) + '%';
-                                                       }
-                                                  }
-                                             }
-                                        }
-                                   }
-                              });
-                         } else {
-                              window.sdSpaceChart.data.datasets[0].data = [100 - percent, percent];
-                              window.sdSpaceChart.data.datasets[0].backgroundColor = [
-                                   percent < 10 ? 'rgba(245, 101, 101, 0.8)' :
-                                        percent < 25 ? 'rgba(237, 137, 54, 0.8)' :
-                                             'rgba(75, 192, 192, 0.8)',
-                                   percent < 10 ? 'rgba(245, 101, 101, 0.3)' :
-                                        percent < 25 ? 'rgba(237, 137, 54, 0.3)' :
-                                             'rgba(72, 187, 120, 0.8)'
-                              ];
-                              window.sdSpaceChart.update();
+                         // Update progress bar
+                         const sdSpaceBar = document.getElementById('sdSpaceBar');
+                         if (sdSpaceBar) {
+                              sdSpaceBar.style.width = percent + '%';
+                              if (percent < 10) {
+                                   sdSpaceBar.className = 'progress-fill error';
+                              } else if (percent < 25) {
+                                   sdSpaceBar.className = 'progress-fill warning';
+                              } else {
+                                   sdSpaceBar.className = 'progress-fill';
+                              }
                          }
 
                          // Status message
@@ -1303,6 +1444,14 @@
                          sdTotalEl.textContent = '-';
                          sdFreeEl.textContent = '-';
                          sdUsedEl.textContent = '-';
+                         
+                         // Reset progress bar
+                         const sdSpaceBar = document.getElementById('sdSpaceBar');
+                         if (sdSpaceBar) {
+                              sdSpaceBar.style.width = '0%';
+                              sdSpaceBar.className = 'progress-fill';
+                         }
+                         
                          if (sdSpaceStatusEl) {
                               sdSpaceStatusEl.textContent = '';
                               sdSpaceStatusEl.className = '';
@@ -1377,10 +1526,10 @@
                },
                {
                     name: 'READY',
-                    description: 'System ready to start logging',
+                    description: 'System ready to start logging (breathing green pattern)',
                     color: '#00FF00', // RGB(0, 255, 0) - green
-                    pattern: 'solid',
-                    timing: null
+                    pattern: 'breathing',
+                    timing: { period: 2000, minBrightness: 30, maxBrightness: 255 }
                },
                {
                     name: 'LOGGING',
@@ -1470,7 +1619,10 @@
                     ledDiv.style.cssText = 'width: 40px; height: 40px; border-radius: 50%; background: ' + pattern.color + '; box-shadow: 0 0 10px ' + pattern.color + '; position: relative; flex-shrink: 0;';
 
                     // Add animation based on pattern type
-                    if (pattern.pattern === 'blink' && pattern.timing) {
+                    if (pattern.pattern === 'breathing' && pattern.timing) {
+                         const period = pattern.timing.period / 1000; // Convert ms to seconds
+                         ledDiv.style.animation = `breathing ${period}s ease-in-out infinite`;
+                    } else if (pattern.pattern === 'blink' && pattern.timing) {
                          const duration = (pattern.timing.on + pattern.timing.off) / 1000;
                          ledDiv.style.animation = `blink ${duration}s infinite`;
                     } else if (pattern.pattern === 'double-blink' && pattern.timing) {
@@ -1530,9 +1682,19 @@
                }
           }
 
-          // Add CSS animations for blink patterns
+          // Add CSS animations for blink patterns and breathing
           const style = document.createElement('style');
           style.textContent = `
+            @keyframes breathing {
+                0%, 100% { 
+                    opacity: 0.12; /* ~30/255 brightness */
+                    transform: scale(0.95);
+                }
+                50% { 
+                    opacity: 1; /* 255/255 brightness */
+                    transform: scale(1);
+                }
+            }
             @keyframes blink {
                 0%, 50% { opacity: 1; }
                 50.01%, 100% { opacity: 0.1; }
@@ -1557,13 +1719,245 @@
 
           // Note: ADC/IMU configuration has been moved to the calibration portal (/cal)
 
+          // File comparison functions
+          async function showFileSelector() {
+               const panel = document.getElementById('fileComparisonPanel');
+               panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+               if (panel.style.display === 'block') {
+                    await loadFileList();
+               }
+          }
+
+          async function loadFileList() {
+               const container = document.getElementById('fileListContainer');
+               container.innerHTML = '<p>Loading file list...</p>';
+
+               try {
+                    if (window.location.protocol === 'file:') {
+                         // Mock file list for preview
+                         availableFiles = [
+                              { filename: '20241204_120000.csv', size: 1024000 },
+                              { filename: '20241204_130000.csv', size: 1024000 },
+                              { filename: '20241204_140000.csv', size: 1024000 }
+                         ];
+                    } else {
+                         const response = await fetch('/csv/list');
+                         availableFiles = await response.json();
+                    }
+
+                    container.innerHTML = '';
+                    if (availableFiles.length === 0) {
+                         container.innerHTML = '<p style="color: #718096;">No CSV files found.</p>';
+                         return;
+                    }
+
+                    availableFiles.forEach((file, idx) => {
+                         const fileDiv = document.createElement('div');
+                         fileDiv.style.cssText = 'padding: 10px; margin: 5px 0; background: white; border-radius: 6px; border: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center;';
+
+                         const fileInfo = document.createElement('span');
+                         fileInfo.textContent = file.filename + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
+
+                         const addBtn = document.createElement('button');
+                         addBtn.textContent = '➕ Add';
+                         addBtn.className = 'secondary';
+                         addBtn.style.cssText = 'padding: 6px 12px; font-size: 12px;';
+                         addBtn.onclick = () => addFileToComparison(file.filename);
+
+                         // Check if already added
+                         if (comparisonData.find(c => c.filename === file.filename)) {
+                              addBtn.textContent = '✓ Added';
+                              addBtn.disabled = true;
+                              addBtn.style.opacity = '0.5';
+                         }
+
+                         fileDiv.appendChild(fileInfo);
+                         fileDiv.appendChild(addBtn);
+                         container.appendChild(fileDiv);
+                    });
+               } catch (error) {
+                    container.innerHTML = '<p style="color: #f56565;">Error loading file list: ' + error + '</p>';
+               }
+          }
+
+          async function addFileToComparison(filename) {
+               // Check if already added
+               if (comparisonData.find(c => c.filename === filename)) {
+                    showStatus('File already added to comparison', 'info');
+                    return;
+               }
+
+               try {
+                    showStatus('Loading ' + filename + '...', 'info');
+                    let csvText;
+
+                    if (window.location.protocol === 'file:') {
+                         // Generate mock data for preview
+                         csvText = await generateMockCsvForFile(filename);
+                    } else {
+                         const response = await fetch('/csv/file?file=' + encodeURIComponent(filename));
+                         if (!response.ok) throw new Error('Failed to load file');
+                         csvText = await response.text();
+                    }
+
+                    const parsedData = parseCSV(csvText);
+                    if (!parsedData || parsedData.length === 0) {
+                         showStatus('Error: Invalid CSV file', 'error');
+                         return;
+                    }
+
+                    const color = comparisonColors[comparisonData.length % comparisonColors.length];
+                    comparisonData.push({ filename, data: parsedData, color });
+
+                    updateComparisonDisplay();
+                    updateChart();
+                    showStatus('✅ Added ' + filename + ' to comparison', 'success');
+               } catch (error) {
+                    showStatus('❌ Error loading file: ' + error, 'error');
+               }
+          }
+
+          function updateComparisonDisplay() {
+               const container = document.getElementById('selectedFiles');
+               if (comparisonData.length === 0) {
+                    container.innerHTML = '<p style="color: #718096; font-size: 12px;">No files selected for comparison.</p>';
+                    return;
+               }
+
+               container.innerHTML = '<strong style="font-size: 12px; margin-bottom: 8px; display: block;">Selected Files (' + comparisonData.length + '):</strong>';
+               comparisonData.forEach((comp, idx) => {
+                    const fileTag = document.createElement('div');
+                    fileTag.style.cssText = 'display: inline-block; padding: 6px 12px; margin: 4px; background: white; border-radius: 6px; border: 2px solid ' + comp.color + '; font-size: 12px;';
+                    fileTag.innerHTML = '<span style="display: inline-block; width: 12px; height: 12px; background: ' + comp.color + '; border-radius: 50%; margin-right: 6px;"></span>' + comp.filename + ' <button onclick="removeFromComparison(\'' + comp.filename + '\')" style="margin-left: 8px; background: #f56565; color: white; border: none; border-radius: 4px; padding: 2px 6px; cursor: pointer; font-size: 10px;">✕</button>';
+                    container.appendChild(fileTag);
+               });
+          }
+
+          function removeFromComparison(filename) {
+               comparisonData = comparisonData.filter(c => c.filename !== filename);
+               updateComparisonDisplay();
+               updateChart();
+               loadFileList(); // Refresh to re-enable add button
+          }
+
+          function clearComparison() {
+               comparisonData = [];
+               updateComparisonDisplay();
+               updateChart();
+               loadFileList();
+          }
+
+          // Auto-refresh functions
+          function toggleAutoRefresh() {
+               const toggle = document.getElementById('autoRefreshToggle');
+               const intervalSelect = document.getElementById('refreshInterval');
+               autoRefreshEnabled = toggle.checked;
+
+               intervalSelect.disabled = !autoRefreshEnabled;
+
+               if (autoRefreshEnabled) {
+                    startAutoRefresh();
+               } else {
+                    stopAutoRefresh();
+               }
+          }
+
+          function updateAutoRefresh() {
+               if (autoRefreshEnabled) {
+                    stopAutoRefresh();
+                    startAutoRefresh();
+               }
+          }
+
+          function startAutoRefresh() {
+               stopAutoRefresh(); // Clear any existing interval
+
+               const interval = parseInt(document.getElementById('refreshInterval').value);
+               const statusEl = document.getElementById('autoRefreshStatus');
+
+               statusEl.textContent = 'Auto-refresh: ON (' + (interval / 1000) + 's)';
+               statusEl.style.color = '#48bb78';
+
+               autoRefreshInterval = setInterval(() => {
+                    updateStatusIndicators();
+                    if (rawData) {
+                         reloadLatestCsv();
+                    }
+               }, interval);
+          }
+
+          function stopAutoRefresh() {
+               if (autoRefreshInterval) {
+                    clearInterval(autoRefreshInterval);
+                    autoRefreshInterval = null;
+               }
+               const statusEl = document.getElementById('autoRefreshStatus');
+               statusEl.textContent = 'Auto-refresh: OFF';
+               statusEl.style.color = '#718096';
+          }
+
+          // Generate mock CSV for file comparison (for preview mode)
+          async function generateMockCsvForFile(filename) {
+               // Similar to loadMockData but with slight variations for comparison
+               let csvText = 'ADC_Index,Time_Seconds,ADC_Code,IMU_Index,AX,AY,AZ,GX,GY,GZ\n';
+
+               const sessionDurationSeconds = 600;
+               const adcSampleRate = 64000;
+               const downsampleFactor = Math.max(1, Math.floor(sessionDurationSeconds * adcSampleRate / 100000));
+               const previewSamples = Math.floor(sessionDurationSeconds * adcSampleRate / downsampleFactor);
+
+               const adcBaseline = 8388608;
+               const adcNoiseLevel = 1000;
+               const spikeAmplitude = 3000000 + (Math.random() - 0.5) * 500000; // Slight variation
+               const spikeStartTime = 0.1 + Math.random() * 1.9;
+
+               for (let i = 0; i < previewSamples; i++) {
+                    const adcIndex = i * downsampleFactor;
+                    const time = adcIndex / adcSampleRate;
+
+                    let adcCode;
+                    if (time < spikeStartTime) {
+                         adcCode = adcBaseline + (Math.random() - 0.5) * adcNoiseLevel;
+                    } else if (time < spikeStartTime + 0.01) {
+                         const spikeProgress = (time - spikeStartTime) / 0.01;
+                         adcCode = adcBaseline + spikeAmplitude * Math.sin(spikeProgress * Math.PI);
+                    } else {
+                         const timeAfterSpike = time - (spikeStartTime + 0.01);
+                         const decayFactor = Math.exp(-timeAfterSpike / 0.5);
+                         adcCode = adcBaseline + (spikeAmplitude / 3) + (spikeAmplitude * 2 / 3) * decayFactor;
+                    }
+
+                    const ax = (Math.random() - 0.5) * 0.1;
+                    const ay = (Math.random() - 0.5) * 0.1;
+                    const az = time < spikeStartTime ? (Math.random() - 0.5) * 0.05 : 1.0 + (Math.random() - 0.5) * 0.1;
+
+                    csvText += `${adcIndex},${time.toFixed(6)},${Math.round(adcCode)},${Math.floor(adcIndex / (adcSampleRate / 960))},${ax.toFixed(6)},${ay.toFixed(6)},${az.toFixed(6)},0.0,0.0,0.0\n`;
+               }
+
+               return csvText;
+          }
+
+          // Ensure Chart.js is loaded before initializing charts
+          function waitForChartJS(callback) {
+               if (typeof Chart !== 'undefined') {
+                    callback();
+               } else {
+                    setTimeout(() => waitForChartJS(callback), 100);
+               }
+          }
+
           // Load config on page load
           window.onload = function () {
-               updateStatusIndicators();  // Initial update
-               initChart();
-               generateNeopixelPatterns();  // Generate help section
-               // Auto-load latest CSV on page load
-               setTimeout(loadLatestCsv, 500);
+               waitForChartJS(() => {
+                    // Initialize chart first
+                    initChart();
+                    // Then update status indicators (which includes pie chart)
+                    updateStatusIndicators();
+                    generateNeopixelPatterns();  // Generate help section
+                    updateComparisonDisplay();  // Initialize comparison display
+                    // Auto-load latest CSV on page load
+                    setTimeout(loadLatestCsv, 500);
+               });
           };
      </script>
 </body>
