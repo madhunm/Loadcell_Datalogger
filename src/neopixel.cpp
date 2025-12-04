@@ -54,9 +54,9 @@ static void configureErrorPattern(NeopixelPattern pattern)
         break;
 
     case NEOPIXEL_PATTERN_ERROR_RTC:
-        // RTC error: yellow, single short blink per second
+        // RTC error: Yellow/Amber (ANSI Z535.1 - Warning)
         baseR = 255;
-        baseG = 255;
+        baseG = 165;
         baseB = 0;
         blinkOnMs = 200;
         blinkOffMs = 800;
@@ -65,25 +65,25 @@ static void configureErrorPattern(NeopixelPattern pattern)
         break;
 
     case NEOPIXEL_PATTERN_ERROR_IMU:
-        // IMU error: magenta, triple fast blips
+        // IMU error: Red (ANSI Z535.1 - Emergency/Hazard)
         baseR = 255;
         baseG = 0;
-        baseB = 255;
-        blinkOnMs = 80;
-        blinkOffMs = 80;
+        baseB = 0;
+        blinkOnMs = 100;
+        blinkOffMs = 100;
         blinkPulsesPerGroup = 3;
         blinkGroupGapMs = 600;
         break;
 
     case NEOPIXEL_PATTERN_ERROR_ADC:
-        // ADC error: cyan, long pulse
-        baseR = 0;
-        baseG = 255;
-        baseB = 255;
-        blinkOnMs = 500;
-        blinkOffMs = 500;
-        blinkPulsesPerGroup = 1;
-        blinkGroupGapMs = 0;
+        // ADC error: Red (ANSI Z535.1 - Emergency/Hazard)
+        baseR = 255;
+        baseG = 0;
+        baseB = 0;
+        blinkOnMs = 200;
+        blinkOffMs = 300;
+        blinkPulsesPerGroup = 2;
+        blinkGroupGapMs = 500;
         break;
 
     case NEOPIXEL_PATTERN_ERROR_WRITE_FAILURE:
@@ -109,14 +109,14 @@ static void configureErrorPattern(NeopixelPattern pattern)
         break;
 
     case NEOPIXEL_PATTERN_ERROR_BUFFER_FULL:
-        // Buffer overflow: purple/magenta, rapid triple-blink
+        // Buffer overflow: Red (ANSI Z535.1 - Emergency/Hazard)
         baseR = 255;
         baseG = 0;
-        baseB = 128;
-        blinkOnMs = 60;
-        blinkOffMs = 60;
+        baseB = 0;
+        blinkOnMs = 100;
+        blinkOffMs = 100;
         blinkPulsesPerGroup = 3;
-        blinkGroupGapMs = 500;
+        blinkGroupGapMs = 400;
         break;
 
     default:
@@ -154,15 +154,16 @@ void neopixelSetPattern(NeopixelPattern pattern)
     switch (currentPattern)
     {
     case NEOPIXEL_PATTERN_OFF:
-        baseR = baseG = baseB = 0;
+        // OFF: White (ANSI Z535.1 - General Information) or off
+        baseR = baseG = baseB = 0;  // Actually off, not white
         applyStaticColour();
         break;
 
     case NEOPIXEL_PATTERN_INIT:
-        // INIT: solid amber (red+green) during peripheral bring-up
-        baseR = 255;
-        baseG = 80;
-        baseB = 0;
+        // INIT: Blue (ANSI Z535.1 - Mandatory Action/User Required)
+        baseR = 0;
+        baseG = 128;
+        baseB = 255;
         applyStaticColour();
         break;
 
@@ -183,12 +184,12 @@ void neopixelSetPattern(NeopixelPattern pattern)
         break;
 
     case NEOPIXEL_PATTERN_CONVERTING:
-        // CONVERTING: orange/yellow blinking (not safe to remove SD card)
+        // CONVERTING: Yellow/Amber (ANSI Z535.1 - Warning, not safe to remove SD card)
         baseR = 255;
-        baseG = 100;
+        baseG = 165;
         baseB = 0;
-        blinkOnMs = 150;
-        blinkOffMs = 150;
+        blinkOnMs = 250;  // Slow flash: ~2 Hz (120/min) - medium priority
+        blinkOffMs = 250;
         blinkPulsesPerGroup = 1;
         blinkGroupGapMs = 0;
         blinkOn = true;

@@ -1,1234 +1,1571 @@
 <!DOCTYPE html>
 <html>
+
 <head>
-    <title>Loadcell Datalogger Configuration</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        * { box-sizing: border-box; }
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            margin: 0; 
-            padding: 20px; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-        }
-        .container { 
-            max-width: 1000px; 
-            margin: 0 auto; 
-            background: white; 
-            padding: 30px; 
-            border-radius: 12px; 
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-        }
-        h1 { 
-            color: #2d3748; 
-            border-bottom: 3px solid #667eea; 
-            padding-bottom: 15px; 
-            margin-top: 0;
-            font-size: 28px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .section { 
-            margin: 25px 0; 
-            padding: 20px; 
-            background: #f7fafc; 
-            border-radius: 8px; 
-            border-left: 4px solid #667eea;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-        .section:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        }
-        .section h2 { 
-            margin-top: 0; 
-            color: #2d3748; 
-            font-size: 20px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .form-group {
-            margin-bottom: 20px;
-        }
-        label { 
-            display: block; 
-            margin: 0 0 8px 0; 
-            font-weight: 600; 
-            color: #4a5568; 
-            font-size: 14px;
-        }
-        input, select { 
-            width: 100%; 
-            padding: 12px; 
-            margin-bottom: 0; 
-            border: 2px solid #e2e8f0; 
-            border-radius: 6px; 
-            font-size: 14px;
-            transition: border-color 0.2s, box-shadow 0.2s;
-        }
-        input:focus, select:focus {
-            outline: none;
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-        }
-        button { 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; 
-            padding: 12px 24px; 
-            border: none; 
-            border-radius: 6px; 
-            cursor: pointer; 
-            font-size: 15px; 
-            font-weight: 600;
-            margin: 5px 5px 0 0; 
-            transition: transform 0.2s, box-shadow 0.2s;
-            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
-        }
-        button:hover { 
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-        }
-        button:active {
-            transform: translateY(0);
-        }
-        button.secondary {
-            background: #e2e8f0;
-            color: #4a5568;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        button.secondary:hover {
-            background: #cbd5e0;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
-        }
-        .status { 
-            padding: 12px 16px; 
-            margin: 15px 0; 
-            border-radius: 6px; 
-            font-weight: 500;
-            animation: slideIn 0.3s ease-out;
-        }
-        @keyframes slideIn {
-            from { opacity: 0; transform: translateY(-10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .success { background: #c6f6d5; color: #22543d; border-left: 4px solid #48bb78; }
-        .error { background: #fed7d7; color: #742a2a; border-left: 4px solid #f56565; }
-        .info { background: #bee3f8; color: #2c5282; border-left: 4px solid #4299e1; }
-        .status-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 15px;
-            margin-top: 15px;
-        }
-        .status-card {
-            background: white;
-            padding: 15px;
-            border-radius: 8px;
-            border: 2px solid #e2e8f0;
-            transition: all 0.2s;
-        }
-        .status-card:hover {
-            border-color: #667eea;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        }
-        .status-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
-        }
-        .status-label { 
-            font-weight: 600; 
-            color: #4a5568; 
-            font-size: 13px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        .status-value { 
-            color: #2d3748; 
-            font-size: 16px;
-            font-weight: 600;
-        }
-        .status-value.status-ok { color: #48bb78; }
-        .status-value.status-warning { color: #ed8936; }
-        .status-value.status-error { color: #f56565; }
-        .progress-bar {
-            width: 100%;
-            height: 8px;
-            background: #e2e8f0;
-            border-radius: 4px;
-            overflow: hidden;
-            margin-top: 8px;
-        }
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #48bb78, #38a169);
-            border-radius: 4px;
-            transition: width 0.3s ease;
-        }
-        .progress-fill.warning {
-            background: linear-gradient(90deg, #ed8936, #dd6b20);
-        }
-        .progress-fill.error {
-            background: linear-gradient(90deg, #f56565, #e53e3e);
-        }
-        .icon {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            vertical-align: middle;
-        }
-        .refresh-indicator {
-            display: inline-block;
-            width: 16px;
-            height: 16px;
-            border: 2px solid #667eea;
-            border-top-color: transparent;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin-left: 8px;
-        }
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        .button-group {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            margin-top: 15px;
-        }
-        @media (max-width: 768px) {
-            .container { padding: 20px; }
-            .status-grid { grid-template-columns: 1fr; }
-            h1 { font-size: 24px; }
-        }
-        .badge {
-            display: inline-block;
-            padding: 4px 8px;
-            border-radius: 12px;
-            font-size: 11px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        .badge-ok { background: #c6f6d5; color: #22543d; }
-        .badge-warning { background: #feebc8; color: #7c2d12; }
-        .badge-error { background: #fed7d7; color: #742a2a; }
-        small {
-            color: #718096;
-            font-size: 12px;
-        }
-        .chart-container {
-            position: relative;
-            height: 400px;
-            margin-top: 15px;
-        }
-        .chart-controls {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            margin-bottom: 15px;
-            align-items: center;
-        }
-        .chart-controls label {
-            margin: 0;
-            font-weight: 500;
-        }
-        .chart-controls input[type="number"],
-        .chart-controls select {
-            width: auto;
-            min-width: 100px;
-            margin: 0;
-        }
-        .file-input-wrapper {
-            position: relative;
-            display: inline-block;
-        }
-        .file-input-wrapper input[type="file"] {
-            position: absolute;
-            opacity: 0;
-            width: 0;
-            height: 0;
-        }
-        .file-input-label {
-            display: inline-block;
-            padding: 10px 20px;
-            background: #4299e1;
-            color: white;
-            border-radius: 6px;
-            cursor: pointer;
-            font-weight: 600;
-            transition: background 0.2s;
-        }
-        .file-input-label:hover {
-            background: #3182ce;
-        }
-        .chart-legend {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 20px;
-            margin-top: 10px;
-            font-size: 12px;
-        }
-        .legend-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .legend-color {
-            width: 16px;
-            height: 3px;
-            border-radius: 2px;
-        }
-    </style>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+     <title>Loadcell Datalogger Configuration</title>
+     <meta name="viewport" content="width=device-width, initial-scale=1">
+     <style>
+          * {
+               box-sizing: border-box;
+          }
+
+          body {
+               font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+               margin: 0;
+               padding: 20px;
+               background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+               min-height: 100vh;
+          }
+
+          .container {
+               max-width: 1000px;
+               margin: 0 auto;
+               background: white;
+               padding: 30px;
+               border-radius: 12px;
+               box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+          }
+
+          h1 {
+               color: #2d3748;
+               border-bottom: 3px solid #667eea;
+               padding-bottom: 15px;
+               margin-top: 0;
+               font-size: 28px;
+               display: flex;
+               align-items: center;
+               gap: 10px;
+          }
+
+          .section {
+               margin: 25px 0;
+               padding: 20px;
+               background: #f7fafc;
+               border-radius: 8px;
+               border-left: 4px solid #667eea;
+               transition: transform 0.2s, box-shadow 0.2s;
+          }
+
+          .section:hover {
+               transform: translateY(-2px);
+               box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+          }
+
+          .section h2 {
+               margin-top: 0;
+               color: #2d3748;
+               font-size: 20px;
+               display: flex;
+               align-items: center;
+               gap: 8px;
+          }
+
+          .form-group {
+               margin-bottom: 20px;
+          }
+
+          label {
+               display: block;
+               margin: 0 0 8px 0;
+               font-weight: 600;
+               color: #4a5568;
+               font-size: 14px;
+          }
+
+          input,
+          select {
+               width: 100%;
+               padding: 12px;
+               margin-bottom: 0;
+               border: 2px solid #e2e8f0;
+               border-radius: 6px;
+               font-size: 14px;
+               transition: border-color 0.2s, box-shadow 0.2s;
+          }
+
+          input:focus,
+          select:focus {
+               outline: none;
+               border-color: #667eea;
+               box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+          }
+
+          button {
+               background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+               color: white;
+               padding: 12px 24px;
+               border: none;
+               border-radius: 6px;
+               cursor: pointer;
+               font-size: 15px;
+               font-weight: 600;
+               margin: 5px 5px 0 0;
+               transition: transform 0.2s, box-shadow 0.2s;
+               box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+          }
+
+          button:hover {
+               transform: translateY(-2px);
+               box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+          }
+
+          button:active {
+               transform: translateY(0);
+          }
+
+          button.secondary {
+               background: #e2e8f0;
+               color: #4a5568;
+               box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+          }
+
+          button.secondary:hover {
+               background: #cbd5e0;
+               box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+          }
+
+          .status {
+               padding: 12px 16px;
+               margin: 15px 0;
+               border-radius: 6px;
+               font-weight: 500;
+               animation: slideIn 0.3s ease-out;
+          }
+
+          @keyframes slideIn {
+               from {
+                    opacity: 0;
+                    transform: translateY(-10px);
+               }
+
+               to {
+                    opacity: 1;
+                    transform: translateY(0);
+               }
+          }
+
+          .success {
+               background: #c6f6d5;
+               color: #22543d;
+               border-left: 4px solid #48bb78;
+          }
+
+          .error {
+               background: #fed7d7;
+               color: #742a2a;
+               border-left: 4px solid #f56565;
+          }
+
+          .info {
+               background: #bee3f8;
+               color: #2c5282;
+               border-left: 4px solid #4299e1;
+          }
+
+          .status-grid {
+               display: grid;
+               grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+               gap: 15px;
+               margin-top: 15px;
+          }
+
+          .status-card[style*="grid-column"] {
+               min-width: 100%;
+          }
+
+          .status.warning {
+               background: #feebc8;
+               color: #7c2d12;
+               border-left: 4px solid #ed8936;
+          }
+
+          .status-card {
+               background: white;
+               padding: 15px;
+               border-radius: 8px;
+               border: 2px solid #e2e8f0;
+               transition: all 0.2s;
+          }
+
+          .status-card:hover {
+               border-color: #667eea;
+               box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+          }
+
+          .status-header {
+               display: flex;
+               justify-content: space-between;
+               align-items: center;
+               margin-bottom: 10px;
+          }
+
+          .status-label {
+               font-weight: 600;
+               color: #4a5568;
+               font-size: 13px;
+               text-transform: uppercase;
+               letter-spacing: 0.5px;
+          }
+
+          .status-value {
+               color: #2d3748;
+               font-size: 16px;
+               font-weight: 600;
+          }
+
+          .status-value.status-ok {
+               color: #48bb78;
+          }
+
+          .status-value.status-warning {
+               color: #ed8936;
+          }
+
+          .status-value.status-error {
+               color: #f56565;
+          }
+
+          .progress-bar {
+               width: 100%;
+               height: 8px;
+               background: #e2e8f0;
+               border-radius: 4px;
+               overflow: hidden;
+               margin-top: 8px;
+          }
+
+          .progress-fill {
+               height: 100%;
+               background: linear-gradient(90deg, #48bb78, #38a169);
+               border-radius: 4px;
+               transition: width 0.3s ease;
+          }
+
+          .progress-fill.warning {
+               background: linear-gradient(90deg, #ed8936, #dd6b20);
+          }
+
+          .progress-fill.error {
+               background: linear-gradient(90deg, #f56565, #e53e3e);
+          }
+
+          .icon {
+               display: inline-block;
+               width: 20px;
+               height: 20px;
+               vertical-align: middle;
+          }
+
+          .refresh-indicator {
+               display: inline-block;
+               width: 16px;
+               height: 16px;
+               border: 2px solid #667eea;
+               border-top-color: transparent;
+               border-radius: 50%;
+               animation: spin 1s linear infinite;
+               margin-left: 8px;
+          }
+
+          @keyframes spin {
+               to {
+                    transform: rotate(360deg);
+               }
+          }
+
+          .button-group {
+               display: flex;
+               flex-wrap: wrap;
+               gap: 10px;
+               margin-top: 15px;
+          }
+
+          @media (max-width: 768px) {
+               .container {
+                    padding: 20px;
+               }
+
+               .status-grid {
+                    grid-template-columns: 1fr;
+               }
+
+               h1 {
+                    font-size: 24px;
+               }
+          }
+
+          .badge {
+               display: inline-block;
+               padding: 4px 8px;
+               border-radius: 12px;
+               font-size: 11px;
+               font-weight: 600;
+               text-transform: uppercase;
+               letter-spacing: 0.5px;
+          }
+
+          .badge-ok {
+               background: #c6f6d5;
+               color: #22543d;
+          }
+
+          .badge-warning {
+               background: #feebc8;
+               color: #7c2d12;
+          }
+
+          .badge-error {
+               background: #fed7d7;
+               color: #742a2a;
+          }
+
+          small {
+               color: #718096;
+               font-size: 12px;
+          }
+
+          .chart-container {
+               position: relative;
+               height: 400px;
+               margin-top: 15px;
+          }
+
+          .chart-controls {
+               display: flex;
+               flex-wrap: wrap;
+               gap: 10px;
+               margin-bottom: 15px;
+               align-items: center;
+          }
+
+          .chart-controls label {
+               margin: 0;
+               font-weight: 500;
+          }
+
+          .chart-controls input[type="number"],
+          .chart-controls select {
+               width: auto;
+               min-width: 100px;
+               margin: 0;
+          }
+
+          .file-input-wrapper {
+               position: relative;
+               display: inline-block;
+          }
+
+          .file-input-wrapper input[type="file"] {
+               position: absolute;
+               opacity: 0;
+               width: 0;
+               height: 0;
+          }
+
+          .file-input-label {
+               display: inline-block;
+               padding: 10px 20px;
+               background: #4299e1;
+               color: white;
+               border-radius: 6px;
+               cursor: pointer;
+               font-weight: 600;
+               transition: background 0.2s;
+          }
+
+          .file-input-label:hover {
+               background: #3182ce;
+          }
+
+          .chart-legend {
+               display: flex;
+               flex-wrap: wrap;
+               gap: 20px;
+               margin-top: 10px;
+               font-size: 12px;
+          }
+
+          .legend-item {
+               display: flex;
+               align-items: center;
+               gap: 8px;
+          }
+
+          .legend-color {
+               width: 16px;
+               height: 3px;
+               border-radius: 2px;
+          }
+
+          /* Tab Navigation */
+          .tabs {
+               display: flex;
+               border-bottom: 2px solid #e2e8f0;
+               margin: 25px 0 0 0;
+               gap: 0;
+          }
+
+          .tab {
+               padding: 12px 24px;
+               background: transparent;
+               border: none;
+               border-bottom: 3px solid transparent;
+               cursor: pointer;
+               font-size: 15px;
+               font-weight: 600;
+               color: #718096;
+               transition: all 0.2s;
+               position: relative;
+               bottom: -2px;
+          }
+
+          .tab:hover {
+               color: #4a5568;
+               background: #f7fafc;
+          }
+
+          .tab.active {
+               color: #667eea;
+               border-bottom-color: #667eea;
+               background: transparent;
+          }
+
+          .tab-content {
+               display: none;
+               padding: 20px 0;
+          }
+
+          .tab-content.active {
+               display: block;
+               animation: fadeIn 0.3s ease-in;
+          }
+
+          @keyframes fadeIn {
+               from {
+                    opacity: 0;
+                    transform: translateY(10px);
+               }
+
+               to {
+                    opacity: 1;
+                    transform: translateY(0);
+               }
+          }
+     </style>
+     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
+
 <body>
-    <div class="container">
-        <h1>
-            <span>⚙️</span>
-            Loadcell Datalogger Configuration
-        </h1>
-        
-        <div class="section">
-            <h2>📊 ADC Settings</h2>
-            <form id="adcForm">
-                <div class="form-group">
-                    <label for="adcSampleRate">ADC Sample Rate (Hz)</label>
-                    <input type="number" id="adcSampleRate" name="adcSampleRate" value="64000" min="1000" max="64000" step="1000">
-                    <small>Range: 1,000 - 64,000 Hz</small>
-                </div>
-                
-                <div class="form-group">
-                    <label for="adcPgaGain">PGA Gain</label>
-                    <select id="adcPgaGain" name="adcPgaGain">
-                        <option value="0">x1</option>
-                        <option value="1">x2</option>
-                        <option value="2" selected>x4</option>
-                        <option value="3">x8</option>
-                        <option value="4">x16</option>
-                        <option value="5">x32</option>
-                        <option value="6">x64</option>
-                        <option value="7">x128</option>
-                    </select>
-                </div>
-            </form>
-        </div>
+     <div class="container">
+          <h1>
+               <span>⚙️</span>
+               Loadcell Datalogger Configuration
+          </h1>
 
-        <div class="section">
-            <h2>🔄 IMU Settings</h2>
-            <form id="imuForm">
-                <div class="form-group">
-                    <label for="imuOdr">IMU Sample Rate (Hz)</label>
-                    <input type="number" id="imuOdr" name="imuOdr" value="960" min="15" max="960" step="15">
-                    <small>Range: 15 - 960 Hz</small>
-                </div>
-                
-                <div class="form-group">
-                    <label for="imuAccelRange">Accelerometer Range</label>
-                    <select id="imuAccelRange" name="imuAccelRange">
-                        <option value="2">±2g</option>
-                        <option value="4">±4g</option>
-                        <option value="8">±8g</option>
-                        <option value="16" selected>±16g</option>
-                    </select>
-                </div>
-                
-                <div class="form-group">
-                    <label for="imuGyroRange">Gyroscope Range</label>
-                    <select id="imuGyroRange" name="imuGyroRange">
-                        <option value="125">±125 dps</option>
-                        <option value="250">±250 dps</option>
-                        <option value="500">±500 dps</option>
-                        <option value="1000">±1000 dps</option>
-                        <option value="2000" selected>±2000 dps</option>
-                    </select>
-                </div>
-            </form>
-        </div>
+          <!-- Tab Navigation -->
+          <div class="tabs">
+               <button class="tab active" onclick="switchTab('status', this)">📈 Status</button>
+               <button class="tab" onclick="switchTab('data', this)">📊 Data Visualization</button>
+               <button class="tab" onclick="switchTab('help', this)">❓ Help & User Guide</button>
+          </div>
 
-        <div class="section">
-            <div class="button-group">
-                <button onclick="saveConfig()">💾 Save Configuration</button>
-                <button class="secondary" onclick="loadConfig()">📥 Load Current Config</button>
-            </div>
-        </div>
+          <!-- Status Tab -->
+          <div id="tab-status" class="tab-content active">
+               <div class="section">
+                    <h2>
+                         📈 System Status
+                         <span id="refreshIndicator" class="refresh-indicator" style="display: none;"></span>
+                    </h2>
+                    <div class="status-grid" id="statusIndicators">
+                         <div class="status-card">
+                              <div class="status-header">
+                                   <span class="status-label">💾 SD Card</span>
+                                   <span id="sdStatus" class="status-value">Checking...</span>
+                              </div>
+                         </div>
+                         <div class="status-card" style="grid-column: span 2;">
+                              <div class="status-header">
+                                   <span class="status-label">💿 SD Card Storage</span>
+                                   <span id="sdSpace" class="status-value">-</span>
+                              </div>
+                              <div style="display: flex; align-items: center; gap: 20px; margin-top: 15px;">
+                                   <div style="width: 150px; height: 150px; flex-shrink: 0;">
+                                        <canvas id="sdSpaceChart"></canvas>
+                                   </div>
+                                   <div style="flex: 1;">
+                                        <div style="margin-bottom: 8px;"><strong>Total:</strong> <span
+                                                  id="sdTotal">-</span></div>
+                                        <div style="margin-bottom: 8px;"><strong>Free:</strong> <span
+                                                  id="sdFree">-</span></div>
+                                        <div style="margin-bottom: 8px;"><strong>Used:</strong> <span
+                                                  id="sdUsed">-</span></div>
+                                        <div id="sdSpaceStatus"
+                                             style="margin-top: 10px; padding: 8px; border-radius: 4px; font-size: 12px;">
+                                        </div>
+                                   </div>
+                              </div>
+                         </div>
+                         <div class="status-card">
+                              <div class="status-header">
+                                   <span class="status-label">⚠️ Write Failures</span>
+                                   <span id="writeFailures" class="status-value">-</span>
+                              </div>
+                         </div>
+                         <div class="status-card">
+                              <div class="status-header">
+                                   <span class="status-label">🔌 Logger State</span>
+                                   <span id="loggerState" class="status-value">-</span>
+                              </div>
+                         </div>
+                    </div>
+               </div>
+          </div>
 
-        <div class="section">
-            <h2>
-                📈 System Status
-                <span id="refreshIndicator" class="refresh-indicator" style="display: none;"></span>
-            </h2>
-            <div class="status-grid" id="statusIndicators">
-                <div class="status-card">
-                    <div class="status-header">
-                        <span class="status-label">💾 SD Card</span>
-                        <span id="sdStatus" class="status-value">Checking...</span>
+          <!-- Data Visualization Tab -->
+          <div id="tab-data" class="tab-content">
+               <div class="section">
+                    <h2 id="chartTitle">📊 Data Visualization</h2>
+                    <div class="chart-controls">
+                         <label>Moving Average Window:</label>
+                         <select id="avgWindow" onchange="updateChart()">
+                              <option value="1" selected>No Filtering</option>
+                              <option value="10">10 samples</option>
+                              <option value="50">50 samples</option>
+                              <option value="100">100 samples</option>
+                              <option value="500">500 samples</option>
+                              <option value="1000">1000 samples</option>
+                         </select>
+                         <label>Max Points:</label>
+                         <input type="number" id="maxPoints" value="5000" min="100" max="50000" step="100"
+                              onchange="updateChart()">
+                         <button class="secondary" onclick="reloadLatestCsv()">🔄 Reload Latest</button>
                     </div>
-                </div>
-                <div class="status-card">
-                    <div class="status-header">
-                        <span class="status-label">💿 Free Space</span>
-                        <span id="sdSpace" class="status-value">-</span>
+                    <div class="chart-container">
+                         <canvas id="dataChart"></canvas>
                     </div>
-                    <div class="progress-bar">
-                        <div id="sdSpaceBar" class="progress-fill" style="width: 0%;"></div>
+                    <div class="chart-legend" id="chartLegend"></div>
+                    <div class="chart-stats" id="chartStats"
+                         style="margin-top: 15px; padding: 15px; background: #f7fafc; border-radius: 8px; font-size: 14px; line-height: 1.8;">
+                         <div><strong>Max Force (ADC):</strong> <span id="maxForce">-</span></div>
+                         <div><strong>Max Deceleration:</strong> <span id="maxDecel">-</span></div>
                     </div>
-                </div>
-                <div class="status-card">
-                    <div class="status-header">
-                        <span class="status-label">📊 ADC Buffer</span>
-                        <span id="adcBuffer" class="status-value">-</span>
-                    </div>
-                    <div class="progress-bar">
-                        <div id="adcBufferBar" class="progress-fill" style="width: 0%;"></div>
-                    </div>
-                </div>
-                <div class="status-card">
-                    <div class="status-header">
-                        <span class="status-label">🔄 IMU Buffer</span>
-                        <span id="imuBuffer" class="status-value">-</span>
-                    </div>
-                    <div class="progress-bar">
-                        <div id="imuBufferBar" class="progress-fill" style="width: 0%;"></div>
-                    </div>
-                </div>
-                <div class="status-card">
-                    <div class="status-header">
-                        <span class="status-label">⚠️ Write Failures</span>
-                        <span id="writeFailures" class="status-value">-</span>
-                    </div>
-                </div>
-                <div class="status-card">
-                    <div class="status-header">
-                        <span class="status-label">🔌 Logger State</span>
-                        <span id="loggerState" class="status-value">-</span>
-                    </div>
-                </div>
-            </div>
-        </div>
+               </div>
+          </div>
 
-        <div class="section">
-            <h2 id="chartTitle">📊 Data Visualization</h2>
-            <div class="chart-controls">
-                <label>Moving Average Window:</label>
-                <select id="avgWindow" onchange="updateChart()">
-                    <option value="1" selected>No Filtering</option>
-                    <option value="10">10 samples</option>
-                    <option value="50">50 samples</option>
-                    <option value="100">100 samples</option>
-                    <option value="500">500 samples</option>
-                    <option value="1000">1000 samples</option>
-                </select>
-                <label>Max Points:</label>
-                <input type="number" id="maxPoints" value="5000" min="100" max="50000" step="100" onchange="updateChart()">
-                <button class="secondary" onclick="reloadLatestCsv()">🔄 Reload Latest</button>
-            </div>
-            <div class="chart-container">
-                <canvas id="dataChart"></canvas>
-            </div>
-            <div class="chart-legend" id="chartLegend"></div>
-            <div class="chart-stats" id="chartStats" style="margin-top: 15px; padding: 15px; background: #f7fafc; border-radius: 8px; font-size: 14px; line-height: 1.8;">
-                <div><strong>Max Force (ADC):</strong> <span id="maxForce">-</span></div>
-                <div><strong>Max Deceleration:</strong> <span id="maxDecel">-</span></div>
-            </div>
-        </div>
+          <!-- Help Tab -->
+          <div id="tab-help" class="tab-content">
+               <div class="section">
+                    <h2>❓ Help & User Guide</h2>
+                    <div style="line-height: 1.8; color: #4a5568;">
+                         <h3 style="color: #2d3748; margin-top: 0;">How to Use the Datalogger</h3>
+                         <ol style="padding-left: 20px;">
+                              <li><strong>Start Logging:</strong> Press the LOG_START button on the device to begin a
+                                   logging
+                                   session.</li>
+                              <li><strong>Monitor Status:</strong> Watch the NeoPixel LED for visual feedback on system
+                                   status.</li>
+                              <li><strong>Stop Logging:</strong> Press the LOG_START button again to stop the session.
+                              </li>
+                              <li><strong>Wait for Conversion:</strong> The LED will blink orange/yellow while
+                                   converting
+                                   binary logs to CSV (do not remove SD card).</li>
+                              <li><strong>Safe to Remove:</strong> When the LED shows a green double-blink pattern, it's
+                                   safe
+                                   to remove the SD card.</li>
+                              <li><strong>View Data:</strong> Insert the SD card into your computer and open the CSV
+                                   files in
+                                   spreadsheet software.</li>
+                         </ol>
 
-        <div id="status"></div>
+                         <h3 style="color: #2d3748; margin-top: 25px;">NeoPixel LED Status Indicators</h3>
+                         <p style="margin-bottom: 15px;">The NeoPixel LED provides visual feedback about the system
+                              state.
+                              Below are all the patterns you may see:</p>
 
-    </div>
+                         <div id="neopixelPatterns" style="display: grid; gap: 15px;">
+                              <!-- Patterns will be dynamically generated here -->
+                         </div>
+                    </div>
+               </div>
+          </div>
 
-    <script>
-        // Chart instance
-        let dataChart = null;
-        let csvData = null;
-        let rawData = null;
-        
-        // Initialize chart
-        function initChart() {
-            const canvas = document.getElementById('dataChart');
-            if (!canvas) {
-                console.error('Chart canvas element not found!');
-                return;
-            }
-            
-            const ctx = canvas.getContext('2d');
-            if (!ctx) {
-                console.error('Could not get 2D context from canvas!');
-                return;
-            }
-            
-            try {
-                dataChart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [
-                        {
-                            label: 'Force (N)',
-                            data: [],
-                            borderColor: 'rgb(75, 192, 192)',
-                            backgroundColor: 'rgba(75, 192, 192, 0.1)',
-                            yAxisID: 'y',
-                            borderWidth: 1.5,
-                            pointRadius: 0,
-                            tension: 0.1
-                        },
-                        {
-                            label: 'AX (g)',
-                            data: [],
-                            borderColor: 'rgb(255, 99, 132)',
-                            backgroundColor: 'rgba(255, 99, 132, 0.1)',
-                            yAxisID: 'y1',
-                            borderWidth: 1.5,
-                            pointRadius: 0,
-                            tension: 0.1,
-                            hidden: false
-                        },
-                        {
-                            label: 'AY (g)',
-                            data: [],
-                            borderColor: 'rgb(54, 162, 235)',
-                            backgroundColor: 'rgba(54, 162, 235, 0.1)',
-                            yAxisID: 'y1',
-                            borderWidth: 1.5,
-                            pointRadius: 0,
-                            tension: 0.1,
-                            hidden: false
-                        },
-                        {
-                            label: 'AZ (g)',
-                            data: [],
-                            borderColor: 'rgb(255, 206, 86)',
-                            backgroundColor: 'rgba(255, 206, 86, 0.1)',
-                            yAxisID: 'y1',
-                            borderWidth: 1.5,
-                            pointRadius: 0,
-                            tension: 0.1,
-                            hidden: false
-                        },
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    interaction: {
-                        mode: 'index',
-                        intersect: false,
-                    },
-                    plugins: {
-                        legend: {
-                            display: false
-                        },
-                        tooltip: {
-                            enabled: true,
-                            mode: 'index',
-                            intersect: false
-                        }
-                    },
-                    scales: {
-                        x: {
-                            title: {
-                                display: true,
-                                text: 'Time (seconds)'
-                            },
-                            grid: {
-                                color: 'rgba(0, 0, 0, 0.05)'
-                            }
-                        },
-                        y: {
-                            type: 'linear',
-                            display: true,
-                            position: 'left',
-                            title: {
-                                display: true,
-                                text: 'Force (N)'
-                            },
-                            grid: {
-                                color: 'rgba(75, 192, 192, 0.1)'
-                            }
-                        },
-                        y1: {
-                            type: 'linear',
-                            display: true,
-                            position: 'right',
-                            title: {
-                                display: true,
-                                text: 'IMU (g / dps)'
-                            },
-                            grid: {
-                                drawOnChartArea: false
-                            }
-                        }
-                    }
-                }
-            });
-            updateChartLegend();
-            console.log('Chart initialized successfully');
-            } catch (error) {
-                console.error('Error initializing chart:', error);
-                showStatus('❌ Error initializing chart: ' + error, 'error');
-            }
-        }
-        
-        // Update chart legend
-        function updateChartLegend() {
-            const legend = document.getElementById('chartLegend');
-            if (!dataChart) return;
-            
-            legend.innerHTML = '';
-            dataChart.data.datasets.forEach((dataset, index) => {
-                const item = document.createElement('div');
-                item.className = 'legend-item';
-                item.style.cursor = 'pointer';
-                item.onclick = () => {
-                    const meta = dataChart.getDatasetMeta(index);
-                    meta.hidden = !meta.hidden;
-                    dataChart.update();
-                    updateChartLegend();
-                };
-                
-                const colorBox = document.createElement('div');
-                colorBox.className = 'legend-color';
-                colorBox.style.backgroundColor = dataset.borderColor;
-                if (dataChart.getDatasetMeta(index).hidden) {
-                    colorBox.style.opacity = '0.3';
-                }
-                
-                const label = document.createElement('span');
-                label.textContent = dataset.label;
-                if (dataChart.getDatasetMeta(index).hidden) {
-                    label.style.textDecoration = 'line-through';
-                    label.style.opacity = '0.5';
-                }
-                
-                item.appendChild(colorBox);
-                item.appendChild(label);
-                legend.appendChild(item);
-            });
-        }
-        
-        // Parse CSV data
-        function parseCSV(csvText) {
-            const lines = csvText.trim().split('\n');
-            if (lines.length < 2) return null;
-            
-            // Skip header
-            const data = [];
-            for (let i = 1; i < lines.length; i++) {
-                const cols = lines[i].split(',');
-                if (cols.length >= 3) {
-                    data.push({
-                        time: parseFloat(cols[1]),
-                        adcCode: parseInt(cols[2]),
-                        ax: cols.length > 4 ? parseFloat(cols[4]) : null,
-                        ay: cols.length > 5 ? parseFloat(cols[5]) : null,
-                        az: cols.length > 6 ? parseFloat(cols[6]) : null,
-                        gx: cols.length > 7 ? parseFloat(cols[7]) : null,
-                        gy: cols.length > 8 ? parseFloat(cols[8]) : null,
-                        gz: cols.length > 9 ? parseFloat(cols[9]) : null
+          <div id="status"></div>
+
+     </div>
+
+     <script>
+          // Chart instance
+          let dataChart = null;
+          let csvData = null;
+          let rawData = null;
+
+          // Initialize chart
+          function initChart() {
+               const canvas = document.getElementById('dataChart');
+               if (!canvas) {
+                    console.error('Chart canvas element not found!');
+                    return;
+               }
+
+               const ctx = canvas.getContext('2d');
+               if (!ctx) {
+                    console.error('Could not get 2D context from canvas!');
+                    return;
+               }
+
+               try {
+                    dataChart = new Chart(ctx, {
+                         type: 'line',
+                         data: {
+                              labels: [],
+                              datasets: [
+                                   {
+                                        label: 'Force (N)',
+                                        data: [],
+                                        borderColor: 'rgb(75, 192, 192)',
+                                        backgroundColor: 'rgba(75, 192, 192, 0.1)',
+                                        yAxisID: 'y',
+                                        borderWidth: 1.5,
+                                        pointRadius: 0,
+                                        tension: 0.1
+                                   },
+                                   {
+                                        label: 'AX (g)',
+                                        data: [],
+                                        borderColor: 'rgb(255, 99, 132)',
+                                        backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                                        yAxisID: 'y1',
+                                        borderWidth: 1.5,
+                                        pointRadius: 0,
+                                        tension: 0.1,
+                                        hidden: false
+                                   },
+                                   {
+                                        label: 'AY (g)',
+                                        data: [],
+                                        borderColor: 'rgb(54, 162, 235)',
+                                        backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                                        yAxisID: 'y1',
+                                        borderWidth: 1.5,
+                                        pointRadius: 0,
+                                        tension: 0.1,
+                                        hidden: false
+                                   },
+                                   {
+                                        label: 'AZ (g)',
+                                        data: [],
+                                        borderColor: 'rgb(255, 206, 86)',
+                                        backgroundColor: 'rgba(255, 206, 86, 0.1)',
+                                        yAxisID: 'y1',
+                                        borderWidth: 1.5,
+                                        pointRadius: 0,
+                                        tension: 0.1,
+                                        hidden: false
+                                   },
+                              ]
+                         },
+                         options: {
+                              responsive: true,
+                              maintainAspectRatio: false,
+                              interaction: {
+                                   mode: 'index',
+                                   intersect: false,
+                              },
+                              plugins: {
+                                   legend: {
+                                        display: false
+                                   },
+                                   tooltip: {
+                                        enabled: true,
+                                        mode: 'index',
+                                        intersect: false
+                                   }
+                              },
+                              scales: {
+                                   x: {
+                                        title: {
+                                             display: true,
+                                             text: 'Time (seconds)'
+                                        },
+                                        grid: {
+                                             color: 'rgba(0, 0, 0, 0.05)'
+                                        }
+                                   },
+                                   y: {
+                                        type: 'linear',
+                                        display: true,
+                                        position: 'left',
+                                        title: {
+                                             display: true,
+                                             text: 'Force (N)'
+                                        },
+                                        grid: {
+                                             color: 'rgba(75, 192, 192, 0.1)'
+                                        }
+                                   },
+                                   y1: {
+                                        type: 'linear',
+                                        display: true,
+                                        position: 'right',
+                                        title: {
+                                             display: true,
+                                             text: 'IMU (g / dps)'
+                                        },
+                                        grid: {
+                                             drawOnChartArea: false
+                                        }
+                                   }
+                              }
+                         }
                     });
-                }
-            }
-            return data;
-        }
-        
-        // Apply moving average filter (rolling window)
-        // Parameters:
-        //   - windowSize: Number of samples to average (1 = no filtering)
-        //   - This uses a simple moving average (SMA) with a rolling window
-        function applyMovingAverage(data, windowSize) {
-            if (windowSize <= 1 || data.length === 0) return data;
-            
-            const filtered = [];
-            const halfWindow = Math.floor(windowSize / 2);
-            
-            for (let i = 0; i < data.length; i++) {
-                // Calculate window bounds (centered on current point)
-                const startIdx = Math.max(0, i - halfWindow);
-                const endIdx = Math.min(data.length, i + halfWindow + 1);
-                const window = data.slice(startIdx, endIdx);
-                
-                // Calculate moving average for this point
-                const avg = {
-                    time: data[i].time,  // Keep original time
-                    adcCode: window.reduce((sum, d) => sum + d.adcCode, 0) / window.length,
-                    ax: data[i].ax !== null ? window.reduce((sum, d) => sum + (d.ax || 0), 0) / window.length : null,
-                    ay: data[i].ay !== null ? window.reduce((sum, d) => sum + (d.ay || 0), 0) / window.length : null,
-                    az: data[i].az !== null ? window.reduce((sum, d) => sum + (d.az || 0), 0) / window.length : null
-                };
-                filtered.push(avg);
-            }
-            return filtered;
-        }
-        
-        // Update chart with data
-        function updateChart() {
-            if (!dataChart) {
-                console.error('Chart not initialized!');
-                showStatus('❌ Chart not initialized. Please refresh the page.', 'error');
-                return;
-            }
-            
-            if (!rawData || rawData.length === 0) {
-                console.error('No data to display!');
-                showStatus('❌ No data available to display', 'error');
-                return;
-            }
-            
-            console.log('Updating chart with', rawData.length, 'data points');
-            
-            const avgWindow = parseInt(document.getElementById('avgWindow').value);
-            const maxPoints = parseInt(document.getElementById('maxPoints').value);
-            
-            // Apply moving average filter
-            let processedData = applyMovingAverage(rawData, avgWindow);
-            
-            // Limit points if needed
-            if (processedData.length > maxPoints) {
-                const step = Math.ceil(processedData.length / maxPoints);
-                processedData = processedData.filter((_, i) => i % step === 0);
-            }
-            
-            // Loadcell calibration constants (hardcoded in firmware)
-            const scalingFactor = 0.00667; // N per ADC count
-            const adcBaseline = 8388608;    // 24-bit ADC mid-point (0N reference)
-            
-            // Convert ADC to Force (N): Force = (ADC - Baseline) * Scaling
-            const convertAdcToForce = (adcCode) => {
-                return (adcCode - adcBaseline) * scalingFactor;
-            };
-            
-            // Update chart data
-            dataChart.data.labels = processedData.map(d => d.time.toFixed(6));
-            dataChart.data.datasets[0].data = processedData.map(d => ({x: d.time, y: convertAdcToForce(d.adcCode)}));
-            dataChart.data.datasets[1].data = processedData.map(d => ({x: d.time, y: d.ax !== null ? d.ax : null}));
-            dataChart.data.datasets[2].data = processedData.map(d => ({x: d.time, y: d.ay !== null ? d.ay : null}));
-            dataChart.data.datasets[3].data = processedData.map(d => ({x: d.time, y: d.az !== null ? d.az : null}));
-            
-            dataChart.update('none');
-            updateChartLegend();
-            
-            // Calculate and display max values
-            updateChartStats(processedData);
-            
-            showStatus(`✅ Chart updated: ${processedData.length} points (${rawData.length} original)`, 'success');
-        }
-        
-        // Update chart statistics (max force and max deceleration)
-        function updateChartStats(data) {
-            if (!data || data.length === 0) {
-                document.getElementById('maxForce').textContent = '-';
-                document.getElementById('maxDecel').textContent = '-';
-                return;
-            }
-            
-            // Loadcell calibration constants (hardcoded in firmware)
-            const scalingFactor = 0.00667; // N per ADC count
-            const adcBaseline = 8388608;    // 24-bit ADC mid-point (0N reference)
-            
-            // Find max ADC and convert to Force (N)
-            let maxAdc = data[0].adcCode;
-            let maxAdcTime = data[0].time;
-            for (let i = 1; i < data.length; i++) {
-                if (data[i].adcCode > maxAdc) {
-                    maxAdc = data[i].adcCode;
-                    maxAdcTime = data[i].time;
-                }
-            }
-            
-            // Convert max ADC to Force (N)
-            const maxForceN = (maxAdc - adcBaseline) * scalingFactor;
-            
-            // Find max deceleration (max AZ value)
-            let maxDecel = null;
-            let maxDecelTime = null;
-            for (let i = 0; i < data.length; i++) {
-                if (data[i].az !== null && (maxDecel === null || data[i].az > maxDecel)) {
-                    maxDecel = data[i].az;
-                    maxDecelTime = data[i].time;
-                }
-            }
-            
-            // Update display
-            const maxForceEl = document.getElementById('maxForce');
-            const maxDecelEl = document.getElementById('maxDecel');
-            
-            if (maxForceEl) {
-                maxForceEl.textContent = maxForceN.toFixed(2) + ' N at ' + maxAdcTime.toFixed(6) + 's';
-            }
-            
-            if (maxDecelEl) {
-                if (maxDecel !== null) {
-                    maxDecelEl.textContent = maxDecel.toFixed(3) + 'g at ' + maxDecelTime.toFixed(6) + 's';
-                } else {
-                    maxDecelEl.textContent = 'N/A';
-                }
-            }
-        }
-        
-        // Parse filename to extract date/time for chart title
-        // Format: YYYYMMDD_HHMMSS.csv (e.g., "20251204_153012.csv")
-        function parseFilenameForTitle(filename) {
-            if (!filename) return 'Data Visualization';
-            
-            // Remove path and extension
-            const basename = filename.replace(/^.*\//, '').replace(/\.csv$/, '');
-            
-            // Parse YYYYMMDD_HHMMSS format
-            const match = basename.match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/);
-            if (match) {
-                const [, year, month, day, hour, minute, second] = match;
-                const dateStr = `${year}-${month}-${day}`;
-                const timeStr = `${hour}:${minute}:${second}`;
-                return `📊 ${dateStr} ${timeStr}`;
-            }
-            
-            // Fallback: use filename as-is
-            return `📊 ${basename}`;
-        }
-        
-        // Load latest CSV from ESP32 (or use mock data for preview)
-        async function loadLatestCsv() {
-            // Check if we're in preview mode (file:// protocol)
-            if (window.location.protocol === 'file:') {
-                // Use mock data for preview
-                await loadMockData();
-                return;
-            }
-            
-            try {
-                showStatus('Loading CSV file list...', 'info');
-                const listResponse = await fetch('/csv/list');
-                const fileList = await listResponse.json();
-                
-                if (!fileList || fileList.length === 0) {
-                    showStatus('❌ No CSV files found on SD card', 'error');
+                    updateChartLegend();
+                    console.log('Chart initialized successfully');
+               } catch (error) {
+                    console.error('Error initializing chart:', error);
+                    showStatus('❌ Error initializing chart: ' + error, 'error');
+               }
+          }
+
+          // Update chart legend
+          function updateChartLegend() {
+               const legend = document.getElementById('chartLegend');
+               if (!dataChart) return;
+
+               legend.innerHTML = '';
+               dataChart.data.datasets.forEach((dataset, index) => {
+                    const item = document.createElement('div');
+                    item.className = 'legend-item';
+                    item.style.cursor = 'pointer';
+                    item.onclick = () => {
+                         const meta = dataChart.getDatasetMeta(index);
+                         meta.hidden = !meta.hidden;
+                         dataChart.update();
+                         updateChartLegend();
+                    };
+
+                    const colorBox = document.createElement('div');
+                    colorBox.className = 'legend-color';
+                    colorBox.style.backgroundColor = dataset.borderColor;
+                    if (dataChart.getDatasetMeta(index).hidden) {
+                         colorBox.style.opacity = '0.3';
+                    }
+
+                    const label = document.createElement('span');
+                    label.textContent = dataset.label;
+                    if (dataChart.getDatasetMeta(index).hidden) {
+                         label.style.textDecoration = 'line-through';
+                         label.style.opacity = '0.5';
+                    }
+
+                    item.appendChild(colorBox);
+                    item.appendChild(label);
+                    legend.appendChild(item);
+               });
+          }
+
+          // Parse CSV data
+          function parseCSV(csvText) {
+               const lines = csvText.trim().split('\n');
+               if (lines.length < 2) return null;
+
+               // Skip header
+               const data = [];
+               for (let i = 1; i < lines.length; i++) {
+                    const cols = lines[i].split(',');
+                    if (cols.length >= 3) {
+                         data.push({
+                              time: parseFloat(cols[1]),
+                              adcCode: parseInt(cols[2]),
+                              ax: cols.length > 4 ? parseFloat(cols[4]) : null,
+                              ay: cols.length > 5 ? parseFloat(cols[5]) : null,
+                              az: cols.length > 6 ? parseFloat(cols[6]) : null,
+                              gx: cols.length > 7 ? parseFloat(cols[7]) : null,
+                              gy: cols.length > 8 ? parseFloat(cols[8]) : null,
+                              gz: cols.length > 9 ? parseFloat(cols[9]) : null
+                         });
+                    }
+               }
+               return data;
+          }
+
+          // Apply moving average filter (rolling window)
+          // Parameters:
+          //   - windowSize: Number of samples to average (1 = no filtering)
+          //   - This uses a simple moving average (SMA) with a rolling window
+          function applyMovingAverage(data, windowSize) {
+               if (windowSize <= 1 || data.length === 0) return data;
+
+               const filtered = [];
+               const halfWindow = Math.floor(windowSize / 2);
+
+               for (let i = 0; i < data.length; i++) {
+                    // Calculate window bounds (centered on current point)
+                    const startIdx = Math.max(0, i - halfWindow);
+                    const endIdx = Math.min(data.length, i + halfWindow + 1);
+                    const window = data.slice(startIdx, endIdx);
+
+                    // Calculate moving average for this point
+                    const avg = {
+                         time: data[i].time,  // Keep original time
+                         adcCode: window.reduce((sum, d) => sum + d.adcCode, 0) / window.length,
+                         ax: data[i].ax !== null ? window.reduce((sum, d) => sum + (d.ax || 0), 0) / window.length : null,
+                         ay: data[i].ay !== null ? window.reduce((sum, d) => sum + (d.ay || 0), 0) / window.length : null,
+                         az: data[i].az !== null ? window.reduce((sum, d) => sum + (d.az || 0), 0) / window.length : null
+                    };
+                    filtered.push(avg);
+               }
+               return filtered;
+          }
+
+          // Update chart with data
+          function updateChart() {
+               if (!dataChart) {
+                    console.error('Chart not initialized!');
+                    showStatus('❌ Chart not initialized. Please refresh the page.', 'error');
                     return;
-                }
-                
-                // Get the most recent file (assuming files are named with timestamp)
-                const latestFile = fileList[fileList.length - 1];
-                
-                showStatus('Loading CSV file: ' + latestFile.filename + '...', 'info');
-                const fileResponse = await fetch('/csv/file?file=' + encodeURIComponent(latestFile.filename));
-                
-                if (!fileResponse.ok) {
-                    showStatus('❌ Error loading CSV file: ' + fileResponse.statusText, 'error');
+               }
+
+               if (!rawData || rawData.length === 0) {
+                    console.error('No data to display!');
+                    showStatus('❌ No data available to display', 'error');
                     return;
-                }
-                
-                const csvText = await fileResponse.text();
-                rawData = parseCSV(csvText);
-                
-                if (!rawData || rawData.length === 0) {
-                    showStatus('❌ Error: Invalid CSV file or no data found', 'error');
+               }
+
+               console.log('Updating chart with', rawData.length, 'data points');
+
+               const avgWindow = parseInt(document.getElementById('avgWindow').value);
+               const maxPoints = parseInt(document.getElementById('maxPoints').value);
+
+               // Apply moving average filter
+               let processedData = applyMovingAverage(rawData, avgWindow);
+
+               // Limit points if needed
+               if (processedData.length > maxPoints) {
+                    const step = Math.ceil(processedData.length / maxPoints);
+                    processedData = processedData.filter((_, i) => i % step === 0);
+               }
+
+               // Loadcell calibration constants (hardcoded in firmware)
+               const scalingFactor = 0.00667; // N per ADC count
+               const adcBaseline = 8388608;    // 24-bit ADC mid-point (0N reference)
+
+               // Convert ADC to Force (N): Force = (ADC - Baseline) * Scaling
+               const convertAdcToForce = (adcCode) => {
+                    return (adcCode - adcBaseline) * scalingFactor;
+               };
+
+               // Update chart data
+               dataChart.data.labels = processedData.map(d => d.time.toFixed(6));
+               dataChart.data.datasets[0].data = processedData.map(d => ({ x: d.time, y: convertAdcToForce(d.adcCode) }));
+               dataChart.data.datasets[1].data = processedData.map(d => ({ x: d.time, y: d.ax !== null ? d.ax : null }));
+               dataChart.data.datasets[2].data = processedData.map(d => ({ x: d.time, y: d.ay !== null ? d.ay : null }));
+               dataChart.data.datasets[3].data = processedData.map(d => ({ x: d.time, y: d.az !== null ? d.az : null }));
+
+               dataChart.update('none');
+               updateChartLegend();
+
+               // Calculate and display max values
+               updateChartStats(processedData);
+
+               showStatus(`✅ Chart updated: ${processedData.length} points (${rawData.length} original)`, 'success');
+          }
+
+          // Update chart statistics (max force and max deceleration)
+          function updateChartStats(data) {
+               if (!data || data.length === 0) {
+                    document.getElementById('maxForce').textContent = '-';
+                    document.getElementById('maxDecel').textContent = '-';
                     return;
-                }
-                
-                // Update chart title with filename
-                const title = parseFilenameForTitle(latestFile.filename);
-                document.getElementById('chartTitle').textContent = title;
-                
-                showStatus('✅ Loaded ' + rawData.length + ' data points from ' + latestFile.filename, 'success');
-                updateChart();
-            } catch (error) {
-                showStatus('❌ Error loading CSV: ' + error + ' (Using mock data for preview)', 'error');
-                // Fallback to mock data if fetch fails
-                await loadMockData();
-            }
-        }
-        
-        // Reload latest CSV (for manual refresh)
-        async function reloadLatestCsv() {
-            showStatus('Reloading latest CSV...', 'info');
-            await loadLatestCsv();
-        }
-        
-        // Mock function for preview (simulates ESP32 CSV list/file endpoints)
-        // Generates realistic 10-minute logging session with force profile:
-        // - 0G freefall initially
-        // - Random 3G spike (~20kN) for 10ms
-        // - ~1G deceleration for rest of session
-        async function loadMockData() {
-            // Generate mock CSV data with realistic filename format
-            const now = new Date();
-            const year = now.getFullYear();
-            const month = String(now.getMonth() + 1).padStart(2, '0');
-            const day = String(now.getDate()).padStart(2, '0');
-            const hour = String(now.getHours()).padStart(2, '0');
-            const minute = String(now.getMinutes()).padStart(2, '0');
-            const second = String(now.getSeconds()).padStart(2, '0');
-            const mockFilename = `${year}${month}${day}_${hour}${minute}${second}.csv`;
-            
-            let csvText = 'ADC_Index,Time_Seconds,ADC_Code,IMU_Index,AX,AY,AZ,GX,GY,GZ\n';
-            
-            // Session parameters
-            const sessionDurationSeconds = 600; // 10 minutes
-            const adcSampleRate = 64000; // 64 ksps
-            const imuSampleRate = 960; // 960 Hz
-            const totalAdcSamples = sessionDurationSeconds * adcSampleRate;
-            
-            // For preview, we'll downsample to keep file size reasonable
-            // Generate every Nth sample to get ~100k points for smooth visualization
-            const downsampleFactor = Math.max(1, Math.floor(totalAdcSamples / 100000));
-            const previewSamples = Math.floor(totalAdcSamples / downsampleFactor);
-            
-            // Force profile parameters
-            // ADC baseline (0G freefall) - assume mid-scale for 24-bit ADC
-            const adcBaseline = 8388608; // 2^23 (mid-point of 24-bit signed)
-            const adcNoiseLevel = 1000; // Small noise in freefall
-            
-            // 3G spike corresponds to ~20kN on loadcell
-            // Assuming linear relationship: 1G = ~6.67kN, so 3G = 20kN
-            // ADC sensitivity: need to calculate based on loadcell calibration
-            // For simulation: assume 3G spike = +3,000,000 ADC counts from baseline
-            const adcSpikeAmplitude = 3000000; // 3G spike magnitude
-            const spikeDurationSeconds = 0.01; // 10ms
-            const spikeDurationSamples = Math.ceil(spikeDurationSeconds * adcSampleRate); // ~640 samples
-            
-            // Random spike timing: occurs between 0.1s and 2.0s after start
-            const spikeStartMin = 0.1;
-            const spikeStartMax = 2.0;
-            const spikeStartTime = spikeStartMin + Math.random() * (spikeStartMax - spikeStartMin);
-            const spikeStartSample = Math.floor(spikeStartTime * adcSampleRate);
-            const spikeEndSample = spikeStartSample + spikeDurationSamples;
-            
-            // Post-spike deceleration: ~1G
-            const postSpikeG = 1.0; // 1G deceleration
-            const adcPostSpikeOffset = adcSpikeAmplitude / 3; // Proportional to 1G
-            
-            // IMU parameters
-            let imuSampleCounter = 0;
-            const imuSamplesPerAdc = adcSampleRate / imuSampleRate; // ~66.67
-            
-            // Generate data
-            for (let previewIdx = 0; previewIdx < previewSamples; previewIdx++) {
-                const adcIndex = previewIdx * downsampleFactor;
-                const time = adcIndex / adcSampleRate;
-                
-                // Calculate ADC code based on force profile
-                let adcCode;
-                if (time < spikeStartTime) {
-                    // Phase 1: 0G freefall (before spike)
-                    adcCode = adcBaseline + (Math.random() - 0.5) * adcNoiseLevel;
-                } else if (time >= spikeStartTime && time < (spikeStartTime + spikeDurationSeconds)) {
-                    // Phase 2: 3G spike (10ms duration)
-                    const spikeProgress = (time - spikeStartTime) / spikeDurationSeconds;
-                    // Smooth spike: rapid rise, then fall
-                    const spikeShape = Math.sin(spikeProgress * Math.PI); // Bell curve shape
-                    adcCode = adcBaseline + adcSpikeAmplitude * spikeShape;
-                    // Add some noise
-                    adcCode += (Math.random() - 0.5) * adcNoiseLevel * 2;
-                } else {
-                    // Phase 3: ~1G deceleration (after spike)
-                    // Gradual decay from spike to steady 1G
-                    const timeAfterSpike = time - (spikeStartTime + spikeDurationSeconds);
-                    const decayTime = 0.5; // 500ms decay time
-                    const decayFactor = Math.exp(-timeAfterSpike / decayTime);
-                    const steadyState = adcPostSpikeOffset;
-                    adcCode = adcBaseline + steadyState + (adcSpikeAmplitude - steadyState) * decayFactor;
-                    // Add noise
-                    adcCode += (Math.random() - 0.5) * adcNoiseLevel;
-                }
-                
-                // Round to integer
-                adcCode = Math.round(adcCode);
-                
-                // Generate IMU data (accelerometer aligned with force profile)
-                let ax, ay, az;
-                if (time < spikeStartTime) {
-                    // 0G freefall
-                    ax = (Math.random() - 0.5) * 0.05;
-                    ay = (Math.random() - 0.5) * 0.05;
-                    az = (Math.random() - 0.5) * 0.05;
-                } else if (time >= spikeStartTime && time < (spikeStartTime + spikeDurationSeconds)) {
-                    // 3G spike (assuming spike is in Z direction)
-                    const spikeProgress = (time - spikeStartTime) / spikeDurationSeconds;
-                    const spikeShape = Math.sin(spikeProgress * Math.PI);
-                    ax = (Math.random() - 0.5) * 0.1;
-                    ay = (Math.random() - 0.5) * 0.1;
-                    az = 3.0 * spikeShape + (Math.random() - 0.5) * 0.2;
-                } else {
-                    // ~1G deceleration
-                    const timeAfterSpike = time - (spikeStartTime + spikeDurationSeconds);
-                    const decayTime = 0.5;
-                    const decayFactor = Math.exp(-timeAfterSpike / decayTime);
-                    ax = (Math.random() - 0.5) * 0.1;
-                    ay = (Math.random() - 0.5) * 0.1;
-                    az = 1.0 + (2.0 * decayFactor) + (Math.random() - 0.5) * 0.1;
-                }
-                
-                // IMU sample index (only increment when we cross IMU sample boundary)
-                const imuIndex = Math.floor(adcIndex / imuSamplesPerAdc);
-                
-                csvText += `${adcIndex},${time.toFixed(6)},${adcCode},${imuIndex},${ax.toFixed(6)},${ay.toFixed(6)},${az.toFixed(6)},0.0,0.0,0.0\n`;
-            }
-            
-            rawData = parseCSV(csvText);
-            
-            // Update chart title
-            const title = parseFilenameForTitle(mockFilename);
-            document.getElementById('chartTitle').textContent = title;
-            
-            showStatus(`✅ Loaded mock data: ${rawData.length} points (${sessionDurationSeconds}s session, spike at ${spikeStartTime.toFixed(3)}s)`, 'success');
-            updateChart();
-        }
-        
-        
-        // Mock data for preview (simulates ESP32 responses)
-        const mockConfig = {
-            adcSampleRate: 64000,
-            adcPgaGain: 2,
-            imuOdr: 960,
-            imuAccelRange: 16,
-            imuGyroRange: 2000
-        };
+               }
 
-        // Simulate different status scenarios
-        let statusScenario = 0;
-        const mockStatusScenarios = [
-            // Scenario 0: Normal operation
-            {
-                adc: { buffered: 512, overflow: 0, counter: 123456 },
-                imu: { buffered: 256, overflow: 0 },
-                logger: { state: 0, sessionOpen: false },
-                sd: { mounted: true, present: true, freeSpace: 1024 * 1024 * 1024, totalSpace: 8 * 1024 * 1024 * 1024, freePercent: 87.5 },
-                writes: { adcFailures: 0, imuFailures: 0, adcConsecutiveFailures: 0, imuConsecutiveFailures: 0 },
-                memory: { freeHeap: 200000, totalHeap: 500000, freePercent: 40.0 }
-            },
-            // Scenario 1: High buffer usage
-            {
-                adc: { buffered: 1900, overflow: 0, counter: 456789 },
-                imu: { buffered: 900, overflow: 0 },
-                logger: { state: 1, sessionOpen: true },
-                sd: { mounted: true, present: true, freeSpace: 512 * 1024 * 1024, totalSpace: 8 * 1024 * 1024 * 1024, freePercent: 93.75 },
-                writes: { adcFailures: 2, imuFailures: 1, adcConsecutiveFailures: 0, imuConsecutiveFailures: 0 },
-                memory: { freeHeap: 150000, totalHeap: 500000, freePercent: 30.0 }
-            },
-            // Scenario 2: Warning conditions
-            {
-                adc: { buffered: 1600, overflow: 0, counter: 789012 },
-                imu: { buffered: 800, overflow: 0 },
-                logger: { state: 2, sessionOpen: false },
-                sd: { mounted: true, present: true, freeSpace: 200 * 1024 * 1024, totalSpace: 8 * 1024 * 1024 * 1024, freePercent: 97.5 },
-                writes: { adcFailures: 5, imuFailures: 3, adcConsecutiveFailures: 2, imuConsecutiveFailures: 1 },
-                memory: { freeHeap: 100000, totalHeap: 500000, freePercent: 20.0 }
-            },
-            // Scenario 3: Error conditions
-            {
-                adc: { buffered: 2000, overflow: 5, counter: 999999 },
-                imu: { buffered: 1000, overflow: 2 },
-                logger: { state: 0, sessionOpen: false },
-                sd: { mounted: false, present: false, freeSpace: 0, totalSpace: 0, freePercent: 0 },
-                writes: { adcFailures: 20, imuFailures: 15, adcConsecutiveFailures: 8, imuConsecutiveFailures: 6 },
-                memory: { freeHeap: 50000, totalHeap: 500000, freePercent: 10.0 }
-            }
-        ];
+               // Loadcell calibration constants (hardcoded in firmware)
+               const scalingFactor = 0.00667; // N per ADC count
+               const adcBaseline = 8388608;    // 24-bit ADC mid-point (0N reference)
 
-        function showStatus(message, type) {
-            const statusDiv = document.getElementById('status');
-            statusDiv.className = 'status ' + type;
-            statusDiv.textContent = message;
-            setTimeout(() => statusDiv.textContent = '', 4000);
-        }
-
-        async function saveConfig() {
-            // Validate inputs
-            const adcRate = parseInt(document.getElementById('adcSampleRate').value);
-            const adcGain = parseInt(document.getElementById('adcPgaGain').value);
-            const imuOdr = parseInt(document.getElementById('imuOdr').value);
-            const imuAccel = parseInt(document.getElementById('imuAccelRange').value);
-            const imuGyro = parseInt(document.getElementById('imuGyroRange').value);
-
-            if (adcRate < 1000 || adcRate > 64000) {
-                showStatus('ADC Sample Rate must be between 1,000 and 64,000 Hz', 'error');
-                return;
-            }
-            if (imuOdr < 15 || imuOdr > 960) {
-                showStatus('IMU Sample Rate must be between 15 and 960 Hz', 'error');
-                return;
-            }
-
-            // Simulate save (in real code, this would POST to ESP32)
-            showStatus('Saving configuration...', 'info');
-            
-            // Simulate network delay
-            await new Promise(resolve => setTimeout(resolve, 500));
-            
-            // Update mock config
-            mockConfig.adcSampleRate = adcRate;
-            mockConfig.adcPgaGain = adcGain;
-            mockConfig.imuOdr = imuOdr;
-            mockConfig.imuAccelRange = imuAccel;
-            mockConfig.imuGyroRange = imuGyro;
-            
-            showStatus('✅ Configuration saved successfully!', 'success');
-        }
-
-        async function loadConfig() {
-            // Simulate loading (in real code, this would GET from ESP32)
-            showStatus('Loading configuration...', 'info');
-            
-            // Simulate network delay
-            await new Promise(resolve => setTimeout(resolve, 300));
-            
-            document.getElementById('adcSampleRate').value = mockConfig.adcSampleRate || 64000;
-            document.getElementById('adcPgaGain').value = mockConfig.adcPgaGain || 2;
-            document.getElementById('imuOdr').value = mockConfig.imuOdr || 960;
-            document.getElementById('imuAccelRange').value = mockConfig.imuAccelRange || 16;
-            document.getElementById('imuGyroRange').value = mockConfig.imuGyroRange || 2000;
-            
-            showStatus('✅ Configuration loaded successfully!', 'success');
-        }
-
-        // Update system status indicators
-        async function updateStatusIndicators() {
-            const refreshIndicator = document.getElementById('refreshIndicator');
-            refreshIndicator.style.display = 'inline-block';
-            
-            try {
-                // Simulate network delay
-                await new Promise(resolve => setTimeout(resolve, 200));
-                
-                // Get mock data (cycle through scenarios for demo)
-                const data = mockStatusScenarios[statusScenario];
-                
-                // SD Card status
-                const sdStatusEl = document.getElementById('sdStatus');
-                if (data.sd && data.sd.mounted && data.sd.present) {
-                    sdStatusEl.textContent = '✓ OK';
-                    sdStatusEl.className = 'status-value status-ok';
-                } else {
-                    sdStatusEl.textContent = '✗ ERROR';
-                    sdStatusEl.className = 'status-value status-error';
-                }
-                
-                // SD Card free space
-                const sdSpaceEl = document.getElementById('sdSpace');
-                const sdSpaceBar = document.getElementById('sdSpaceBar');
-                if (data.sd && data.sd.totalSpace > 0) {
-                    const freeMB = (data.sd.freeSpace / (1024 * 1024)).toFixed(1);
-                    const totalMB = (data.sd.totalSpace / (1024 * 1024)).toFixed(1);
-                    const percent = data.sd.freePercent;
-                    sdSpaceEl.textContent = freeMB + ' MB / ' + totalMB + ' MB';
-                    sdSpaceBar.style.width = percent + '%';
-                    if (percent < 10) {
-                        sdSpaceEl.className = 'status-value status-warning';
-                        sdSpaceBar.className = 'progress-fill error';
-                    } else if (percent < 25) {
-                        sdSpaceEl.className = 'status-value status-warning';
-                        sdSpaceBar.className = 'progress-fill warning';
-                    } else {
-                        sdSpaceEl.className = 'status-value status-ok';
-                        sdSpaceBar.className = 'progress-fill';
+               // Find max ADC and convert to Force (N)
+               let maxAdc = data[0].adcCode;
+               let maxAdcTime = data[0].time;
+               for (let i = 1; i < data.length; i++) {
+                    if (data[i].adcCode > maxAdc) {
+                         maxAdc = data[i].adcCode;
+                         maxAdcTime = data[i].time;
                     }
-                } else {
-                    sdSpaceEl.textContent = 'N/A';
-                    sdSpaceEl.className = 'status-value';
-                    sdSpaceBar.style.width = '0%';
-                }
-                
-                // ADC Buffer
-                const adcBufferEl = document.getElementById('adcBuffer');
-                const adcBufferBar = document.getElementById('adcBufferBar');
-                if (data.adc) {
-                    const fillPercent = (data.adc.buffered / 2048 * 100);
-                    adcBufferEl.textContent = data.adc.buffered + ' / 2048 (' + fillPercent.toFixed(1) + '%)';
-                    adcBufferBar.style.width = fillPercent + '%';
-                    if (fillPercent > 90) {
-                        adcBufferEl.className = 'status-value status-error';
-                        adcBufferBar.className = 'progress-fill error';
-                    } else if (fillPercent > 75) {
-                        adcBufferEl.className = 'status-value status-warning';
-                        adcBufferBar.className = 'progress-fill warning';
-                    } else {
-                        adcBufferEl.className = 'status-value status-ok';
-                        adcBufferBar.className = 'progress-fill';
+               }
+
+               // Convert max ADC to Force (N)
+               const maxForceN = (maxAdc - adcBaseline) * scalingFactor;
+
+               // Find max deceleration (max AZ value)
+               let maxDecel = null;
+               let maxDecelTime = null;
+               for (let i = 0; i < data.length; i++) {
+                    if (data[i].az !== null && (maxDecel === null || data[i].az > maxDecel)) {
+                         maxDecel = data[i].az;
+                         maxDecelTime = data[i].time;
                     }
-                }
-                
-                // IMU Buffer
-                const imuBufferEl = document.getElementById('imuBuffer');
-                const imuBufferBar = document.getElementById('imuBufferBar');
-                if (data.imu) {
-                    const fillPercent = (data.imu.buffered / 1024 * 100);
-                    imuBufferEl.textContent = data.imu.buffered + ' / 1024 (' + fillPercent.toFixed(1) + '%)';
-                    imuBufferBar.style.width = fillPercent + '%';
-                    if (fillPercent > 90) {
-                        imuBufferEl.className = 'status-value status-error';
-                        imuBufferBar.className = 'progress-fill error';
-                    } else if (fillPercent > 75) {
-                        imuBufferEl.className = 'status-value status-warning';
-                        imuBufferBar.className = 'progress-fill warning';
+               }
+
+               // Update display
+               const maxForceEl = document.getElementById('maxForce');
+               const maxDecelEl = document.getElementById('maxDecel');
+
+               if (maxForceEl) {
+                    maxForceEl.textContent = maxForceN.toFixed(2) + ' N at ' + maxAdcTime.toFixed(6) + 's';
+               }
+
+               if (maxDecelEl) {
+                    if (maxDecel !== null) {
+                         maxDecelEl.textContent = maxDecel.toFixed(3) + 'g at ' + maxDecelTime.toFixed(6) + 's';
                     } else {
-                        imuBufferEl.className = 'status-value status-ok';
-                        imuBufferBar.className = 'progress-fill';
+                         maxDecelEl.textContent = 'N/A';
                     }
-                }
-                
-                // Write Failures
-                const writeFailuresEl = document.getElementById('writeFailures');
-                if (data.writes) {
-                    const totalFailures = data.writes.adcFailures + data.writes.imuFailures;
-                    const consecutive = Math.max(data.writes.adcConsecutiveFailures, data.writes.imuConsecutiveFailures);
-                    if (totalFailures === 0 && consecutive === 0) {
-                        writeFailuresEl.textContent = '✓ None';
-                        writeFailuresEl.className = 'status-value status-ok';
+               }
+          }
+
+          // Parse filename to extract date/time for chart title
+          // Format: YYYYMMDD_HHMMSS.csv (e.g., "20251204_153012.csv")
+          function parseFilenameForTitle(filename) {
+               if (!filename) return 'Data Visualization';
+
+               // Remove path and extension
+               const basename = filename.replace(/^.*\//, '').replace(/\.csv$/, '');
+
+               // Parse YYYYMMDD_HHMMSS format
+               const match = basename.match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/);
+               if (match) {
+                    const [, year, month, day, hour, minute, second] = match;
+                    const dateStr = `${year}-${month}-${day}`;
+                    const timeStr = `${hour}:${minute}:${second}`;
+                    return `📊 ${dateStr} ${timeStr}`;
+               }
+
+               // Fallback: use filename as-is
+               return `📊 ${basename}`;
+          }
+
+          // Load latest CSV from ESP32 (or use mock data for preview)
+          async function loadLatestCsv() {
+               // Check if we're in preview mode (file:// protocol)
+               if (window.location.protocol === 'file:') {
+                    // Use mock data for preview
+                    await loadMockData();
+                    return;
+               }
+
+               try {
+                    showStatus('Loading CSV file list...', 'info');
+                    const listResponse = await fetch('/csv/list');
+                    const fileList = await listResponse.json();
+
+                    if (!fileList || fileList.length === 0) {
+                         showStatus('❌ No CSV files found on SD card', 'error');
+                         return;
+                    }
+
+                    // Get the most recent file (assuming files are named with timestamp)
+                    const latestFile = fileList[fileList.length - 1];
+
+                    showStatus('Loading CSV file: ' + latestFile.filename + '...', 'info');
+                    const fileResponse = await fetch('/csv/file?file=' + encodeURIComponent(latestFile.filename));
+
+                    if (!fileResponse.ok) {
+                         showStatus('❌ Error loading CSV file: ' + fileResponse.statusText, 'error');
+                         return;
+                    }
+
+                    const csvText = await fileResponse.text();
+                    rawData = parseCSV(csvText);
+
+                    if (!rawData || rawData.length === 0) {
+                         showStatus('❌ Error: Invalid CSV file or no data found', 'error');
+                         return;
+                    }
+
+                    // Update chart title with filename
+                    const title = parseFilenameForTitle(latestFile.filename);
+                    document.getElementById('chartTitle').textContent = title;
+
+                    showStatus('✅ Loaded ' + rawData.length + ' data points from ' + latestFile.filename, 'success');
+                    updateChart();
+               } catch (error) {
+                    showStatus('❌ Error loading CSV: ' + error + ' (Using mock data for preview)', 'error');
+                    // Fallback to mock data if fetch fails
+                    await loadMockData();
+               }
+          }
+
+          // Reload latest CSV (for manual refresh)
+          async function reloadLatestCsv() {
+               showStatus('Reloading latest CSV...', 'info');
+               await loadLatestCsv();
+          }
+
+          // Mock function for preview (simulates ESP32 CSV list/file endpoints)
+          // Generates realistic 10-minute logging session with force profile:
+          // - 0G freefall initially
+          // - Random 3G spike (~20kN) for 10ms
+          // - ~1G deceleration for rest of session
+          async function loadMockData() {
+               // Generate mock CSV data with realistic filename format
+               const now = new Date();
+               const year = now.getFullYear();
+               const month = String(now.getMonth() + 1).padStart(2, '0');
+               const day = String(now.getDate()).padStart(2, '0');
+               const hour = String(now.getHours()).padStart(2, '0');
+               const minute = String(now.getMinutes()).padStart(2, '0');
+               const second = String(now.getSeconds()).padStart(2, '0');
+               const mockFilename = `${year}${month}${day}_${hour}${minute}${second}.csv`;
+
+               let csvText = 'ADC_Index,Time_Seconds,ADC_Code,IMU_Index,AX,AY,AZ,GX,GY,GZ\n';
+
+               // Session parameters
+               const sessionDurationSeconds = 600; // 10 minutes
+               const adcSampleRate = 64000; // 64 ksps
+               const imuSampleRate = 960; // 960 Hz
+               const totalAdcSamples = sessionDurationSeconds * adcSampleRate;
+
+               // For preview, we'll downsample to keep file size reasonable
+               // Generate every Nth sample to get ~100k points for smooth visualization
+               const downsampleFactor = Math.max(1, Math.floor(totalAdcSamples / 100000));
+               const previewSamples = Math.floor(totalAdcSamples / downsampleFactor);
+
+               // Force profile parameters
+               // ADC baseline (0G freefall) - assume mid-scale for 24-bit ADC
+               const adcBaseline = 8388608; // 2^23 (mid-point of 24-bit signed)
+               const adcNoiseLevel = 1000; // Small noise in freefall
+
+               // 3G spike corresponds to ~20kN on loadcell
+               // Assuming linear relationship: 1G = ~6.67kN, so 3G = 20kN
+               // ADC sensitivity: need to calculate based on loadcell calibration
+               // For simulation: assume 3G spike = +3,000,000 ADC counts from baseline
+               const adcSpikeAmplitude = 3000000; // 3G spike magnitude
+               const spikeDurationSeconds = 0.01; // 10ms
+               const spikeDurationSamples = Math.ceil(spikeDurationSeconds * adcSampleRate); // ~640 samples
+
+               // Random spike timing: occurs between 0.1s and 2.0s after start
+               const spikeStartMin = 0.1;
+               const spikeStartMax = 2.0;
+               const spikeStartTime = spikeStartMin + Math.random() * (spikeStartMax - spikeStartMin);
+               const spikeStartSample = Math.floor(spikeStartTime * adcSampleRate);
+               const spikeEndSample = spikeStartSample + spikeDurationSamples;
+
+               // Post-spike deceleration: ~1G
+               const postSpikeG = 1.0; // 1G deceleration
+               const adcPostSpikeOffset = adcSpikeAmplitude / 3; // Proportional to 1G
+
+               // IMU parameters
+               let imuSampleCounter = 0;
+               const imuSamplesPerAdc = adcSampleRate / imuSampleRate; // ~66.67
+
+               // Generate data
+               for (let previewIdx = 0; previewIdx < previewSamples; previewIdx++) {
+                    const adcIndex = previewIdx * downsampleFactor;
+                    const time = adcIndex / adcSampleRate;
+
+                    // Calculate ADC code based on force profile
+                    let adcCode;
+                    if (time < spikeStartTime) {
+                         // Phase 1: 0G freefall (before spike)
+                         adcCode = adcBaseline + (Math.random() - 0.5) * adcNoiseLevel;
+                    } else if (time >= spikeStartTime && time < (spikeStartTime + spikeDurationSeconds)) {
+                         // Phase 2: 3G spike (10ms duration)
+                         const spikeProgress = (time - spikeStartTime) / spikeDurationSeconds;
+                         // Smooth spike: rapid rise, then fall
+                         const spikeShape = Math.sin(spikeProgress * Math.PI); // Bell curve shape
+                         adcCode = adcBaseline + adcSpikeAmplitude * spikeShape;
+                         // Add some noise
+                         adcCode += (Math.random() - 0.5) * adcNoiseLevel * 2;
                     } else {
-                        writeFailuresEl.textContent = 'Total: ' + totalFailures + ' | Consecutive: ' + consecutive;
-                        if (consecutive >= 5) {
-                            writeFailuresEl.className = 'status-value status-error';
-                        } else if (consecutive > 0) {
-                            writeFailuresEl.className = 'status-value status-warning';
-                        } else {
-                            writeFailuresEl.className = 'status-value status-ok';
-                        }
+                         // Phase 3: ~1G deceleration (after spike)
+                         // Gradual decay from spike to steady 1G
+                         const timeAfterSpike = time - (spikeStartTime + spikeDurationSeconds);
+                         const decayTime = 0.5; // 500ms decay time
+                         const decayFactor = Math.exp(-timeAfterSpike / decayTime);
+                         const steadyState = adcPostSpikeOffset;
+                         adcCode = adcBaseline + steadyState + (adcSpikeAmplitude - steadyState) * decayFactor;
+                         // Add noise
+                         adcCode += (Math.random() - 0.5) * adcNoiseLevel;
                     }
-                } else {
-                    writeFailuresEl.textContent = '-';
-                    writeFailuresEl.className = 'status-value';
-                }
-                
-                // Logger State
-                const loggerStateEl = document.getElementById('loggerState');
-                const states = ['IDLE', 'SESSION_OPEN', 'CONVERTING'];
-                const stateText = states[data.logger.state] || 'UNKNOWN';
-                loggerStateEl.textContent = stateText;
-                if (data.logger.state === 1) { // SESSION_OPEN
-                    loggerStateEl.className = 'status-value status-ok';
-                } else if (data.logger.state === 2) { // CONVERTING
-                    loggerStateEl.className = 'status-value status-warning';
-                } else {
-                    loggerStateEl.className = 'status-value';
-                }
-            } catch (error) {
-                console.error('Error updating status indicators:', error);
-            } finally {
-                refreshIndicator.style.display = 'none';
+
+                    // Round to integer
+                    adcCode = Math.round(adcCode);
+
+                    // Generate IMU data (accelerometer aligned with force profile)
+                    let ax, ay, az;
+                    if (time < spikeStartTime) {
+                         // 0G freefall
+                         ax = (Math.random() - 0.5) * 0.05;
+                         ay = (Math.random() - 0.5) * 0.05;
+                         az = (Math.random() - 0.5) * 0.05;
+                    } else if (time >= spikeStartTime && time < (spikeStartTime + spikeDurationSeconds)) {
+                         // 3G spike (assuming spike is in Z direction)
+                         const spikeProgress = (time - spikeStartTime) / spikeDurationSeconds;
+                         const spikeShape = Math.sin(spikeProgress * Math.PI);
+                         ax = (Math.random() - 0.5) * 0.1;
+                         ay = (Math.random() - 0.5) * 0.1;
+                         az = 3.0 * spikeShape + (Math.random() - 0.5) * 0.2;
+                    } else {
+                         // ~1G deceleration
+                         const timeAfterSpike = time - (spikeStartTime + spikeDurationSeconds);
+                         const decayTime = 0.5;
+                         const decayFactor = Math.exp(-timeAfterSpike / decayTime);
+                         ax = (Math.random() - 0.5) * 0.1;
+                         ay = (Math.random() - 0.5) * 0.1;
+                         az = 1.0 + (2.0 * decayFactor) + (Math.random() - 0.5) * 0.1;
+                    }
+
+                    // IMU sample index (only increment when we cross IMU sample boundary)
+                    const imuIndex = Math.floor(adcIndex / imuSamplesPerAdc);
+
+                    csvText += `${adcIndex},${time.toFixed(6)},${adcCode},${imuIndex},${ax.toFixed(6)},${ay.toFixed(6)},${az.toFixed(6)},0.0,0.0,0.0\n`;
+               }
+
+               rawData = parseCSV(csvText);
+
+               // Update chart title
+               const title = parseFilenameForTitle(mockFilename);
+               document.getElementById('chartTitle').textContent = title;
+
+               showStatus(`✅ Loaded mock data: ${rawData.length} points (${sessionDurationSeconds}s session, spike at ${spikeStartTime.toFixed(3)}s)`, 'success');
+               updateChart();
+          }
+
+
+          // Mock data for preview (simulates ESP32 responses)
+          const mockConfig = {
+               adcSampleRate: 64000,
+               adcPgaGain: 2,
+               imuOdr: 960,
+               imuAccelRange: 16,
+               imuGyroRange: 2000
+          };
+
+          // Simulate different status scenarios
+          let statusScenario = 0;
+          const mockStatusScenarios = [
+               // Scenario 0: Normal operation
+               {
+                    adc: { buffered: 512, overflow: 0, counter: 123456 },
+                    imu: { buffered: 256, overflow: 0 },
+                    logger: { state: 0, sessionOpen: false },
+                    sd: { mounted: true, present: true, freeSpace: 1024 * 1024 * 1024, totalSpace: 8 * 1024 * 1024 * 1024, freePercent: 87.5 },
+                    writes: { adcFailures: 0, imuFailures: 0, adcConsecutiveFailures: 0, imuConsecutiveFailures: 0 },
+                    memory: { freeHeap: 200000, totalHeap: 500000, freePercent: 40.0 }
+               },
+               // Scenario 1: High buffer usage
+               {
+                    adc: { buffered: 1900, overflow: 0, counter: 456789 },
+                    imu: { buffered: 900, overflow: 0 },
+                    logger: { state: 1, sessionOpen: true },
+                    sd: { mounted: true, present: true, freeSpace: 512 * 1024 * 1024, totalSpace: 8 * 1024 * 1024 * 1024, freePercent: 93.75 },
+                    writes: { adcFailures: 2, imuFailures: 1, adcConsecutiveFailures: 0, imuConsecutiveFailures: 0 },
+                    memory: { freeHeap: 150000, totalHeap: 500000, freePercent: 30.0 }
+               },
+               // Scenario 2: Warning conditions
+               {
+                    adc: { buffered: 1600, overflow: 0, counter: 789012 },
+                    imu: { buffered: 800, overflow: 0 },
+                    logger: { state: 2, sessionOpen: false },
+                    sd: { mounted: true, present: true, freeSpace: 200 * 1024 * 1024, totalSpace: 8 * 1024 * 1024 * 1024, freePercent: 97.5 },
+                    writes: { adcFailures: 5, imuFailures: 3, adcConsecutiveFailures: 2, imuConsecutiveFailures: 1 },
+                    memory: { freeHeap: 100000, totalHeap: 500000, freePercent: 20.0 }
+               },
+               // Scenario 3: Error conditions
+               {
+                    adc: { buffered: 2000, overflow: 5, counter: 999999 },
+                    imu: { buffered: 1000, overflow: 2 },
+                    logger: { state: 0, sessionOpen: false },
+                    sd: { mounted: false, present: false, freeSpace: 0, totalSpace: 0, freePercent: 0 },
+                    writes: { adcFailures: 20, imuFailures: 15, adcConsecutiveFailures: 8, imuConsecutiveFailures: 6 },
+                    memory: { freeHeap: 50000, totalHeap: 500000, freePercent: 10.0 }
+               }
+          ];
+
+          function showStatus(message, type) {
+               const statusDiv = document.getElementById('status');
+               statusDiv.className = 'status ' + type;
+               statusDiv.textContent = message;
+               setTimeout(() => statusDiv.textContent = '', 4000);
+          }
+
+          // Note: ADC/IMU configuration has been moved to the calibration portal (/cal)
+
+          // Update system status indicators
+          async function updateStatusIndicators() {
+               const refreshIndicator = document.getElementById('refreshIndicator');
+               refreshIndicator.style.display = 'inline-block';
+
+               try {
+                    // Simulate network delay
+                    await new Promise(resolve => setTimeout(resolve, 200));
+
+                    // Get mock data (cycle through scenarios for demo)
+                    const data = mockStatusScenarios[statusScenario];
+
+                    // SD Card status
+                    const sdStatusEl = document.getElementById('sdStatus');
+                    if (data.sd && data.sd.mounted && data.sd.present) {
+                         sdStatusEl.textContent = '✓ OK';
+                         sdStatusEl.className = 'status-value status-ok';
+                    } else {
+                         sdStatusEl.textContent = '✗ ERROR';
+                         sdStatusEl.className = 'status-value status-error';
+                    }
+
+                    // SD Card free space (pie chart)
+                    const sdSpaceEl = document.getElementById('sdSpace');
+                    const sdTotalEl = document.getElementById('sdTotal');
+                    const sdFreeEl = document.getElementById('sdFree');
+                    const sdUsedEl = document.getElementById('sdUsed');
+                    const sdSpaceStatusEl = document.getElementById('sdSpaceStatus');
+
+                    if (data.sd && data.sd.totalSpace > 0) {
+                         const freeMB = (data.sd.freeSpace / (1024 * 1024)).toFixed(1);
+                         const totalMB = (data.sd.totalSpace / (1024 * 1024)).toFixed(1);
+                         const usedMB = ((data.sd.totalSpace - data.sd.freeSpace) / (1024 * 1024)).toFixed(1);
+                         const percent = data.sd.freePercent;
+
+                         sdSpaceEl.textContent = percent.toFixed(1) + '% Free';
+                         sdTotalEl.textContent = totalMB + ' MB';
+                         sdFreeEl.textContent = freeMB + ' MB';
+                         sdUsedEl.textContent = usedMB + ' MB';
+
+                         // Update pie chart
+                         if (!window.sdSpaceChart) {
+                              const ctx = document.getElementById('sdSpaceChart').getContext('2d');
+                              window.sdSpaceChart = new Chart(ctx, {
+                                   type: 'doughnut',
+                                   data: {
+                                        labels: ['Used', 'Free'],
+                                        datasets: [{
+                                             data: [100 - percent, percent],
+                                             backgroundColor: [
+                                                  percent < 10 ? 'rgba(245, 101, 101, 0.8)' :
+                                                       percent < 25 ? 'rgba(237, 137, 54, 0.8)' :
+                                                            'rgba(75, 192, 192, 0.8)',
+                                                  percent < 10 ? 'rgba(245, 101, 101, 0.3)' :
+                                                       percent < 25 ? 'rgba(237, 137, 54, 0.3)' :
+                                                            'rgba(72, 187, 120, 0.8)'
+                                             ],
+                                             borderWidth: 2,
+                                             borderColor: '#fff'
+                                        }]
+                                   },
+                                   options: {
+                                        responsive: true,
+                                        maintainAspectRatio: true,
+                                        plugins: {
+                                             legend: {
+                                                  display: false
+                                             },
+                                             tooltip: {
+                                                  callbacks: {
+                                                       label: function (context) {
+                                                            const label = context.label || '';
+                                                            const value = context.parsed || 0;
+                                                            return label + ': ' + value.toFixed(1) + '%';
+                                                       }
+                                                  }
+                                             }
+                                        }
+                                   }
+                              });
+                         } else {
+                              window.sdSpaceChart.data.datasets[0].data = [100 - percent, percent];
+                              window.sdSpaceChart.data.datasets[0].backgroundColor = [
+                                   percent < 10 ? 'rgba(245, 101, 101, 0.8)' :
+                                        percent < 25 ? 'rgba(237, 137, 54, 0.8)' :
+                                             'rgba(75, 192, 192, 0.8)',
+                                   percent < 10 ? 'rgba(245, 101, 101, 0.3)' :
+                                        percent < 25 ? 'rgba(237, 137, 54, 0.3)' :
+                                             'rgba(72, 187, 120, 0.8)'
+                              ];
+                              window.sdSpaceChart.update();
+                         }
+
+                         // Status message
+                         if (percent < 10) {
+                              sdSpaceEl.className = 'status-value status-error';
+                              sdSpaceStatusEl.className = 'status error';
+                              sdSpaceStatusEl.textContent = '⚠️ Critical: Less than 10% free space remaining!';
+                         } else if (percent < 25) {
+                              sdSpaceEl.className = 'status-value status-warning';
+                              sdSpaceStatusEl.className = 'status warning';
+                              sdSpaceStatusEl.textContent = '⚠️ Warning: Less than 25% free space remaining.';
+                         } else {
+                              sdSpaceEl.className = 'status-value status-ok';
+                              sdSpaceStatusEl.className = 'status success';
+                              sdSpaceStatusEl.textContent = '✓ Storage space is healthy.';
+                         }
+                    } else {
+                         sdSpaceEl.textContent = 'N/A';
+                         sdSpaceEl.className = 'status-value';
+                         sdTotalEl.textContent = '-';
+                         sdFreeEl.textContent = '-';
+                         sdUsedEl.textContent = '-';
+                         if (sdSpaceStatusEl) {
+                              sdSpaceStatusEl.textContent = '';
+                              sdSpaceStatusEl.className = '';
+                         }
+                    }
+
+                    // Write Failures
+                    const writeFailuresEl = document.getElementById('writeFailures');
+                    if (data.writes) {
+                         const totalFailures = data.writes.adcFailures + data.writes.imuFailures;
+                         const consecutive = Math.max(data.writes.adcConsecutiveFailures, data.writes.imuConsecutiveFailures);
+                         if (totalFailures === 0 && consecutive === 0) {
+                              writeFailuresEl.textContent = '✓ None';
+                              writeFailuresEl.className = 'status-value status-ok';
+                         } else {
+                              writeFailuresEl.textContent = 'Total: ' + totalFailures + ' | Consecutive: ' + consecutive;
+                              if (consecutive >= 5) {
+                                   writeFailuresEl.className = 'status-value status-error';
+                              } else if (consecutive > 0) {
+                                   writeFailuresEl.className = 'status-value status-warning';
+                              } else {
+                                   writeFailuresEl.className = 'status-value status-ok';
+                              }
+                         }
+                    } else {
+                         writeFailuresEl.textContent = '-';
+                         writeFailuresEl.className = 'status-value';
+                    }
+
+                    // Logger State
+                    const loggerStateEl = document.getElementById('loggerState');
+                    const states = ['IDLE', 'SESSION_OPEN', 'CONVERTING'];
+                    const stateText = states[data.logger.state] || 'UNKNOWN';
+                    loggerStateEl.textContent = stateText;
+                    if (data.logger.state === 1) { // SESSION_OPEN
+                         loggerStateEl.className = 'status-value status-ok';
+                    } else if (data.logger.state === 2) { // CONVERTING
+                         loggerStateEl.className = 'status-value status-warning';
+                    } else {
+                         loggerStateEl.className = 'status-value';
+                    }
+               } catch (error) {
+                    console.error('Error updating status indicators:', error);
+               } finally {
+                    refreshIndicator.style.display = 'none';
+               }
+          }
+
+          // Cycle through scenarios for demo (every 5 seconds)
+          setInterval(() => {
+               statusScenario = (statusScenario + 1) % mockStatusScenarios.length;
+          }, 5000);
+
+          // Update status indicators every 2 seconds
+          setInterval(updateStatusIndicators, 2000);
+
+          // NeoPixel pattern definitions (matching neopixel.cpp)
+          const neopixelPatterns = [
+               {
+                    name: 'OFF',
+                    description: 'LED is off',
+                    color: '#000000',
+                    pattern: 'solid',
+                    timing: null
+               },
+               {
+                    name: 'INIT',
+                    description: 'System initializing / peripherals starting up',
+                    color: '#FF5000', // RGB(255, 80, 0) - amber
+                    pattern: 'solid',
+                    timing: null
+               },
+               {
+                    name: 'READY',
+                    description: 'System ready to start logging',
+                    color: '#00FF00', // RGB(0, 255, 0) - green
+                    pattern: 'solid',
+                    timing: null
+               },
+               {
+                    name: 'LOGGING',
+                    description: 'Actively logging data to SD card',
+                    color: '#00FF00', // RGB(0, 255, 0) - green
+                    pattern: 'solid',
+                    timing: null
+               },
+               {
+                    name: 'CONVERTING',
+                    description: 'Converting binary logs to CSV (DO NOT remove SD card)',
+                    color: '#FF6400', // RGB(255, 100, 0) - orange/yellow
+                    pattern: 'blink',
+                    timing: { on: 150, off: 150, pulses: 1, gap: 0 }
+               },
+               {
+                    name: 'SAFE TO REMOVE',
+                    description: 'CSV conversion complete (safe to remove SD card)',
+                    color: '#00FF00', // RGB(0, 255, 0) - green
+                    pattern: 'double-blink',
+                    timing: { on: 100, off: 100, pulses: 2, gap: 800 }
+               },
+               {
+                    name: 'ERROR: SD Card',
+                    description: 'SD card initialization or access error',
+                    color: '#FF0000', // RGB(255, 0, 0) - red
+                    pattern: 'double-blink',
+                    timing: { on: 100, off: 100, pulses: 2, gap: 600 }
+               },
+               {
+                    name: 'ERROR: RTC',
+                    description: 'Real-time clock initialization error',
+                    color: '#FFFF00', // RGB(255, 255, 0) - yellow
+                    pattern: 'blink',
+                    timing: { on: 200, off: 800, pulses: 1, gap: 0 }
+               },
+               {
+                    name: 'ERROR: IMU',
+                    description: 'IMU (accelerometer/gyroscope) initialization error',
+                    color: '#FF00FF', // RGB(255, 0, 255) - magenta
+                    pattern: 'triple-blink',
+                    timing: { on: 80, off: 80, pulses: 3, gap: 600 }
+               },
+               {
+                    name: 'ERROR: ADC',
+                    description: 'ADC (loadcell) initialization error',
+                    color: '#00FFFF', // RGB(0, 255, 255) - cyan
+                    pattern: 'blink',
+                    timing: { on: 500, off: 500, pulses: 1, gap: 0 }
+               },
+               {
+                    name: 'ERROR: Write Failure',
+                    description: 'Persistent SD card write failures (critical)',
+                    color: '#FF0000', // RGB(255, 0, 0) - red
+                    pattern: 'fast-blink',
+                    timing: { on: 50, off: 50, pulses: 1, gap: 0 }
+               },
+               {
+                    name: 'ERROR: Low Space',
+                    description: 'SD card running low on free space',
+                    color: '#FFA500', // RGB(255, 165, 0) - orange
+                    pattern: 'double-blink',
+                    timing: { on: 200, off: 200, pulses: 2, gap: 400 }
+               },
+               {
+                    name: 'ERROR: Buffer Full',
+                    description: 'ADC or IMU ring buffer overflow',
+                    color: '#FF0080', // RGB(255, 0, 128) - purple/magenta
+                    pattern: 'triple-blink',
+                    timing: { on: 60, off: 60, pulses: 3, gap: 500 }
+               }
+          ];
+
+          // Generate NeoPixel pattern display with animations
+          function generateNeopixelPatterns() {
+               const container = document.getElementById('neopixelPatterns');
+               if (!container) return;
+
+               container.innerHTML = '';
+
+               neopixelPatterns.forEach(pattern => {
+                    const patternDiv = document.createElement('div');
+                    patternDiv.style.cssText = 'background: white; padding: 15px; border-radius: 8px; border: 2px solid #e2e8f0; display: flex; align-items: center; gap: 15px;';
+
+                    // LED indicator
+                    const ledDiv = document.createElement('div');
+                    ledDiv.style.cssText = 'width: 40px; height: 40px; border-radius: 50%; background: ' + pattern.color + '; box-shadow: 0 0 10px ' + pattern.color + '; position: relative; flex-shrink: 0;';
+
+                    // Add animation based on pattern type
+                    if (pattern.pattern === 'blink' && pattern.timing) {
+                         const duration = (pattern.timing.on + pattern.timing.off) / 1000;
+                         ledDiv.style.animation = `blink ${duration}s infinite`;
+                    } else if (pattern.pattern === 'double-blink' && pattern.timing) {
+                         const cycleTime = (pattern.timing.on + pattern.timing.off) * pattern.timing.pulses + pattern.timing.gap;
+                         ledDiv.style.animation = `doubleBlink ${cycleTime / 1000}s infinite`;
+                    } else if (pattern.pattern === 'triple-blink' && pattern.timing) {
+                         const cycleTime = (pattern.timing.on + pattern.timing.off) * pattern.timing.pulses + pattern.timing.gap;
+                         ledDiv.style.animation = `tripleBlink ${cycleTime / 1000}s infinite`;
+                    } else if (pattern.pattern === 'fast-blink' && pattern.timing) {
+                         const duration = (pattern.timing.on + pattern.timing.off) / 1000;
+                         ledDiv.style.animation = `blink ${duration}s infinite`;
+                    }
+
+                    // Text info
+                    const textDiv = document.createElement('div');
+                    textDiv.style.cssText = 'flex: 1;';
+                    textDiv.innerHTML = `
+                    <div style="font-weight: 600; color: #2d3748; margin-bottom: 4px;">${pattern.name}</div>
+                    <div style="font-size: 13px; color: #718096;">${pattern.description}</div>
+                `;
+
+                    patternDiv.appendChild(ledDiv);
+                    patternDiv.appendChild(textDiv);
+                    container.appendChild(patternDiv);
+               });
+          }
+
+          // Tab switching function
+          function switchTab(tabName, element) {
+               // Hide all tabs
+               document.querySelectorAll('.tab-content').forEach(tab => {
+                    tab.classList.remove('active');
+               });
+               document.querySelectorAll('.tab').forEach(btn => {
+                    btn.classList.remove('active');
+               });
+
+               // Show selected tab
+               document.getElementById('tab-' + tabName).classList.add('active');
+               if (element) {
+                    element.classList.add('active');
+               } else {
+                    // Fallback: find the button by text content
+                    document.querySelectorAll('.tab').forEach(btn => {
+                         if (btn.textContent.includes(tabName === 'status' ? 'Status' : tabName === 'data' ? 'Data Visualization' : 'Help')) {
+                              btn.classList.add('active');
+                         }
+                    });
+               }
+
+               // Initialize tab content if needed
+               if (tabName === 'data' && !dataChart) {
+                    initChart();
+                    setTimeout(loadLatestCsv, 100);
+               } else if (tabName === 'help' && document.getElementById('neopixelPatterns').children.length === 0) {
+                    generateNeopixelPatterns();
+               }
+          }
+
+          // Add CSS animations for blink patterns
+          const style = document.createElement('style');
+          style.textContent = `
+            @keyframes blink {
+                0%, 50% { opacity: 1; }
+                50.01%, 100% { opacity: 0.1; }
             }
-        }
-        
-        // Cycle through scenarios for demo (every 5 seconds)
-        setInterval(() => {
-            statusScenario = (statusScenario + 1) % mockStatusScenarios.length;
-        }, 5000);
-        
-        // Update status indicators every 2 seconds
-        setInterval(updateStatusIndicators, 2000);
-        
-        // Load config on page load
-        window.onload = function() {
-            loadConfig();
-            updateStatusIndicators();  // Initial update
-            initChart();
-            // Auto-load latest CSV on page load
-            setTimeout(loadLatestCsv, 500);
-        };
-    </script>
+            @keyframes doubleBlink {
+                0%, 4.5% { opacity: 1; }
+                4.51%, 9% { opacity: 0.1; }
+                9.01%, 13.5% { opacity: 1; }
+                13.51%, 18% { opacity: 0.1; }
+                18.01%, 100% { opacity: 0.1; }
+            }
+            @keyframes tripleBlink {
+                0%, 2.5% { opacity: 1; }
+                2.51%, 5% { opacity: 0.1; }
+                5.01%, 7.5% { opacity: 1; }
+                7.51%, 10% { opacity: 0.1; }
+                10.01%, 12.5% { opacity: 1; }
+                12.51%, 100% { opacity: 0.1; }
+            }
+        `;
+          document.head.appendChild(style);
+
+          // Note: ADC/IMU configuration has been moved to the calibration portal (/cal)
+
+          // Load config on page load
+          window.onload = function () {
+               updateStatusIndicators();  // Initial update
+               initChart();
+               generateNeopixelPatterns();  // Generate help section
+               // Auto-load latest CSV on page load
+               setTimeout(loadLatestCsv, 500);
+          };
+     </script>
 </body>
-</html>
 
+</html>
