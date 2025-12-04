@@ -302,4 +302,4 @@ bool adcOptimizeSettings(
     AdcLoadPoint *loadPoints,
     size_t numLoadPoints,
     void (*progressCallback)(size_t current, size_t total, const char* status) = nullptr,
-    AdcOptimizationResult &result = result);
+    AdcOptimizationResult &result);
