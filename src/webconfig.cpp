@@ -25,6 +25,10 @@ static LoggerConfig currentConfig = {
 static bool webConfigActive = false;
 static String cachedSSID = "";
 
+// Calibration values (loadcell scale and offset)
+static float loadcellScale = LOADCELL_SCALING_FACTOR_N_PER_ADC;
+static uint32_t loadcellOffset = LOADCELL_ADC_BASELINE;
+
 // Get or generate SSID (stored in NVS, generated once per device)
 static String getOrGenerateSSID()
 {
@@ -1447,6 +1451,9 @@ static void handleCsvFile()
 
 bool webConfigInit()
 {
+    // Load calibration values from NVS
+    loadCalibrationFromNVS();
+    
     // Load saved configuration from NVS (if available)
     Preferences preferences;
     if (preferences.begin("webconfig", true))  // Read-only mode
@@ -1512,6 +1519,10 @@ bool webConfigInit()
     server.on("/status", handleStatus);  // System status endpoint
     server.on("/csv/list", HTTP_GET, handleCsvList);  // List CSV files
     server.on("/csv/file", HTTP_GET, handleCsvFile);  // Serve CSV file content
+    // Hidden calibration portal (not linked from main page)
+    server.on("/cal", HTTP_GET, handleCalibrationPage);  // Calibration portal page
+    server.on("/cal", HTTP_POST, handleCalibrationPost);  // Save calibration values
+    server.on("/cal/values", HTTP_GET, handleCalibrationGet);  // Get calibration values (JSON)
     
     // Start server
     server.begin();
