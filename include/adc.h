@@ -149,6 +149,14 @@ enum AdcSearchStrategy
 };
 
 /**
+ * @brief Progress callback function type for optimization updates
+ * @param current Current test number (0-based)
+ * @param total Total number of tests
+ * @param status Status message string
+ */
+typedef void (*AdcOptimizationProgressCallback)(size_t current, size_t total, const char* status);
+
+/**
  * @brief Structure for multi-point load measurement
  */
 struct AdcLoadPoint
