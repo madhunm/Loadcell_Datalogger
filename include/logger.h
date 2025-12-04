@@ -162,9 +162,14 @@ void loggerTick();
 bool loggerStopSessionAndFlush();
 
 // Begin converting the most recent session's binary file to CSV.
-// Stage 1: stub that just returns false (not implemented yet).
-// Stage 3: will do real binary->CSV conversion.
+// Returns true if conversion task was started successfully (non-blocking).
+// Use loggerIsCsvConversionComplete() to check when done.
 bool loggerConvertLastSessionToCsv();
+
+// Check if CSV conversion is complete and get result.
+// Returns true if conversion is complete (or never started), false if still in progress.
+// If result pointer is provided, sets it to true on success, false on failure.
+bool loggerIsCsvConversionComplete(bool *result = nullptr);
 
 // Returns true if we have a remembered "last session" (base name / filenames).
 bool loggerHasLastSession();

@@ -9,6 +9,16 @@
 #include "FS.h"
 #include <cstring>
 #include "esp_crc.h"  // For CRC32 calculation
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+// Debug flags
+#ifndef LOGGER_DEBUG
+#define LOGGER_DEBUG 0
+#endif
+
+#define LOG_DEBUG(fmt, ...) do { if (LOGGER_DEBUG) Serial.printf(fmt, ##__VA_ARGS__); } while(0)
+#define LOG_ERROR(fmt, ...) Serial.printf(fmt, ##__VA_ARGS__)  // Always log errors
 
 // Internal logger state
 static LoggerState   s_loggerState        = LOGGER_IDLE;
@@ -32,6 +42,11 @@ static String        s_csvFilename;                 // e.g. "/log/20251204_15301
 
 // Track if we have a "last session" suitable for conversion
 static bool          s_hasLastSession     = false;
+
+// CSV conversion task state
+static TaskHandle_t  s_csvTaskHandle      = nullptr;
+static bool          s_csvConversionInProgress = false;
+static bool          s_csvConversionResult = false;
 
 // Write buffering for efficiency
 static const size_t  WRITE_BUFFER_SIZE    = 8192;   // 8 KB buffer per file
@@ -311,7 +326,7 @@ bool loggerStartSession(const LoggerConfig &config)
     // Ensure SD card is mounted
     if (!sdCardIsMounted())
     {
-        Serial.println("[LOGGER] Cannot start session: SD card is not mounted.");
+        LOG_ERROR("[LOGGER] Cannot start session: SD card is not mounted.\n");
         neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_SD);
         return false;
     }
@@ -328,13 +343,13 @@ bool loggerStartSession(const LoggerConfig &config)
     
     if (freeSpace < minRequiredSpace && freeSpace < oneMinuteSpace)
     {
-        Serial.printf("[LOGGER] ERROR: Insufficient SD card space. Free: %llu bytes, Required: %llu bytes\n",
-                     freeSpace, minRequiredSpace > oneMinuteSpace ? minRequiredSpace : oneMinuteSpace);
+        LOG_ERROR("[LOGGER] ERROR: Insufficient SD card space. Free: %llu bytes, Required: %llu bytes\n",
+                 freeSpace, minRequiredSpace > oneMinuteSpace ? minRequiredSpace : oneMinuteSpace);
         neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_LOW_SPACE);
         return false;
     }
     
-    Serial.printf("[LOGGER] SD card free space: %llu MB\n", freeSpace / (1024ULL * 1024ULL));
+    LOG_DEBUG("[LOGGER] SD card free space: %llu MB\n", freeSpace / (1024ULL * 1024ULL));
 
     // Reset write statistics and CRC32
     memset(&s_writeStats, 0, sizeof(s_writeStats));
@@ -348,7 +363,7 @@ bool loggerStartSession(const LoggerConfig &config)
     RtcDateTime nowRtc;
     if (!rtcGetDateTime(nowRtc))
     {
-        Serial.println("[LOGGER] Cannot read RTC date/time; aborting session start.");
+        LOG_ERROR("[LOGGER] Cannot read RTC date/time; aborting session start.\n");
         return false;
     }
 
@@ -359,27 +374,25 @@ bool loggerStartSession(const LoggerConfig &config)
     String baseName = makeBaseNameFromRtc(nowRtc);
     if (baseName.length() == 0)
     {
-        Serial.println("[LOGGER] Failed to generate base name from RTC.");
+        LOG_ERROR("[LOGGER] Failed to generate base name from RTC.\n");
         return false;
     }
 
-    // Build filenames (use /log directory)
-    String adcFilename = "/log/" + baseName + "_ADC.bin";
-    String imuFilename = "/log/" + baseName + "_IMU.bin";
-    String csvFilename = "/log/" + baseName + ".csv";
+    // Build filenames using stack buffers (avoid String concatenation)
+    char adcFilename[64], imuFilename[64], csvFilename[64];
+    snprintf(adcFilename, sizeof(adcFilename), "/log/%s_ADC.bin", baseName.c_str());
+    snprintf(imuFilename, sizeof(imuFilename), "/log/%s_IMU.bin", baseName.c_str());
+    snprintf(csvFilename, sizeof(csvFilename), "/log/%s.csv", baseName.c_str());
 
-    Serial.print("[LOGGER] Starting session with base name: ");
-    Serial.println(baseName);
-    Serial.print("[LOGGER] ADC log file: ");
-    Serial.println(adcFilename);
-    Serial.print("[LOGGER] IMU log file: ");
-    Serial.println(imuFilename);
+    LOG_DEBUG("[LOGGER] Starting session with base name: %s\n", baseName.c_str());
+    LOG_DEBUG("[LOGGER] ADC log file: %s\n", adcFilename);
+    LOG_DEBUG("[LOGGER] IMU log file: %s\n", imuFilename);
 
     // Open ADC binary file for write (truncate if exists)
     File adcFile = s_fs->open(adcFilename, FILE_WRITE);
     if (!adcFile)
     {
-        Serial.println("[LOGGER] Failed to open ADC binary log file for writing.");
+        LOG_ERROR("[LOGGER] Failed to open ADC binary log file for writing.\n");
         return false;
     }
 
@@ -387,7 +400,7 @@ bool loggerStartSession(const LoggerConfig &config)
     File imuFile = s_fs->open(imuFilename, FILE_WRITE);
     if (!imuFile)
     {
-        Serial.println("[LOGGER] Failed to open IMU binary log file for writing.");
+        LOG_ERROR("[LOGGER] Failed to open IMU binary log file for writing.\n");
         adcFile.close();
         return false;
     }
@@ -406,7 +419,7 @@ bool loggerStartSession(const LoggerConfig &config)
 
     if (adcWritten != sizeof(AdcLogFileHeader))
     {
-        Serial.println("[LOGGER] Failed to write full ADC log header; aborting.");
+        LOG_ERROR("[LOGGER] Failed to write full ADC log header; aborting.\n");
         adcFile.close();
         imuFile.close();
         return false;
@@ -414,7 +427,7 @@ bool loggerStartSession(const LoggerConfig &config)
 
     if (imuWritten != sizeof(ImuLogFileHeader))
     {
-        Serial.println("[LOGGER] Failed to write full IMU log header; aborting.");
+        LOG_ERROR("[LOGGER] Failed to write full IMU log header; aborting.\n");
         adcFile.close();
         imuFile.close();
         return false;
@@ -427,10 +440,11 @@ bool loggerStartSession(const LoggerConfig &config)
     s_startRtc         = nowRtc;
     s_adcIndexAtStart  = adcIndexNow;
 
+    // Store filenames as String (needed for compatibility with existing code)
     s_baseName         = baseName;
-    s_adcFilename      = adcFilename;
-    s_imuFilename      = imuFilename;
-    s_csvFilename      = csvFilename;
+    s_adcFilename      = String(adcFilename);
+    s_imuFilename      = String(imuFilename);
+    s_csvFilename      = String(csvFilename);
 
     s_adcBufferPos     = 0;
     s_imuBufferPos     = 0;
@@ -439,7 +453,7 @@ bool loggerStartSession(const LoggerConfig &config)
     s_hasLastSession   = true;
     s_loggerState      = LOGGER_SESSION_OPEN;
 
-    Serial.println("[LOGGER] Session started and headers written to both files.");
+    LOG_DEBUG("[LOGGER] Session started and headers written to both files.\n");
 
     return true;
 }
@@ -510,7 +524,7 @@ void loggerTick()
             // Check if SD card was removed
             if (!sdCardCheckPresent())
             {
-                Serial.println("[LOGGER] SD card removed - stopping session");
+                LOG_ERROR("[LOGGER] SD card removed - stopping session\n");
                 loggerStopSessionAndFlush();
                 s_loggerState = LOGGER_IDLE;
                 neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_SD);
@@ -520,8 +534,8 @@ void loggerTick()
             // Check for too many consecutive failures
             if (s_writeStats.adcConsecutiveFailures >= MAX_CONSECUTIVE_FAILURES)
             {
-                Serial.printf("[LOGGER] ERROR: Too many consecutive ADC write failures (%u). Stopping session.\n",
-                             s_writeStats.adcConsecutiveFailures);
+                LOG_ERROR("[LOGGER] ERROR: Too many consecutive ADC write failures (%u). Stopping session.\n",
+                         s_writeStats.adcConsecutiveFailures);
                 loggerStopSessionAndFlush();
                 s_loggerState = LOGGER_IDLE;
                 neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_WRITE_FAILURE);
@@ -551,7 +565,7 @@ void loggerTick()
             // Check if SD card was removed
             if (!sdCardCheckPresent())
             {
-                Serial.println("[LOGGER] SD card removed - stopping session");
+                LOG_ERROR("[LOGGER] SD card removed - stopping session\n");
                 loggerStopSessionAndFlush();
                 s_loggerState = LOGGER_IDLE;
                 neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_SD);
@@ -561,8 +575,8 @@ void loggerTick()
             // Check for too many consecutive failures
             if (s_writeStats.imuConsecutiveFailures >= MAX_CONSECUTIVE_FAILURES)
             {
-                Serial.printf("[LOGGER] ERROR: Too many consecutive IMU write failures (%u). Stopping session.\n",
-                             s_writeStats.imuConsecutiveFailures);
+                LOG_ERROR("[LOGGER] ERROR: Too many consecutive IMU write failures (%u). Stopping session.\n",
+                         s_writeStats.imuConsecutiveFailures);
                 loggerStopSessionAndFlush();
                 s_loggerState = LOGGER_IDLE;
                 neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_WRITE_FAILURE);
@@ -585,7 +599,7 @@ void loggerTick()
         // Check for consecutive flush failures
         if (!adcFlushOk && s_writeStats.adcConsecutiveFailures >= MAX_CONSECUTIVE_FAILURES)
         {
-            Serial.printf("[LOGGER] ERROR: Too many consecutive ADC flush failures. Stopping session.\n");
+            LOG_ERROR("[LOGGER] ERROR: Too many consecutive ADC flush failures. Stopping session.\n");
             loggerStopSessionAndFlush();
             s_loggerState = LOGGER_IDLE;
             neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_WRITE_FAILURE);
@@ -594,7 +608,7 @@ void loggerTick()
         
         if (!imuFlushOk && s_writeStats.imuConsecutiveFailures >= MAX_CONSECUTIVE_FAILURES)
         {
-            Serial.printf("[LOGGER] ERROR: Too many consecutive IMU flush failures. Stopping session.\n");
+            LOG_ERROR("[LOGGER] ERROR: Too many consecutive IMU flush failures. Stopping session.\n");
             loggerStopSessionAndFlush();
             s_loggerState = LOGGER_IDLE;
             neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_WRITE_FAILURE);
@@ -613,7 +627,7 @@ bool loggerStopSessionAndFlush()
         return false;
     }
 
-    Serial.println("[LOGGER] Stopping session: draining buffers, flushing, and closing files.");
+    LOG_DEBUG("[LOGGER] Stopping session: draining buffers, flushing, and closing files.\n");
 
     // Final drain of ring buffers before closing
     AdcSample adcSample;
@@ -686,9 +700,9 @@ bool loggerStopSessionAndFlush()
     s_adcBufferPos = 0;
     s_imuBufferPos = 0;
 
-    Serial.println("[LOGGER] Session stopped and files closed.");
-    Serial.printf("[LOGGER] Write statistics: ADC failures=%u, IMU failures=%u\n",
-                 s_writeStats.adcWriteFailures, s_writeStats.imuWriteFailures);
+    LOG_DEBUG("[LOGGER] Session stopped and files closed.\n");
+    LOG_DEBUG("[LOGGER] Write statistics: ADC failures=%u, IMU failures=%u\n",
+             s_writeStats.adcWriteFailures, s_writeStats.imuWriteFailures);
 
     return true;
 }
@@ -698,63 +712,65 @@ LoggerWriteStats loggerGetWriteStats()
     return s_writeStats;
 }
 
-bool loggerConvertLastSessionToCsv()
+// CSV conversion task (runs in separate FreeRTOS task)
+static void csvConversionTask(void *param)
 {
-    if (!s_hasLastSession)
-    {
-        Serial.println("[LOGGER] No last session available to convert.");
-        return false;
-    }
-
-    if (!sdCardIsMounted())
-    {
-        Serial.println("[LOGGER] Cannot convert: SD card is not mounted.");
-        return false;
-    }
-
-    if (s_sessionOpen)
-    {
-        Serial.println("[LOGGER] Cannot convert: session is still open. Stop session first.");
-        return false;
-    }
-
-    s_fs = &sdCardGetFs();
-    s_loggerState = LOGGER_CONVERTING;
-
-    Serial.print("[LOGGER] Converting to CSV: ");
-    Serial.println(s_csvFilename);
-    Serial.print("[LOGGER] Reading ADC file: ");
-    Serial.println(s_adcFilename);
-    Serial.print("[LOGGER] Reading IMU file: ");
-    Serial.println(s_imuFilename);
+    (void)param;
+    
+    LOG_DEBUG("[LOGGER] CSV conversion task started\n");
+    
+    // Copy filenames to stack to avoid String issues
+    char adcFilename[64], imuFilename[64], csvFilename[64];
+    strncpy(adcFilename, s_adcFilename.c_str(), sizeof(adcFilename) - 1);
+    strncpy(imuFilename, s_imuFilename.c_str(), sizeof(imuFilename) - 1);
+    strncpy(csvFilename, s_csvFilename.c_str(), sizeof(csvFilename) - 1);
+    adcFilename[sizeof(adcFilename) - 1] = '\0';
+    imuFilename[sizeof(imuFilename) - 1] = '\0';
+    csvFilename[sizeof(csvFilename) - 1] = '\0';
+    
+    LOG_DEBUG("[LOGGER] Converting to CSV: %s\n", csvFilename);
+    LOG_DEBUG("[LOGGER] Reading ADC file: %s\n", adcFilename);
+    LOG_DEBUG("[LOGGER] Reading IMU file: %s\n", imuFilename);
 
     // Open ADC binary file for reading
-    File adcFile = s_fs->open(s_adcFilename, FILE_READ);
+    File adcFile = s_fs->open(adcFilename, FILE_READ);
     if (!adcFile)
     {
-        Serial.println("[LOGGER] Failed to open ADC binary file for reading.");
-        return false;
+        LOG_ERROR("[LOGGER] Failed to open ADC binary file for reading.\n");
+        s_csvConversionResult = false;
+        s_csvConversionInProgress = false;
+        s_loggerState = LOGGER_IDLE;
+        vTaskDelete(NULL);
+        return;
     }
 
     // Read ADC header
     AdcLogFileHeader adcHdr;
     if (adcFile.read(reinterpret_cast<uint8_t *>(&adcHdr), sizeof(AdcLogFileHeader)) != sizeof(AdcLogFileHeader))
     {
-        Serial.println("[LOGGER] Failed to read ADC file header.");
+        LOG_ERROR("[LOGGER] Failed to read ADC file header.\n");
         adcFile.close();
-        return false;
+        s_csvConversionResult = false;
+        s_csvConversionInProgress = false;
+        s_loggerState = LOGGER_IDLE;
+        vTaskDelete(NULL);
+        return;
     }
 
     // Verify ADC magic
     if (strncmp(adcHdr.magic, "ADCLOGV1", 8) != 0)
     {
-        Serial.println("[LOGGER] Invalid ADC file magic.");
+        LOG_ERROR("[LOGGER] Invalid ADC file magic.\n");
         adcFile.close();
-        return false;
+        s_csvConversionResult = false;
+        s_csvConversionInProgress = false;
+        s_loggerState = LOGGER_IDLE;
+        vTaskDelete(NULL);
+        return;
     }
 
     // Open IMU binary file for reading
-    File imuFile = s_fs->open(s_imuFilename, FILE_READ);
+    File imuFile = s_fs->open(imuFilename, FILE_READ);
     if (!imuFile)
     {
         Serial.println("[LOGGER] Failed to open IMU binary file for reading.");
@@ -766,40 +782,130 @@ bool loggerConvertLastSessionToCsv()
     ImuLogFileHeader imuHdr;
     if (imuFile.read(reinterpret_cast<uint8_t *>(&imuHdr), sizeof(ImuLogFileHeader)) != sizeof(ImuLogFileHeader))
     {
-        Serial.println("[LOGGER] Failed to read IMU file header.");
+        LOG_ERROR("[LOGGER] Failed to read IMU file header.\n");
         adcFile.close();
         imuFile.close();
-        return false;
+        s_csvConversionResult = false;
+        s_csvConversionInProgress = false;
+        s_loggerState = LOGGER_IDLE;
+        vTaskDelete(NULL);
+        return;
     }
 
     // Verify IMU magic
     if (strncmp(imuHdr.magic, "IMULOGV1", 8) != 0)
     {
-        Serial.println("[LOGGER] Invalid IMU file magic.");
+        LOG_ERROR("[LOGGER] Invalid IMU file magic.\n");
         adcFile.close();
         imuFile.close();
-        return false;
+        s_csvConversionResult = false;
+        s_csvConversionInProgress = false;
+        s_loggerState = LOGGER_IDLE;
+        vTaskDelete(NULL);
+        return;
     }
 
-    // Build IMU sample index map: adcSampleIndex -> ImuLogRecord
-    // We'll use a simple approach: read all IMU records and store them in a map
-    // For large files, we might need a more sophisticated approach, but for now this works
-    Serial.println("[LOGGER] Reading IMU records...");
+    // Verify CRC32 checksums for data integrity
+    LOG_DEBUG("[LOGGER] Verifying CRC32 checksums...\n");
     
-    // Simple map: we'll use an array indexed by (adcSampleIndex - adcHdr.adcIndexAtStart)
-    // But this could be huge, so let's use a different approach: forward-fill as we go
+    // Calculate CRC32 for ADC data (skip header)
+    uint32_t calculatedAdcCrc = 0;
+    size_t adcDataSize = adcFile.size() - sizeof(AdcLogFileHeader);
+    adcFile.seek(sizeof(AdcLogFileHeader));  // Skip header
+    const size_t CRC_BUFFER_SIZE = 4096;
+    uint8_t crcBuffer[CRC_BUFFER_SIZE];
+    size_t bytesRead = 0;
+    while (bytesRead < adcDataSize)
+    {
+        size_t toRead = (adcDataSize - bytesRead > CRC_BUFFER_SIZE) ? CRC_BUFFER_SIZE : (adcDataSize - bytesRead);
+        size_t read = adcFile.read(crcBuffer, toRead);
+        if (read == 0) break;
+        calculatedAdcCrc = esp_crc32_le(calculatedAdcCrc, crcBuffer, read);
+        bytesRead += read;
+    }
+    
+    if (calculatedAdcCrc != adcHdr.dataCrc32)
+    {
+        LOG_ERROR("[LOGGER] WARNING: ADC file CRC32 mismatch! Expected: 0x%08X, Calculated: 0x%08X\n",
+                 adcHdr.dataCrc32, calculatedAdcCrc);
+        // Continue with warning - data may be corrupted but user should know
+    }
+    else
+    {
+        LOG_DEBUG("[LOGGER] ADC CRC32 verified: 0x%08X\n", calculatedAdcCrc);
+    }
+    
+    // Calculate CRC32 for IMU data (skip header)
+    uint32_t calculatedImuCrc = 0;
+    size_t imuDataSize = imuFile.size() - sizeof(ImuLogFileHeader);
+    imuFile.seek(sizeof(ImuLogFileHeader));  // Skip header
+    bytesRead = 0;
+    while (bytesRead < imuDataSize)
+    {
+        size_t toRead = (imuDataSize - bytesRead > CRC_BUFFER_SIZE) ? CRC_BUFFER_SIZE : (imuDataSize - bytesRead);
+        size_t read = imuFile.read(crcBuffer, toRead);
+        if (read == 0) break;
+        calculatedImuCrc = esp_crc32_le(calculatedImuCrc, crcBuffer, read);
+        bytesRead += read;
+    }
+    
+    if (calculatedImuCrc != imuHdr.dataCrc32)
+    {
+        LOG_ERROR("[LOGGER] WARNING: IMU file CRC32 mismatch! Expected: 0x%08X, Calculated: 0x%08X\n",
+                 imuHdr.dataCrc32, calculatedImuCrc);
+        // Continue with warning
+    }
+    else
+    {
+        LOG_DEBUG("[LOGGER] IMU CRC32 verified: 0x%08X\n", calculatedImuCrc);
+    }
+    
+    // Reset file positions to start of data
+    adcFile.seek(sizeof(AdcLogFileHeader));
+    imuFile.seek(sizeof(ImuLogFileHeader));
+    
+    // Pre-read IMU records into a buffer to avoid backward seeks
+    // Use a reasonable buffer size (100 records = ~2.8KB)
+    const size_t IMU_BUFFER_SIZE = 100;
+    struct ImuBufferEntry {
+        uint32_t adcSampleIndex;
+        ImuLogRecord record;
+    };
+    ImuBufferEntry imuBuffer[IMU_BUFFER_SIZE];
+    size_t imuBufferCount = 0;
+    size_t imuBufferIndex = 0;
+    
+    LOG_DEBUG("[LOGGER] Pre-reading IMU records into buffer...\n");
+    while (imuBufferCount < IMU_BUFFER_SIZE && imuFile.available() >= sizeof(ImuLogRecord))
+    {
+        if (imuFile.read(reinterpret_cast<uint8_t *>(&imuBuffer[imuBufferCount].record), 
+                         sizeof(ImuLogRecord)) == sizeof(ImuLogRecord))
+        {
+            imuBuffer[imuBufferCount].adcSampleIndex = imuBuffer[imuBufferCount].record.adcSampleIndex;
+            imuBufferCount++;
+        }
+        else
+        {
+            break;
+        }
+    }
+    LOG_DEBUG("[LOGGER] Pre-read %u IMU records\n", imuBufferCount);
     
     // Open CSV file for writing
-    File csvFile = s_fs->open(s_csvFilename, FILE_WRITE);
+    File csvFile = s_fs->open(csvFilename, FILE_WRITE);
     if (!csvFile)
     {
-        Serial.println("[LOGGER] Failed to open CSV file for writing.");
+        LOG_ERROR("[LOGGER] Failed to open CSV file for writing.\n");
         adcFile.close();
         imuFile.close();
-        return false;
+        s_csvConversionResult = false;
+        s_csvConversionInProgress = false;
+        s_loggerState = LOGGER_IDLE;
+        vTaskDelete(NULL);
+        return;
     }
 
-    // Write CSV header
+    // Write CSV header (using single print call)
     csvFile.print("ADC_Index,Time_Seconds,ADC_Code,IMU_Index,AX,AY,AZ,GX,GY,GZ\n");
 
     // Initialize timebase for time calculation
@@ -815,27 +921,34 @@ bool loggerConvertLastSessionToCsv()
     
     rtcInitSampleTimebase(timebase, anchorRtc, adcHdr.adcIndexAtStart, adcHdr.adcSampleRate);
 
-    // Read IMU records into a simple forward-fill buffer
-    // Strategy: Read IMU records sequentially, and forward-fill them to matching ADC samples
-    ImuLogRecord currentImu;
-    bool hasCurrentImu = false;
-    uint32_t currentImuAdcIndex = 0;
+    // Find current IMU record from buffer (forward-fill strategy)
+    ImuLogRecord *currentImu = nullptr;
+    size_t currentImuIdx = 0;
     
-    // Read first IMU record if available
-    if (imuFile.available() >= sizeof(ImuLogRecord))
+    // Find the most recent IMU record that's <= first ADC index
+    for (size_t i = 0; i < imuBufferCount; i++)
     {
-        if (imuFile.read(reinterpret_cast<uint8_t *>(&currentImu), sizeof(ImuLogRecord)) == sizeof(ImuLogRecord))
+        if (imuBuffer[i].adcSampleIndex <= adcHdr.adcIndexAtStart)
         {
-            hasCurrentImu = true;
-            currentImuAdcIndex = currentImu.adcSampleIndex;
+            currentImu = &imuBuffer[i].record;
+            currentImuIdx = i;
+        }
+        else
+        {
+            break;  // Buffer is sorted by adcSampleIndex
         }
     }
 
     // Process ADC records and align with IMU
-    Serial.println("[LOGGER] Processing ADC records and aligning with IMU...");
+    LOG_DEBUG("[LOGGER] Processing ADC records and aligning with IMU...\n");
     uint32_t recordCount = 0;
     const size_t recordSize = sizeof(AdcLogRecord);
+    const size_t RECORDS_PER_YIELD = 1000;  // Process 1000 records, then yield
     uint32_t lastNeopixelUpdate = millis();
+    uint32_t lastProgressLog = millis();
+    
+    // CSV line buffer (optimized: single snprintf call per record)
+    char csvLine[256];
     
     while (adcFile.available() >= recordSize)
     {
@@ -845,84 +958,105 @@ bool loggerConvertLastSessionToCsv()
             break;
         }
 
-        // Advance IMU pointer to find the most recent IMU sample that's <= current ADC index
-        // This implements forward-fill: each ADC sample gets the most recent IMU data
-        // Read ahead to find the latest IMU that applies to this ADC sample
-        while (imuFile.available() >= sizeof(ImuLogRecord))
+        // Advance IMU buffer pointer to find the most recent IMU sample <= current ADC index
+        // First, check if we need to refill the buffer
+        while (currentImuIdx + 1 < imuBufferCount && 
+               imuBuffer[currentImuIdx + 1].adcSampleIndex <= adcRec.index)
         {
-            ImuLogRecord nextImu;
-            size_t pos = imuFile.position();
-            
-            if (imuFile.read(reinterpret_cast<uint8_t *>(&nextImu), sizeof(ImuLogRecord)) != sizeof(ImuLogRecord))
+            currentImuIdx++;
+            currentImu = &imuBuffer[currentImuIdx].record;
+        }
+        
+        // If we've consumed most of the buffer, refill it
+        if (currentImuIdx >= IMU_BUFFER_SIZE - 10 && imuFile.available() >= sizeof(ImuLogRecord))
+        {
+            // Shift remaining entries to start of buffer
+            size_t remaining = imuBufferCount - currentImuIdx;
+            if (remaining > 0 && remaining < IMU_BUFFER_SIZE)
             {
-                break;
+                memmove(imuBuffer, &imuBuffer[currentImuIdx], remaining * sizeof(ImuBufferEntry));
             }
             
-            // If next IMU's adcSampleIndex is <= current ADC index, it's more recent, use it
-            if (nextImu.adcSampleIndex <= adcRec.index)
+            // Read new records to fill buffer
+            size_t toRead = IMU_BUFFER_SIZE - remaining;
+            for (size_t i = 0; i < toRead && imuFile.available() >= sizeof(ImuLogRecord); i++)
             {
-                currentImu = nextImu;
-                currentImuAdcIndex = currentImu.adcSampleIndex;
-                hasCurrentImu = true;
-                // Continue to check if there's an even more recent one
+                if (imuFile.read(reinterpret_cast<uint8_t *>(&imuBuffer[remaining + i].record),
+                                 sizeof(ImuLogRecord)) == sizeof(ImuLogRecord))
+                {
+                    imuBuffer[remaining + i].adcSampleIndex = imuBuffer[remaining + i].record.adcSampleIndex;
+                    imuBufferCount = remaining + i + 1;
+                }
+                else
+                {
+                    break;
+                }
+            }
+            currentImuIdx = 0;
+            if (imuBufferCount > 0)
+            {
+                currentImu = &imuBuffer[0].record;
             }
             else
             {
-                // Next IMU is in the future, rewind and keep current one
-                imuFile.seek(pos);
-                break;
+                currentImu = nullptr;
             }
         }
 
         // Calculate time in seconds
         double timeSeconds = rtcSampleIndexToSeconds(timebase, adcRec.index);
 
-        // Write CSV row
-        csvFile.print(adcRec.index);
-        csvFile.print(",");
-        csvFile.print(timeSeconds, 6);  // 6 decimal places for microsecond precision
-        csvFile.print(",");
-        csvFile.print(adcRec.code);
-        csvFile.print(",");
-
-        // Write IMU data if we have a current IMU sample that matches or precedes this ADC sample
-        if (hasCurrentImu && currentImuAdcIndex <= adcRec.index)
+        // Build CSV line using snprintf (single call instead of multiple prints)
+        if (currentImu && currentImu->adcSampleIndex <= adcRec.index)
         {
-            csvFile.print(currentImu.index);
-            csvFile.print(",");
-            csvFile.print(currentImu.ax, 6);
-            csvFile.print(",");
-            csvFile.print(currentImu.ay, 6);
-            csvFile.print(",");
-            csvFile.print(currentImu.az, 6);
-            csvFile.print(",");
-            csvFile.print(currentImu.gx, 6);
-            csvFile.print(",");
-            csvFile.print(currentImu.gy, 6);
-            csvFile.print(",");
-            csvFile.print(currentImu.gz, 6);
+            snprintf(csvLine, sizeof(csvLine),
+                "%u,%.6f,%ld,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
+                adcRec.index,
+                timeSeconds,
+                adcRec.code,
+                currentImu->index,
+                currentImu->ax,
+                currentImu->ay,
+                currentImu->az,
+                currentImu->gx,
+                currentImu->gy,
+                currentImu->gz);
         }
         else
         {
-            // No IMU data available - leave blank (7 empty fields: IMU_Index, AX, AY, AZ, GX, GY, GZ)
-            csvFile.print(",,,,,,,");  // 7 commas for 7 empty fields
+            // No IMU data available - leave blank
+            snprintf(csvLine, sizeof(csvLine),
+                "%u,%.6f,%ld,0,0.0,0.0,0.0,0.0,0.0,0.0\n",
+                adcRec.index,
+                timeSeconds,
+                adcRec.code);
         }
-        csvFile.print("\n");
+        
+        // Write CSV line (single write instead of 10+ writes)
+        csvFile.print(csvLine);
 
         recordCount++;
         
-        // Update neopixel periodically to keep blinking pattern active during conversion
-        uint32_t now = millis();
-        if (now - lastNeopixelUpdate >= 100)  // Update every 100ms
+        // Incremental processing: yield periodically to allow other tasks
+        if (recordCount % RECORDS_PER_YIELD == 0)
         {
-            neopixelUpdate();
-            lastNeopixelUpdate = now;
-        }
-        
-        // Progress indicator every 100k records
-        if (recordCount % 100000 == 0)
-        {
-            Serial.printf("[LOGGER] Processed %u ADC records...\n", recordCount);
+            // Update neopixel
+            uint32_t now = millis();
+            if (now - lastNeopixelUpdate >= 100)
+            {
+                neopixelUpdate();
+                lastNeopixelUpdate = now;
+            }
+            
+            // Yield to other tasks (web server, button handling, etc.)
+            vTaskDelay(pdMS_TO_TICKS(1));
+            
+            // Progress indicator (rate-limited)
+            if (now - lastProgressLog >= 5000)  // Every 5 seconds
+            {
+                LOG_DEBUG("[LOGGER] Processed %u ADC records...\n", recordCount);
+                lastProgressLog = now;
+            }
         }
     }
 
@@ -931,10 +1065,79 @@ bool loggerConvertLastSessionToCsv()
     adcFile.close();
     imuFile.close();
 
-    Serial.printf("[LOGGER] CSV conversion complete. Wrote %u records to %s\n", recordCount, s_csvFilename.c_str());
+    LOG_DEBUG("[LOGGER] CSV conversion complete. Wrote %u records to %s\n", recordCount, csvFilename);
     
+    s_csvConversionResult = true;
+    s_csvConversionInProgress = false;
     s_loggerState = LOGGER_IDLE;
-    return true;
+    
+    // Task completes and deletes itself
+    vTaskDelete(NULL);
+}
+
+bool loggerConvertLastSessionToCsv()
+{
+    if (!s_hasLastSession)
+    {
+        LOG_ERROR("[LOGGER] No last session available to convert.\n");
+        return false;
+    }
+
+    if (!sdCardIsMounted())
+    {
+        LOG_ERROR("[LOGGER] Cannot convert: SD card is not mounted.\n");
+        return false;
+    }
+
+    if (s_sessionOpen)
+    {
+        LOG_ERROR("[LOGGER] Cannot convert: session is still open. Stop session first.\n");
+        return false;
+    }
+
+    if (s_csvConversionInProgress)
+    {
+        LOG_ERROR("[LOGGER] CSV conversion already in progress.\n");
+        return false;
+    }
+
+    s_fs = &sdCardGetFs();
+    s_loggerState = LOGGER_CONVERTING;
+    s_csvConversionInProgress = true;
+    s_csvConversionResult = false;
+
+    // Create FreeRTOS task for CSV conversion (non-blocking)
+    BaseType_t result = xTaskCreatePinnedToCore(
+        csvConversionTask,
+        "CsvConvert",
+        16384,  // 16KB stack for file operations
+        nullptr,
+        configMAX_PRIORITIES - 3,  // Lower priority than sampling tasks
+        &s_csvTaskHandle,
+        1  // Core 1 (same as main loop)
+    );
+
+    if (result != pdPASS)
+    {
+        LOG_ERROR("[LOGGER] Failed to create CSV conversion task!\n");
+        s_csvConversionInProgress = false;
+        s_loggerState = LOGGER_IDLE;
+        return false;
+    }
+
+    LOG_DEBUG("[LOGGER] CSV conversion task created successfully\n");
+    return true;  // Task is running, result will be available later
+}
+
+// Check if CSV conversion is complete and get result
+bool loggerIsCsvConversionComplete(bool *result)
+{
+    if (!s_csvConversionInProgress)
+    {
+        if (result) *result = s_csvConversionResult;
+        return true;  // Conversion complete (or never started)
+    }
+    return false;  // Still in progress
 }
 
 bool loggerHasLastSession()

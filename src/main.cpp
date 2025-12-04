@@ -281,21 +281,24 @@ void loop()
         break;
 
     case STATE_CONVERTING:
-        // Convert binary logs to CSV
-        // This is a blocking operation, but we update neopixel in the conversion function
-        Serial.println("[CONVERT] Starting CSV conversion...");
-        if (loggerConvertLastSessionToCsv())
+        // Convert binary logs to CSV (non-blocking task)
+        // Check if conversion is complete
+        bool conversionResult;
+        if (loggerIsCsvConversionComplete(&conversionResult))
         {
             systemState = STATE_READY;
-            Serial.println("[STATE] READY: CSV conversion complete. Safe to remove SD card.");
-            neopixelSetPattern(NEOPIXEL_PATTERN_SAFE_TO_REMOVE);
+            if (conversionResult)
+            {
+                Serial.println("[STATE] READY: CSV conversion complete. Safe to remove SD card.");
+                neopixelSetPattern(NEOPIXEL_PATTERN_SAFE_TO_REMOVE);
+            }
+            else
+            {
+                Serial.println("[ERROR] CSV conversion failed. Returning to ready state.");
+                neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_SD);
+            }
         }
-        else
-        {
-            systemState = STATE_READY;
-            Serial.println("[ERROR] CSV conversion failed. Returning to ready state.");
-            neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_SD);
-        }
+        // If conversion still in progress, keep checking (neopixel updates in conversion task)
         break;
     }
 
