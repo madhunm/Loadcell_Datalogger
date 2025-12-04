@@ -1919,12 +1919,19 @@ static void handleAdcOptimize()
         else if (strategyInt == 2) strategy = ADC_SEARCH_GRADIENT;
     }
     
-    // Progress callback for real-time updates (Optimization #3)
-    static String lastProgressStatus = "";
+    // Progress callback for real-time updates (Optimization #3) - SSE support
+    s_progressState.active = true;
+    s_progressState.current = 0;
+    s_progressState.total = 100;
+    s_progressState.status = "Starting optimization...";
+    s_progressState.lastUpdate = millis();
+    
     auto progressCallback = [](size_t current, size_t total, const char* status) {
-        // Store progress for web endpoint (could use WebSocket in future)
-        lastProgressStatus = String(status) + " (" + String(current) + "/" + String(total) + ")";
-        Serial.printf("[ADC_OPT] Progress: %s\n", status);
+        s_progressState.current = current;
+        s_progressState.total = total;
+        s_progressState.status = String(status);
+        s_progressState.lastUpdate = millis();
+        Serial.printf("[ADC_OPT] Progress: %s (%d/%d)\n", status, current, total);
     };
     
     // Perform optimization (adc.h already included at top of file)
