@@ -1,5 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
+#include <cstring>  // For memset
+#include "esp_task_wdt.h"
 
 #include "pins.h"
 #include "gpio.h"
@@ -106,6 +108,25 @@ void setup()
     Serial.println("Loadcell Logger – ESP32-S3 bring-up");
     Serial.println("------------------------------------");
 
+    // Initialize watchdog timer (5 second timeout)
+    // This prevents system hangs and detects infinite loops
+    // Note: ESP32 Arduino framework uses a config struct
+    esp_task_wdt_config_t wdt_config;
+    memset(&wdt_config, 0, sizeof(wdt_config));
+    wdt_config.timeout_ms = 5000;  // 5 second timeout
+    wdt_config.idle_core_mask = 0; // Don't monitor idle tasks
+    wdt_config.trigger_panic = true; // Panic on timeout
+    esp_err_t err = esp_task_wdt_init(&wdt_config);
+    if (err != ESP_OK)
+    {
+        Serial.printf("[INIT] WARNING: Watchdog init failed: %d\n", err);
+    }
+    else
+    {
+        esp_task_wdt_add(NULL);      // Add main loop task to watchdog
+        Serial.println("[INIT] Watchdog timer initialized (5s timeout)");
+    }
+
     // Initialize GPIO pins
     gpioInit();
     Serial.printf("GPIO initialized. I2C started on SDA=%d SCL=%d\n", PIN_I2C_SDA, PIN_I2C_SCL);
@@ -148,6 +169,10 @@ void setup()
 
 void loop()
 {
+    // Reset watchdog timer - must be called regularly to prevent reset
+    // This ensures the main loop is running and not stuck
+    esp_task_wdt_reset();
+
     // Handle web server requests
     webConfigHandleClient();
 
@@ -174,9 +199,25 @@ void loop()
                 // Core split:
                 //   Core 0: ADC + IMU sampling (these tasks)
                 //   Core 1: this loop() + logging
-                adcStartSamplingTask(0);
-                imuStartSamplingTask(0);
-
+                
+                // Start ADC task and verify it was created
+                if (!adcStartSamplingTask(0))
+                {
+                    Serial.println("[ERROR] Failed to create ADC sampling task!");
+                    neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_ADC);
+                    samplingTasksStarted = false; // Allow retry
+                    return; // Don't start logging if tasks failed
+                }
+                
+                // Start IMU task and verify it was created
+                if (!imuStartSamplingTask(0))
+                {
+                    Serial.println("[ERROR] Failed to create IMU sampling task!");
+                    neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_IMU);
+                    samplingTasksStarted = false; // Allow retry
+                    return; // Don't start logging if tasks failed
+                }
+                
                 Serial.println("[TASK] ADC and IMU sampling tasks started on core 0.");
             }
 

@@ -30,7 +30,8 @@ struct ImuSample
 
 // Start IMU sampling task pinned to a given core (core 0 for you).
 // The ADC sampling task should have higher priority; IMU uses medium.
-void imuStartSamplingTask(UBaseType_t coreId = 0);
+// Returns true if task was created successfully, false on failure.
+bool imuStartSamplingTask(UBaseType_t coreId = 0);
 
 // Pop next IMU sample from ring buffer. Returns true if available.
 bool imuGetNextSample(ImuSample &sample);

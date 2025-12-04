@@ -3,6 +3,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_task_wdt.h"
 
 // Global instance
 SparkFun_LSM6DSV16X g_imu;
@@ -164,13 +165,26 @@ static void imuSamplingTask(void *param)
 {
     (void)param;
 
+    // Add this task to watchdog timer
+    esp_task_wdt_add(NULL);
+
     sfe_lsm_data_t accelData;
     sfe_lsm_data_t gyroData;
 
     const TickType_t idleDelayTicks = pdMS_TO_TICKS(1); // ~1 ms
 
+    // Watchdog reset counter (reset every ~1 second)
+    uint32_t lastWdtReset = 0;
+
     for (;;)
     {
+        // Reset watchdog timer periodically (every ~1 second)
+        uint32_t now = millis();
+        if (now - lastWdtReset > 1000)
+        {
+            esp_task_wdt_reset();
+            lastWdtReset = now;
+        }
         if (g_imu.checkStatus())
         {
             if (g_imu.getAccel(&accelData) && g_imu.getGyro(&gyroData))
@@ -199,14 +213,14 @@ static void imuSamplingTask(void *param)
     }
 }
 
-void imuStartSamplingTask(UBaseType_t coreId)
+bool imuStartSamplingTask(UBaseType_t coreId)
 {
     if (imuTaskHandle != nullptr)
     {
-        return; // already running
+        return true; // already running
     }
 
-    xTaskCreatePinnedToCore(
+    BaseType_t result = xTaskCreatePinnedToCore(
         imuSamplingTask,
         "ImuSampling",
         4096, // stack (adjust if needed)
@@ -214,4 +228,13 @@ void imuStartSamplingTask(UBaseType_t coreId)
         configMAX_PRIORITIES - 2, // one step below ADC task
         &imuTaskHandle,
         coreId);
+    
+    if (result != pdPASS)
+    {
+        Serial.println("[IMU] ERROR: Failed to create IMU sampling task!");
+        imuTaskHandle = nullptr;
+        return false;
+    }
+    
+    return true;
 }

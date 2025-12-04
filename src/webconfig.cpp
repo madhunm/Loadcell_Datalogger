@@ -6,6 +6,7 @@
 #include "logger.h"
 #include "adc.h"
 #include "imu.h"
+#include "sdcard.h"
 
 // Web server instance
 static WebServer server(80);
@@ -66,7 +67,8 @@ static String getOrGenerateSSID()
 }
 
 // HTML page for configuration
-static const char* htmlPage = R"(
+// Using custom delimiter to avoid issues with parentheses in JavaScript
+static const char* htmlPage = R"HTML_PAGE(
 <!DOCTYPE html>
 <html>
 <head>
@@ -307,7 +309,7 @@ static const char* htmlPage = R"(
     </script>
 </body>
 </html>
-)";
+)HTML_PAGE";
 
 // Handle root page
 static void handleRoot()
@@ -329,43 +331,127 @@ static void handleConfigGet()
     server.send(200, "application/json", json);
 }
 
+// Validate configuration parameters
+static bool validateConfig(uint32_t adcRate, uint8_t adcGain, uint32_t imuOdr, 
+                           uint16_t imuAccel, uint16_t imuGyro, String &errorMsg)
+{
+    // Validate ADC sample rate (1000-64000 Hz, must be multiple of 1000)
+    if (adcRate < 1000 || adcRate > 64000 || (adcRate % 1000 != 0))
+    {
+        errorMsg = "ADC sample rate must be between 1000-64000 Hz and multiple of 1000";
+        return false;
+    }
+    
+    // Validate ADC PGA gain (0-7)
+    if (adcGain > 7)
+    {
+        errorMsg = "ADC PGA gain must be 0-7 (x1 to x128)";
+        return false;
+    }
+    
+    // Validate IMU ODR (15-960 Hz, common values: 15, 30, 60, 120, 240, 480, 960)
+    if (imuOdr < 15 || imuOdr > 960)
+    {
+        errorMsg = "IMU ODR must be between 15-960 Hz";
+        return false;
+    }
+    
+    // Validate IMU accelerometer range (2, 4, 8, 16 g)
+    if (imuAccel != 2 && imuAccel != 4 && imuAccel != 8 && imuAccel != 16)
+    {
+        errorMsg = "IMU accelerometer range must be 2, 4, 8, or 16 g";
+        return false;
+    }
+    
+    // Validate IMU gyroscope range (125, 250, 500, 1000, 2000 dps)
+    if (imuGyro != 125 && imuGyro != 250 && imuGyro != 500 && 
+        imuGyro != 1000 && imuGyro != 2000)
+    {
+        errorMsg = "IMU gyroscope range must be 125, 250, 500, 1000, or 2000 dps";
+        return false;
+    }
+    
+    return true;
+}
+
 // Handle configuration POST (save new config)
 static void handleConfigPost()
 {
+    // Rate limiting: max 1 request per second
+    static uint32_t lastConfigRequest = 0;
+    uint32_t now = millis();
+    if (now - lastConfigRequest < 1000)
+    {
+        server.send(429, "text/plain", "Too many requests. Please wait 1 second.");
+        return;
+    }
+    lastConfigRequest = now;
+    
+    // Parse and validate parameters
+    uint32_t adcRate = currentConfig.adcSampleRate;
+    uint8_t adcGain = static_cast<uint8_t>(currentConfig.adcPgaGain);
+    uint32_t imuOdr = currentConfig.imuOdr;
+    uint16_t imuAccel = currentConfig.imuAccelRange;
+    uint16_t imuGyro = currentConfig.imuGyroRange;
+    
     if (server.hasArg("adcSampleRate"))
     {
-        currentConfig.adcSampleRate = server.arg("adcSampleRate").toInt();
+        adcRate = server.arg("adcSampleRate").toInt();
     }
     if (server.hasArg("adcPgaGain"))
     {
-        uint8_t gainCode = server.arg("adcPgaGain").toInt();
-        if (gainCode <= 7)
-        {
-            currentConfig.adcPgaGain = static_cast<AdcPgaGain>(gainCode);
-        }
+        adcGain = server.arg("adcPgaGain").toInt();
     }
     if (server.hasArg("imuOdr"))
     {
-        currentConfig.imuOdr = server.arg("imuOdr").toInt();
+        imuOdr = server.arg("imuOdr").toInt();
     }
     if (server.hasArg("imuAccelRange"))
     {
-        currentConfig.imuAccelRange = server.arg("imuAccelRange").toInt();
+        imuAccel = server.arg("imuAccelRange").toInt();
     }
     if (server.hasArg("imuGyroRange"))
     {
-        currentConfig.imuGyroRange = server.arg("imuGyroRange").toInt();
+        imuGyro = server.arg("imuGyroRange").toInt();
     }
     
+    // Validate configuration
+    String errorMsg;
+    if (!validateConfig(adcRate, adcGain, imuOdr, imuAccel, imuGyro, errorMsg))
+    {
+        server.send(400, "text/plain", "Invalid configuration: " + errorMsg);
+        Serial.print("[WEBCONFIG] Configuration validation failed: ");
+        Serial.println(errorMsg);
+        return;
+    }
+    
+    // Apply validated configuration
+    currentConfig.adcSampleRate = adcRate;
+    currentConfig.adcPgaGain = static_cast<AdcPgaGain>(adcGain);
+    currentConfig.imuOdr = imuOdr;
+    currentConfig.imuAccelRange = imuAccel;
+    currentConfig.imuGyroRange = imuGyro;
+    
     server.send(200, "text/plain", "OK");
-    Serial.println("[WEBCONFIG] Configuration updated via web interface");
+    Serial.println("[WEBCONFIG] Configuration updated and validated via web interface");
 }
 
 // Handle data endpoint (for charting)
 // Note: This reads samples directly from sensors to avoid interfering with logging buffer
 static void handleData()
 {
-    String json = "{";
+    // Rate limiting: max 20 requests per second (50ms minimum interval)
+    static uint32_t lastDataRequest = 0;
+    uint32_t now = millis();
+    if (now - lastDataRequest < 50)
+    {
+        server.send(429, "text/plain", "Too many requests");
+        return;
+    }
+    lastDataRequest = now;
+    
+    // Optimize JSON generation using snprintf instead of string concatenation
+    char jsonBuffer[256];
     
     // Read ADC directly (if data is ready)
     int32_t adcCode = 0;
@@ -374,26 +460,93 @@ static void handleData()
     {
         adcReadSample(adcCode);
     }
-    json += "\"adcCode\":" + String(adcCode) + ",";
-    json += "\"adcIndex\":" + String(adcIndex);
     
     // Read IMU directly (non-blocking)
     float ax = 0, ay = 0, az = 0, gx = 0, gy = 0, gz = 0;
-    if (imuRead(ax, ay, az, gx, gy, gz))
+    bool hasImu = imuRead(ax, ay, az, gx, gy, gz);
+    
+    if (hasImu)
     {
-        json += ",\"imu\":{";
-        json += "\"ax\":" + String(ax, 3) + ",";
-        json += "\"ay\":" + String(ay, 3) + ",";
-        json += "\"az\":" + String(az, 3) + ",";
-        json += "\"gx\":" + String(gx, 3) + ",";
-        json += "\"gy\":" + String(gy, 3) + ",";
-        json += "\"gz\":" + String(gz, 3);
-        json += "}";
+        snprintf(jsonBuffer, sizeof(jsonBuffer),
+            "{\"adcCode\":%ld,\"adcIndex\":%lu,\"imu\":{\"ax\":%.3f,\"ay\":%.3f,\"az\":%.3f,\"gx\":%.3f,\"gy\":%.3f,\"gz\":%.3f}}",
+            adcCode, adcIndex, ax, ay, az, gx, gy, gz);
+    }
+    else
+    {
+        snprintf(jsonBuffer, sizeof(jsonBuffer),
+            "{\"adcCode\":%ld,\"adcIndex\":%lu}",
+            adcCode, adcIndex);
     }
     
-    json += "}";
+    server.send(200, "application/json", jsonBuffer);
+}
+
+// Handle system status endpoint
+static void handleStatus()
+{
+    // Rate limiting: max 2 requests per second
+    static uint32_t lastStatusRequest = 0;
+    uint32_t now = millis();
+    if (now - lastStatusRequest < 500)
+    {
+        server.send(429, "text/plain", "Too many requests");
+        return;
+    }
+    lastStatusRequest = now;
     
-    server.send(200, "application/json", json);
+    // Get system statistics
+    size_t adcBuffered = adcGetBufferedSampleCount();
+    size_t adcOverflow = adcGetOverflowCount();
+    size_t imuBuffered = imuGetBufferedSampleCount();
+    size_t imuOverflow = imuGetOverflowCount();
+    uint32_t adcCounter = adcGetSampleCounter();
+    
+    // Get logger state
+    LoggerState loggerState = loggerGetState();
+    bool sessionOpen = loggerIsSessionOpen();
+    
+    // Get SD card status
+    bool sdMounted = sdCardIsMounted();
+    bool sdPresent = sdCardCheckPresent();
+    
+    // Get free heap
+    uint32_t freeHeap = ESP.getFreeHeap();
+    uint32_t totalHeap = ESP.getHeapSize();
+    
+    // Build JSON response
+    char jsonBuffer[512];
+    snprintf(jsonBuffer, sizeof(jsonBuffer),
+        "{"
+        "\"adc\":{"
+            "\"buffered\":%u,"
+            "\"overflow\":%u,"
+            "\"counter\":%lu"
+        "},"
+        "\"imu\":{"
+            "\"buffered\":%u,"
+            "\"overflow\":%u"
+        "},"
+        "\"logger\":{"
+            "\"state\":%d,"
+            "\"sessionOpen\":%s"
+        "},"
+        "\"sd\":{"
+            "\"mounted\":%s,"
+            "\"present\":%s"
+        "},"
+        "\"memory\":{"
+            "\"freeHeap\":%u,"
+            "\"totalHeap\":%u,"
+            "\"freePercent\":%.1f"
+        "}"
+        "}",
+        (unsigned)adcBuffered, (unsigned)adcOverflow, (unsigned long)adcCounter,
+        (unsigned)imuBuffered, (unsigned)imuOverflow,
+        (int)loggerState, sessionOpen ? "true" : "false",
+        sdMounted ? "true" : "false", sdPresent ? "true" : "false",
+        freeHeap, totalHeap, (100.0f * freeHeap / totalHeap));
+    
+    server.send(200, "application/json", jsonBuffer);
 }
 
 bool webConfigInit()
@@ -422,6 +575,7 @@ bool webConfigInit()
     server.on("/config", HTTP_GET, handleConfigGet);
     server.on("/config", HTTP_POST, handleConfigPost);
     server.on("/data", handleData);
+    server.on("/status", handleStatus);  // System status endpoint
     
     // Start server
     server.begin();

@@ -20,3 +20,4 @@ void webConfigSetLoggerConfig(const LoggerConfig &config);
 // Check if web config is active
 bool webConfigIsActive();
 
+

@@ -156,3 +156,4 @@ while (adcGetNextSample(adcSample) && samplesProcessed < MAX_ADC_SAMPLES_PER_TIC
 3. Verify system responsiveness during high-rate logging
 4. Check that samples aren't lost with new limits
 
+

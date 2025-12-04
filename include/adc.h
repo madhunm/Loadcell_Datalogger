@@ -99,7 +99,8 @@ bool adcReadRegister(uint8_t reg, uint8_t &value);
 
 // Start a high-priority sampling task pinned to a given core.
 // This task polls RDYB and pushes samples into a ring buffer.
-void adcStartSamplingTask(UBaseType_t coreId = 0);
+// Returns true if task was created successfully, false on failure.
+bool adcStartSamplingTask(UBaseType_t coreId = 0);
 
 // Pop the next sample from the ring buffer.
 // Returns true if a sample was available.

@@ -2,6 +2,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_task_wdt.h"
 
 // Use the default SPI instance from Arduino core
 static SPIClass &adcSpi = SPI;
@@ -333,6 +334,9 @@ static void adcSamplingTask(void *param)
 {
     (void)param;
 
+    // Add this task to watchdog timer
+    esp_task_wdt_add(NULL);
+
     // Explanation of ADC Busy Wait Issue:
     // When adcIsDataReady() returns false (no new sample ready), the task
     // immediately loops back and checks again without any delay. This creates
@@ -353,8 +357,19 @@ static void adcSamplingTask(void *param)
     // on average, the 64 ksps rate is maintained. The ring buffer ensures no
     // samples are lost during brief delays.
 
+    // Watchdog reset counter (reset every ~1 second)
+    uint32_t lastWdtReset = 0;
+
     for (;;)
     {
+        // Reset watchdog timer periodically (every ~1 second)
+        uint32_t now = millis();
+        if (now - lastWdtReset > 1000)
+        {
+            esp_task_wdt_reset();
+            lastWdtReset = now;
+        }
+
         if (adcIsDataReady())
         {
             int32_t code;
@@ -376,14 +391,14 @@ static void adcSamplingTask(void *param)
     }
 }
 
-void adcStartSamplingTask(UBaseType_t coreId)
+bool adcStartSamplingTask(UBaseType_t coreId)
 {
     if (adcTaskHandle != nullptr)
     {
-        return; // already running
+        return true; // already running
     }
 
-    xTaskCreatePinnedToCore(
+    BaseType_t result = xTaskCreatePinnedToCore(
         adcSamplingTask,
         "AdcSampling",
         4096, // stack (adjust if needed)
@@ -391,4 +406,13 @@ void adcStartSamplingTask(UBaseType_t coreId)
         configMAX_PRIORITIES - 1, // highest priority on that core
         &adcTaskHandle,
         coreId);
+    
+    if (result != pdPASS)
+    {
+        Serial.println("[ADC] ERROR: Failed to create ADC sampling task!");
+        adcTaskHandle = nullptr;
+        return false;
+    }
+    
+    return true;
 }
