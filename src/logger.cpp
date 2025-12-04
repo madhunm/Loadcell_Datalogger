@@ -1036,7 +1036,14 @@ static void csvConversionTask(void *param)
         }
         
         // Write CSV line (single write instead of 10+ writes)
+        // Optimization #5: Use buffered writes for streaming
         csvFile.print(csvLine);
+        
+        // Flush buffer periodically to ensure data is written (every 100 records)
+        if (recordCount % 100 == 0)
+        {
+            csvFile.flush();
+        }
 
         recordCount++;
         

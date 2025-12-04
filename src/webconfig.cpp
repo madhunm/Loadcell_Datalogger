@@ -1898,15 +1898,35 @@ static void handleAdcOptimize()
         return;
     }
     
+    // Get search strategy (default: ADAPTIVE for speed)
+    AdcSearchStrategy strategy = ADC_SEARCH_ADAPTIVE;
+    if (server.hasArg("strategy"))
+    {
+        int strategyInt = server.arg("strategy").toInt();
+        if (strategyInt == 0) strategy = ADC_SEARCH_EXHAUSTIVE;
+        else if (strategyInt == 1) strategy = ADC_SEARCH_ADAPTIVE;
+        else if (strategyInt == 2) strategy = ADC_SEARCH_GRADIENT;
+    }
+    
+    // Progress callback for real-time updates (Optimization #3)
+    static String lastProgressStatus = "";
+    auto progressCallback = [](size_t current, size_t total, const char* status) {
+        // Store progress for web endpoint (could use WebSocket in future)
+        lastProgressStatus = String(status) + " (" + String(current) + "/" + String(total) + ")";
+        Serial.printf("[ADC_OPT] Progress: %s\n", status);
+    };
+    
     // Perform optimization (adc.h already included at top of file)
     AdcOptimizationResult result;
     bool success = adcOptimizeSettings(
         mode,
+        strategy,
         nullptr, 0,  // Use default gains (all 8)
         nullptr, 0,  // Use default rates (common values)
         samplesPerTest,
         baselineAdc,
         nullptr, 0,  // No load points for single-point modes
+        progressCallback,
         result);
     
     if (!success || !result.success)
@@ -2009,16 +2029,52 @@ static void handleAdcOptimizeMultipoint()
         return;
     }
     
+    // Get search strategy (default: ADAPTIVE)
+    AdcSearchStrategy strategy = ADC_SEARCH_ADAPTIVE;
+    if (server.hasArg("strategy"))
+    {
+        int strategyInt = server.arg("strategy").toInt();
+        if (strategyInt == 0) strategy = ADC_SEARCH_EXHAUSTIVE;
+        else if (strategyInt == 1) strategy = ADC_SEARCH_ADAPTIVE;
+        else if (strategyInt == 2) strategy = ADC_SEARCH_GRADIENT;
+    }
+    
+    // Validate load points (Optimization #9)
+    const char *warnings[10];
+    size_t numWarnings = 0;
+    bool valid = adcValidateLoadPoints(loadPoints, numLoadPoints, warnings, 10, numWarnings);
+    
+    if (!valid && numWarnings > 0)
+    {
+        String errorMsg = "Load point validation failed: ";
+        for (size_t i = 0; i < numWarnings && i < 3; i++)  // Limit to 3 warnings
+        {
+            if (i > 0) errorMsg += "; ";
+            errorMsg += warnings[i];
+        }
+        server.send(400, "application/json", "{\"success\":false,\"error\":\"" + errorMsg + "\"}");
+        return;
+    }
+    
+    // Progress callback
+    static String lastProgressStatus = "";
+    auto progressCallback = [](size_t current, size_t total, const char* status) {
+        lastProgressStatus = String(status) + " (" + String(current) + "/" + String(total) + ")";
+        Serial.printf("[ADC_OPT] Progress: %s\n", status);
+    };
+    
     // Perform multi-point optimization
     AdcOptimizationResult result;
     bool success = adcOptimizeSettings(
         ADC_OPT_MODE_SNR_MULTIPOINT,
+        strategy,
         nullptr, 0,  // Use default gains
         nullptr, 0,  // Use default rates
         samplesPerTest,
         0,  // Baseline not used in multi-point mode
         loadPoints,
         numLoadPoints,
+        progressCallback,
         result);
     
     if (!success || !result.success)
@@ -2083,14 +2139,78 @@ static void handleMeasureLoadPoint()
     }
     
     int32_t baselineAdc = 0;
-    if (server.hasArg("baseline"))
+    bool autoDetect = false;
+    
+    if (server.hasArg("autodetect") && server.arg("autodetect").toInt() != 0)
     {
-        baselineAdc = server.arg("baseline").toInt();
+        // Optimization #8: Auto-detect load point
+        autoDetect = true;
+        int32_t previousAdc = 8388608;  // Default baseline
+        if (server.hasArg("previous"))
+        {
+            previousAdc = server.arg("previous").toInt();
+        }
+        
+        int32_t changeThreshold = 1000;  // Default 1000 ADC counts
+        if (server.hasArg("changeThreshold"))
+        {
+            changeThreshold = server.arg("changeThreshold").toInt();
+        }
+        
+        float stabilityThreshold = 100.0f;
+        if (server.hasArg("stabilityThreshold"))
+        {
+            stabilityThreshold = server.arg("stabilityThreshold").toFloat();
+        }
+        
+        // Auto-detect load point
+        int32_t detectedAdc = 0;
+        bool detected = adcAutoDetectLoadPoint(previousAdc, changeThreshold, 
+                                              stabilityThreshold, detectedAdc, 30000);
+        
+        if (!detected)
+        {
+            server.send(408, "application/json", "{\"success\":false,\"error\":\"Load point detection timeout\"}");
+            return;
+        }
+        
+        baselineAdc = detectedAdc;
     }
     else
     {
-        server.send(400, "text/plain", "Missing baseline parameter");
-        return;
+        // Manual baseline
+        if (server.hasArg("baseline"))
+        {
+            baselineAdc = server.arg("baseline").toInt();
+        }
+        else
+        {
+            server.send(400, "text/plain", "Missing baseline parameter");
+            return;
+        }
+    }
+    
+    // Optimization #2: Auto-detect stability before measuring
+    if (!autoDetect && server.hasArg("waitStable") && server.arg("waitStable").toInt() != 0)
+    {
+        int32_t stableAdc = 0;
+        float stabilityThreshold = 100.0f;
+        if (server.hasArg("stabilityThreshold"))
+        {
+            stabilityThreshold = server.arg("stabilityThreshold").toFloat();
+        }
+        
+        // Wait for stability
+        uint32_t startWait = millis();
+        while (millis() - startWait < 10000)  // Max 10 seconds
+        {
+            if (adcCheckLoadStability(200, stabilityThreshold, stableAdc, 2000))
+            {
+                baselineAdc = stableAdc;  // Update to stable value
+                break;
+            }
+            delay(100);
+        }
     }
     
     // Measure SNR at current load
@@ -2106,8 +2226,8 @@ static void handleMeasureLoadPoint()
     // Return result as JSON
     char json[256];
     snprintf(json, sizeof(json),
-        "{\"success\":true,\"snrDb\":%.2f,\"signalRms\":%.2f,\"noiseRms\":%.2f}",
-        snrDb, signalRms, noiseRms);
+        "{\"success\":true,\"snrDb\":%.2f,\"signalRms\":%.2f,\"noiseRms\":%.2f,\"baselineAdc\":%ld}",
+        snrDb, signalRms, noiseRms, baselineAdc);
     
     server.send(200, "application/json", json);
 }

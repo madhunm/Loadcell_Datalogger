@@ -684,10 +684,313 @@ bool adcMeasureSnr(size_t numSamples, int32_t baselineAdc,
     return true;
 }
 
+// ============================================================================
+// LOAD STABILITY DETECTION (Optimization #2)
+// ============================================================================
+
+bool adcCheckLoadStability(size_t numSamples, float stabilityThreshold, 
+                          int32_t &stableValue, uint32_t timeoutMs)
+{
+    if (numSamples == 0 || numSamples > 10000)
+    {
+        return false;  // Sanity check
+    }
+    
+    // Allocate array for samples
+    int32_t *samples = nullptr;
+    bool useHeap = (numSamples > 500);
+    
+    if (useHeap)
+    {
+        samples = (int32_t*)malloc(numSamples * sizeof(int32_t));
+        if (samples == nullptr)
+        {
+            return false;
+        }
+    }
+    else
+    {
+        static int32_t stackSamples[500];
+        samples = stackSamples;
+    }
+    
+    // Collect samples
+    uint32_t startTime = millis();
+    size_t collected = 0;
+    
+    while (collected < numSamples)
+    {
+        if (millis() - startTime > timeoutMs)
+        {
+            if (useHeap) free(samples);
+            return false;  // Timeout
+        }
+        
+        if (adcIsDataReady())
+        {
+            if (adcReadSample(samples[collected]))
+            {
+                collected++;
+            }
+        }
+        else
+        {
+            delayMicroseconds(50);
+        }
+    }
+    
+    // Calculate mean
+    int64_t sum = 0;
+    for (size_t i = 0; i < numSamples; i++)
+    {
+        sum += samples[i];
+    }
+    float mean = static_cast<float>(sum) / static_cast<float>(numSamples);
+    stableValue = static_cast<int32_t>(mean);
+    
+    // Calculate variance
+    float variance = 0.0f;
+    for (size_t i = 0; i < numSamples; i++)
+    {
+        float diff = static_cast<float>(samples[i]) - mean;
+        variance += diff * diff;
+    }
+    variance /= static_cast<float>(numSamples);
+    
+    if (useHeap)
+    {
+        free(samples);
+    }
+    
+    // Check if variance is below threshold (stable)
+    return (variance <= stabilityThreshold);
+}
+
+// ============================================================================
+// LOAD POINT VALIDATION (Optimization #9)
+// ============================================================================
+
+bool adcValidateLoadPoints(const AdcLoadPoint *loadPoints, size_t numLoadPoints,
+                          const char **warnings, size_t maxWarnings, size_t &numWarnings)
+{
+    numWarnings = 0;
+    if (loadPoints == nullptr || numLoadPoints == 0)
+    {
+        return false;
+    }
+    
+    bool isValid = true;
+    
+    // Check 1: All points should be measured
+    for (size_t i = 0; i < numLoadPoints; i++)
+    {
+        if (!loadPoints[i].measured && numWarnings < maxWarnings && warnings)
+        {
+            warnings[numWarnings++] = "Load point not measured";
+            isValid = false;
+        }
+    }
+    
+    // Check 2: Load points should be in order (increasing baseline for loading)
+    for (size_t i = 1; i < numLoadPoints; i++)
+    {
+        if (loadPoints[i].baselineAdc < loadPoints[i-1].baselineAdc && 
+            numWarnings < maxWarnings && warnings)
+        {
+            warnings[numWarnings++] = "Load points not in increasing order";
+            isValid = false;
+        }
+    }
+    
+    // Check 3: SNR values should be reasonable (typically 20-80 dB)
+    for (size_t i = 0; i < numLoadPoints; i++)
+    {
+        if (loadPoints[i].measured)
+        {
+            if (loadPoints[i].snrDb < 10.0f && numWarnings < maxWarnings && warnings)
+            {
+                warnings[numWarnings++] = "Very low SNR detected (check connections)";
+            }
+            if (loadPoints[i].snrDb > 100.0f && numWarnings < maxWarnings && warnings)
+            {
+                warnings[numWarnings++] = "Unusually high SNR (verify measurement)";
+            }
+        }
+    }
+    
+    // Check 4: Weights should sum to approximately 1.0
+    float totalWeight = 0.0f;
+    for (size_t i = 0; i < numLoadPoints; i++)
+    {
+        totalWeight += loadPoints[i].weight;
+    }
+    if (fabsf(totalWeight - 1.0f) > 0.1f && numWarnings < maxWarnings && warnings)
+    {
+        warnings[numWarnings++] = "Load point weights don't sum to 1.0";
+    }
+    
+    // Check 5: SNR should generally increase with load (for most loadcells)
+    int increasingCount = 0;
+    for (size_t i = 1; i < numLoadPoints; i++)
+    {
+        if (loadPoints[i].measured && loadPoints[i-1].measured)
+        {
+            if (loadPoints[i].snrDb > loadPoints[i-1].snrDb)
+            {
+                increasingCount++;
+            }
+        }
+    }
+    if (increasingCount < numLoadPoints / 2 && numWarnings < maxWarnings && warnings)
+    {
+        warnings[numWarnings++] = "SNR not increasing with load (may indicate issues)";
+    }
+    
+    return isValid;
+}
+
+// ============================================================================
+// AUTO-DETECT LOAD POINTS (Optimization #8)
+// ============================================================================
+
+bool adcAutoDetectLoadPoint(int32_t previousAdc, int32_t changeThreshold,
+                           float stabilityThreshold, int32_t &detectedAdc,
+                           uint32_t timeoutMs)
+{
+    uint32_t startTime = millis();
+    const size_t CHECK_SAMPLES = 100;
+    int32_t lastStableValue = previousAdc;
+    
+    while (millis() - startTime < timeoutMs)
+    {
+        // Check if load has changed significantly
+        int32_t currentAdc = 0;
+        if (adcCheckLoadStability(CHECK_SAMPLES, stabilityThreshold, currentAdc, 2000))
+        {
+            int32_t change = abs(currentAdc - previousAdc);
+            
+            if (change >= changeThreshold)
+            {
+                // Load has changed - verify it's stable at new value
+                int32_t stableAdc = 0;
+                if (adcCheckLoadStability(CHECK_SAMPLES * 2, stabilityThreshold, stableAdc, 3000))
+                {
+                    // Verify it's still at the new level
+                    if (abs(stableAdc - currentAdc) < changeThreshold / 2)
+                    {
+                        detectedAdc = stableAdc;
+                        return true;
+                    }
+                }
+            }
+            
+            lastStableValue = currentAdc;
+        }
+        
+        delay(100);  // Check every 100ms
+    }
+    
+    // Timeout - return last stable value
+    detectedAdc = lastStableValue;
+    return false;
+}
+
+// ============================================================================
+// OPTIMIZATION WITH MULTIPLE SEARCH STRATEGIES
+// ============================================================================
+
+// Helper function to test a single combination and return metric
+static float testCombination(
+    AdcOptimizationMode mode,
+    AdcPgaGain gain,
+    uint32_t rate,
+    size_t samplesPerTest,
+    int32_t baselineAdc,
+    AdcLoadPoint *loadPoints,
+    size_t numLoadPoints,
+    bool &success)
+{
+    success = false;
+    
+    // Change settings
+    if (!adcChangeSettings(gain, rate))
+    {
+        return 0.0f;
+    }
+    
+    // Wait for settling
+    delay(200);
+    
+    float metric = 0.0f;
+    
+    if (mode == ADC_OPT_MODE_NOISE_ONLY)
+    {
+        float noise = 0.0f;
+        if (adcMeasureNoise(samplesPerTest, noise, 10000))
+        {
+            metric = noise;
+            success = true;
+        }
+    }
+    else if (mode == ADC_OPT_MODE_SNR_SINGLE)
+    {
+        float signalRms = 0.0f, noiseRms = 0.0f, snrDb = 0.0f;
+        if (adcMeasureSnr(samplesPerTest, baselineAdc, signalRms, noiseRms, snrDb, 10000))
+        {
+            metric = snrDb;
+            success = true;
+        }
+    }
+    else if (mode == ADC_OPT_MODE_SNR_MULTIPOINT)
+    {
+        float weightedSnr = 0.0f;
+        float totalWeight = 0.0f;
+        bool allPointsOk = true;
+        
+        for (size_t p = 0; p < numLoadPoints; p++)
+        {
+            if (!loadPoints[p].measured)
+            {
+                continue;
+            }
+            
+            float signalRms = 0.0f, noiseRms = 0.0f, snrDb = 0.0f;
+            if (adcMeasureSnr(samplesPerTest, loadPoints[p].baselineAdc, 
+                             signalRms, noiseRms, snrDb, 10000))
+            {
+                loadPoints[p].snrDb = snrDb;
+                loadPoints[p].signalRms = signalRms;
+                loadPoints[p].noiseRms = noiseRms;
+                weightedSnr += snrDb * loadPoints[p].weight;
+                totalWeight += loadPoints[p].weight;
+            }
+            else
+            {
+                allPointsOk = false;
+                break;
+            }
+        }
+        
+        if (allPointsOk && totalWeight > 0.0f)
+        {
+            metric = weightedSnr / totalWeight;
+            success = true;
+        }
+    }
+    
+    return metric;
+}
+
 bool adcOptimizeSettings(
+    AdcOptimizationMode mode,
+    AdcSearchStrategy strategy,
     const AdcPgaGain *testGains, size_t numGains,
     const uint32_t *testRates, size_t numRates,
     size_t samplesPerTest,
+    int32_t baselineAdc,
+    AdcLoadPoint *loadPoints,
+    size_t numLoadPoints,
+    AdcOptimizationProgressCallback progressCallback,
     AdcOptimizationResult &result)
 {
     result.success = false;
@@ -712,167 +1015,289 @@ bool adcOptimizeSettings(
     // Stop sampling task to prevent interference
     adcStopSamplingTask();
     
-    float minNoise = 1e9f;  // Large initial value
+    // Initialize best values
+    float bestMetric = (mode == ADC_OPT_MODE_NOISE_ONLY) ? 1e9f : -1e9f;
     AdcPgaGain bestGain = ADC_PGA_GAIN_4;
     uint32_t bestRate = 64000;
+    size_t bestGainIdx = 2;  // Default x4
+    size_t bestRateIdx = 6;  // Default 64kHz
     
     Serial.println("[ADC_OPT] Starting optimization...");
-    Serial.printf("[ADC_OPT] Mode: %s\n", 
+    Serial.printf("[ADC_OPT] Mode: %s, Strategy: %s\n", 
                   mode == ADC_OPT_MODE_NOISE_ONLY ? "NOISE_ONLY" :
                   mode == ADC_OPT_MODE_SNR_SINGLE ? "SNR_SINGLE" :
-                  "SNR_MULTIPOINT");
-    Serial.printf("[ADC_OPT] Testing %d gains x %d rates = %d combinations\n",
-                  gainCount, rateCount, gainCount * rateCount);
+                  "SNR_MULTIPOINT",
+                  strategy == ADC_SEARCH_EXHAUSTIVE ? "EXHAUSTIVE" :
+                  strategy == ADC_SEARCH_ADAPTIVE ? "ADAPTIVE" :
+                  "GRADIENT");
     
-    if (mode == ADC_OPT_MODE_NOISE_ONLY)
+    if (progressCallback)
     {
-        Serial.println("[ADC_OPT] Ensure loadcell is at ZERO FORCE (unloaded)!");
+        char status[64];
+        snprintf(status, sizeof(status), "Starting optimization...");
+        progressCallback(0, 100, status);
     }
-    else if (mode == ADC_OPT_MODE_SNR_SINGLE)
+    
+    // ========================================================================
+    // ADAPTIVE SEARCH STRATEGY (Optimization #1)
+    // ========================================================================
+    if (strategy == ADC_SEARCH_ADAPTIVE)
     {
-        Serial.println("[ADC_OPT] Ensure known load is applied!");
-        Serial.printf("[ADC_OPT] Baseline ADC: %ld\n", baselineAdc);
-    }
-    else if (mode == ADC_OPT_MODE_SNR_MULTIPOINT)
-    {
-        Serial.println("[ADC_OPT] Multi-point optimization with load points:");
-        for (size_t i = 0; i < numLoadPoints; i++)
+        Serial.println("[ADC_OPT] Using ADAPTIVE search (coarse then fine)");
+        
+        // Phase 1: Coarse search (every 2nd gain, every 2nd rate)
+        size_t coarseTotal = ((gainCount + 1) / 2) * ((rateCount + 1) / 2);
+        size_t coarseCurrent = 0;
+        
+        Serial.printf("[ADC_OPT] Phase 1 (Coarse): Testing %d combinations\n", coarseTotal);
+        
+        for (size_t g = 0; g < gainCount; g += 2)  // Every 2nd gain
         {
-            Serial.printf("[ADC_OPT]   Point %d: baseline=%ld, weight=%.2f, measured=%s\n",
-                          i, loadPoints[i].baselineAdc, loadPoints[i].weight,
-                          loadPoints[i].measured ? "YES" : "NO");
+            for (size_t r = 0; r < rateCount; r += 2)  // Every 2nd rate
+            {
+                AdcPgaGain gain = gains[g];
+                uint32_t rate = rates[r];
+                
+                if (progressCallback)
+                {
+                    char status[128];
+                    snprintf(status, sizeof(status), "Coarse: Gain=x%d, Rate=%lu Hz", 
+                            adcPgaGainFactor(gain), rate);
+                    progressCallback(coarseCurrent, coarseTotal, status);
+                }
+                
+                bool success = false;
+                float metric = testCombination(mode, gain, rate, samplesPerTest, 
+                                              baselineAdc, loadPoints, numLoadPoints, success);
+                
+                if (success)
+                {
+                    bool isBetter = (mode == ADC_OPT_MODE_NOISE_ONLY) ? 
+                                   (metric < bestMetric) : (metric > bestMetric);
+                    
+                    if (isBetter)
+                    {
+                        bestMetric = metric;
+                        bestGain = gain;
+                        bestRate = rate;
+                        bestGainIdx = g;
+                        bestRateIdx = r;
+                        
+                        Serial.printf("[ADC_OPT] *** NEW BEST (Coarse): Gain=x%d, Rate=%lu Hz\n",
+                                      adcPgaGainFactor(bestGain), bestRate);
+                    }
+                }
+                
+                coarseCurrent++;
+            }
+        }
+        
+        // Phase 2: Fine search around best point (±1 gain, ±1 rate)
+        Serial.printf("[ADC_OPT] Phase 2 (Fine): Refining around Gain=x%d, Rate=%lu Hz\n",
+                      adcPgaGainFactor(bestGain), bestRate);
+        
+        size_t fineTotal = 9;  // 3x3 grid
+        size_t fineCurrent = 0;
+        
+        for (int gOffset = -1; gOffset <= 1; gOffset++)
+        {
+            int g = static_cast<int>(bestGainIdx) + gOffset;
+            if (g < 0 || g >= static_cast<int>(gainCount)) continue;
+            
+            for (int rOffset = -1; rOffset <= 1; rOffset++)
+            {
+                int r = static_cast<int>(bestRateIdx) + rOffset;
+                if (r < 0 || r >= static_cast<int>(rateCount)) continue;
+                
+                // Skip if we already tested this in coarse phase
+                if ((g % 2 == 0) && (r % 2 == 0)) continue;
+                
+                AdcPgaGain gain = gains[g];
+                uint32_t rate = rates[r];
+                
+                if (progressCallback)
+                {
+                    char status[128];
+                    snprintf(status, sizeof(status), "Fine: Gain=x%d, Rate=%lu Hz", 
+                            adcPgaGainFactor(gain), rate);
+                    progressCallback(coarseTotal + fineCurrent, coarseTotal + fineTotal, status);
+                }
+                
+                bool success = false;
+                float metric = testCombination(mode, gain, rate, samplesPerTest, 
+                                              baselineAdc, loadPoints, numLoadPoints, success);
+                
+                if (success)
+                {
+                    bool isBetter = (mode == ADC_OPT_MODE_NOISE_ONLY) ? 
+                                   (metric < bestMetric) : (metric > bestMetric);
+                    
+                    if (isBetter)
+                    {
+                        bestMetric = metric;
+                        bestGain = gain;
+                        bestRate = rate;
+                        
+                        Serial.printf("[ADC_OPT] *** NEW BEST (Fine): Gain=x%d, Rate=%lu Hz\n",
+                                      adcPgaGainFactor(bestGain), bestRate);
+                    }
+                }
+                
+                fineCurrent++;
+            }
+        }
+        
+        Serial.printf("[ADC_OPT] Adaptive search complete: %d total tests (vs %d exhaustive)\n",
+                      coarseTotal + fineTotal, gainCount * rateCount);
+    }
+    // ========================================================================
+    // GRADIENT-BASED SEARCH (Optimization #10)
+    // ========================================================================
+    else if (strategy == ADC_SEARCH_GRADIENT)
+    {
+        Serial.println("[ADC_OPT] Using GRADIENT search");
+        
+        // Start from reasonable initial guess (middle of range)
+        size_t currentG = gainCount / 2;
+        size_t currentR = rateCount / 2;
+        
+        const float stepSize = 0.5f;  // Step size for gradient
+        const size_t maxIterations = 20;
+        
+        for (size_t iter = 0; iter < maxIterations; iter++)
+        {
+            AdcPgaGain currentGain = gains[currentG];
+            uint32_t currentRate = rates[currentR];
+            
+            if (progressCallback)
+            {
+                char status[128];
+                snprintf(status, sizeof(status), "Gradient iter %d/%d: Gain=x%d, Rate=%lu Hz", 
+                        iter + 1, maxIterations, adcPgaGainFactor(currentGain), currentRate);
+                progressCallback(iter, maxIterations, status);
+            }
+            
+            // Measure current point
+            bool success = false;
+            float currentMetric = testCombination(mode, currentGain, currentRate, samplesPerTest,
+                                                 baselineAdc, loadPoints, numLoadPoints, success);
+            
+            if (!success) break;
+            
+            // Test neighbors to estimate gradient
+            float bestNeighborMetric = currentMetric;
+            int bestGOffset = 0;
+            int bestROffset = 0;
+            
+            for (int gOffset = -1; gOffset <= 1; gOffset++)
+            {
+                for (int rOffset = -1; rOffset <= 1; rOffset++)
+                {
+                    if (gOffset == 0 && rOffset == 0) continue;
+                    
+                    int g = static_cast<int>(currentG) + gOffset;
+                    int r = static_cast<int>(currentR) + rOffset;
+                    
+                    if (g < 0 || g >= static_cast<int>(gainCount)) continue;
+                    if (r < 0 || r >= static_cast<int>(rateCount)) continue;
+                    
+                    AdcPgaGain testGain = gains[g];
+                    uint32_t testRate = rates[r];
+                    
+                    bool neighborSuccess = false;
+                    float neighborMetric = testCombination(mode, testGain, testRate, samplesPerTest,
+                                                          baselineAdc, loadPoints, numLoadPoints, neighborSuccess);
+                    
+                    if (neighborSuccess)
+                    {
+                        bool isBetter = (mode == ADC_OPT_MODE_NOISE_ONLY) ?
+                                       (neighborMetric < bestNeighborMetric) :
+                                       (neighborMetric > bestNeighborMetric);
+                        
+                        if (isBetter)
+                        {
+                            bestNeighborMetric = neighborMetric;
+                            bestGOffset = gOffset;
+                            bestROffset = rOffset;
+                        }
+                    }
+                }
+            }
+            
+            // If no better neighbor found, we're at a local optimum
+            if (bestGOffset == 0 && bestROffset == 0)
+            {
+                Serial.println("[ADC_OPT] Local optimum found, stopping gradient search");
+                bestGain = currentGain;
+                bestRate = currentRate;
+                bestMetric = currentMetric;
+                break;
+            }
+            
+            // Move in direction of best neighbor
+            currentG = static_cast<size_t>(static_cast<int>(currentG) + bestGOffset);
+            currentR = static_cast<size_t>(static_cast<int>(currentR) + bestROffset);
+            
+            // Update best if this is better
+            bool isBetter = (mode == ADC_OPT_MODE_NOISE_ONLY) ?
+                           (bestNeighborMetric < bestMetric) :
+                           (bestNeighborMetric > bestMetric);
+            
+            if (isBetter)
+            {
+                bestMetric = bestNeighborMetric;
+                bestGain = gains[currentG];
+                bestRate = rates[currentR];
+            }
         }
     }
-    
-    float bestMetric = (mode == ADC_OPT_MODE_NOISE_ONLY) ? 1e9f : -1e9f;  // Min noise or max SNR
-    
-    // Test all combinations
-    for (size_t g = 0; g < gainCount; g++)
+    // ========================================================================
+    // EXHAUSTIVE SEARCH (Default)
+    // ========================================================================
+    else  // ADC_SEARCH_EXHAUSTIVE
     {
-        for (size_t r = 0; r < rateCount; r++)
+        Serial.printf("[ADC_OPT] Using EXHAUSTIVE search: Testing %d combinations\n",
+                      gainCount * rateCount);
+        
+        size_t totalCombinations = gainCount * rateCount;
+        size_t current = 0;
+        
+        for (size_t g = 0; g < gainCount; g++)
         {
-            AdcPgaGain gain = gains[g];
-            uint32_t rate = rates[r];
-            
-            Serial.printf("[ADC_OPT] Testing: Gain=x%d, Rate=%lu Hz... ",
-                          adcPgaGainFactor(gain), rate);
-            
-            // Change settings
-            if (!adcChangeSettings(gain, rate))
+            for (size_t r = 0; r < rateCount; r++)
             {
-                Serial.println("FAILED (settings change)");
-                continue;
-            }
-            
-            // Wait for settling (important after changing settings)
-            delay(200);
-            
-            float metric = 0.0f;
-            bool measurementOk = false;
-            
-            if (mode == ADC_OPT_MODE_NOISE_ONLY)
-            {
-                // Measure noise only
-                float noise = 0.0f;
-                if (adcMeasureNoise(samplesPerTest, noise, 10000))
-                {
-                    metric = noise;
-                    measurementOk = true;
-                    Serial.printf("Noise=%.2f ADC counts\n", noise);
-                }
-                else
-                {
-                    Serial.println("FAILED (noise measurement)");
-                }
-            }
-            else if (mode == ADC_OPT_MODE_SNR_SINGLE)
-            {
-                // Measure SNR at single load point
-                float signalRms = 0.0f, noiseRms = 0.0f, snrDb = 0.0f;
-                if (adcMeasureSnr(samplesPerTest, baselineAdc, signalRms, noiseRms, snrDb, 10000))
-                {
-                    metric = snrDb;
-                    measurementOk = true;
-                    Serial.printf("SNR=%.2f dB (Signal=%.2f, Noise=%.2f)\n", snrDb, signalRms, noiseRms);
-                }
-                else
-                {
-                    Serial.println("FAILED (SNR measurement)");
-                }
-            }
-            else if (mode == ADC_OPT_MODE_SNR_MULTIPOINT)
-            {
-                // Measure SNR at multiple load points and calculate weighted average
-                float weightedSnr = 0.0f;
-                float totalWeight = 0.0f;
-                bool allPointsOk = true;
+                AdcPgaGain gain = gains[g];
+                uint32_t rate = rates[r];
                 
-                for (size_t p = 0; p < numLoadPoints; p++)
+                if (progressCallback)
                 {
-                    if (!loadPoints[p].measured)
-                    {
-                        continue;  // Skip unmeasured points
-                    }
+                    char status[128];
+                    snprintf(status, sizeof(status), "Testing: Gain=x%d, Rate=%lu Hz", 
+                            adcPgaGainFactor(gain), rate);
+                    progressCallback(current, totalCombinations, status);
+                }
+                
+                bool success = false;
+                float metric = testCombination(mode, gain, rate, samplesPerTest, 
+                                              baselineAdc, loadPoints, numLoadPoints, success);
+                
+                if (success)
+                {
+                    bool isBetter = (mode == ADC_OPT_MODE_NOISE_ONLY) ? 
+                                   (metric < bestMetric) : (metric > bestMetric);
                     
-                    float signalRms = 0.0f, noiseRms = 0.0f, snrDb = 0.0f;
-                    if (adcMeasureSnr(samplesPerTest, loadPoints[p].baselineAdc, 
-                                     signalRms, noiseRms, snrDb, 10000))
+                    if (isBetter)
                     {
-                        // Store results for this point
-                        loadPoints[p].snrDb = snrDb;
-                        loadPoints[p].signalRms = signalRms;
-                        loadPoints[p].noiseRms = noiseRms;
+                        bestMetric = metric;
+                        bestGain = gain;
+                        bestRate = rate;
                         
-                        // Add to weighted sum
-                        weightedSnr += snrDb * loadPoints[p].weight;
-                        totalWeight += loadPoints[p].weight;
-                    }
-                    else
-                    {
-                        allPointsOk = false;
-                        break;
+                        Serial.printf("[ADC_OPT] *** NEW BEST: Gain=x%d, Rate=%lu Hz\n",
+                                      adcPgaGainFactor(bestGain), bestRate);
                     }
                 }
                 
-                if (allPointsOk && totalWeight > 0.0f)
-                {
-                    metric = weightedSnr / totalWeight;  // Weighted average SNR
-                    measurementOk = true;
-                    Serial.printf("Weighted SNR=%.2f dB (from %d points)\n", metric, numLoadPoints);
-                }
-                else
-                {
-                    Serial.println("FAILED (multi-point SNR measurement)");
-                }
-            }
-            
-            // Check if this is the best so far
-            bool isBetter = false;
-            if (mode == ADC_OPT_MODE_NOISE_ONLY)
-            {
-                isBetter = (metric < bestMetric);  // Lower noise is better
-            }
-            else
-            {
-                isBetter = (metric > bestMetric);  // Higher SNR is better
-            }
-            
-            if (measurementOk && isBetter)
-            {
-                bestMetric = metric;
-                bestGain = gain;
-                bestRate = rate;
-                
-                if (mode == ADC_OPT_MODE_NOISE_ONLY)
-                {
-                    Serial.printf("[ADC_OPT] *** NEW BEST: Gain=x%d, Rate=%lu Hz, Noise=%.2f\n",
-                                  adcPgaGainFactor(bestGain), bestRate, bestMetric);
-                }
-                else
-                {
-                    Serial.printf("[ADC_OPT] *** NEW BEST: Gain=x%d, Rate=%lu Hz, SNR=%.2f dB\n",
-                                  adcPgaGainFactor(bestGain), bestRate, bestMetric);
-                }
+                current++;
             }
         }
     }
@@ -906,7 +1331,14 @@ bool adcOptimizeSettings(
                       adcPgaGainFactor(bestGain), bestRate, bestMetric);
     }
     
-    result.success = true;
+    if (progressCallback)
+    {
+        char status[128];
+        snprintf(status, sizeof(status), "Complete: Gain=x%d, Rate=%lu Hz", 
+                adcPgaGainFactor(bestGain), bestRate);
+        progressCallback(100, 100, status);
+    }
     
+    result.success = true;
     return true;
 }

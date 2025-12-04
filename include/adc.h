@@ -227,6 +227,37 @@ bool adcCheckLoadStability(size_t numSamples, float stabilityThreshold,
                           int32_t &stableValue, uint32_t timeoutMs = 5000);
 
 /**
+ * @brief Validate load points for multi-point optimization (Optimization #9)
+ * @details Checks that load points are in order, have reasonable SNR values,
+ *          and are consistent. Provides warnings and suggestions.
+ * 
+ * @param loadPoints Array of load points to validate
+ * @param numLoadPoints Number of load points
+ * @param warnings Output: Array of warning messages (can be nullptr)
+ * @param maxWarnings Maximum number of warnings to return
+ * @param numWarnings Output: Number of warnings found
+ * @return true if load points are valid, false if critical issues found
+ */
+bool adcValidateLoadPoints(const AdcLoadPoint *loadPoints, size_t numLoadPoints,
+                          const char **warnings, size_t maxWarnings, size_t &numWarnings);
+
+/**
+ * @brief Auto-detect load point changes (Optimization #8)
+ * @details Continuously monitors ADC and detects when load changes significantly.
+ *          Returns when a stable new load point is detected.
+ * 
+ * @param previousAdc Previous ADC value (for comparison)
+ * @param changeThreshold Minimum change to detect (ADC counts, default: 1000)
+ * @param stabilityThreshold Maximum variance for stability (default: 100.0)
+ * @param detectedAdc Output: Detected stable ADC value
+ * @param timeoutMs Maximum time to wait for change (default: 30000ms)
+ * @return true if load point detected, false on timeout
+ */
+bool adcAutoDetectLoadPoint(int32_t previousAdc, int32_t changeThreshold,
+                           float stabilityThreshold, int32_t &detectedAdc,
+                           uint32_t timeoutMs = 30000);
+
+/**
  * @brief Optimize ADC settings by testing combinations
  * @details Tests combinations of PGA gain and sample rate and selects optimal.
  *          Three modes available:
