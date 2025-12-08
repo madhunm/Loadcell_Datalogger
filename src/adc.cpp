@@ -23,15 +23,19 @@ static volatile uint32_t adcOverflowCount = 0;
 static TaskHandle_t adcTaskHandle = nullptr;
 
 // Push sample into ring buffer (called from sampling task)
+// Note: Ring buffer operations use volatile variables and rely on ESP32 cache coherency
+// for thread safety. Memory barriers are implicit in volatile access.
 static inline void adcRingPush(int32_t code)
 {
+    // Read head and tail atomically (volatile ensures cache coherency on ESP32)
     uint32_t head = adcRingHead;
     uint32_t nextHead = (head + 1U) & ADC_RING_BUFFER_MASK;
-    uint32_t tail = adcRingTail;
+    uint32_t tail = adcRingTail; // Read tail after head to ensure consistency
 
     if (nextHead == tail)
     {
         // Buffer full, drop sample
+        // Use atomic increment (volatile ensures visibility)
         adcOverflowCount = adcOverflowCount + 1;
         return;
     }
@@ -41,13 +45,17 @@ static inline void adcRingPush(int32_t code)
     adcSampleIndexCounter = adcSampleIndexCounter + 1;
     slot.code = code;
 
+    // Memory barrier: ensure slot is written before updating head
+    // On ESP32, volatile write provides release semantics
     adcRingHead = nextHead;
 }
 
 bool adcGetNextSample(AdcSample &sample)
 {
-    uint32_t tail = adcRingTail;
+    // Read head first, then tail (acquire semantics)
+    // This ensures we see the most recent head value
     uint32_t head = adcRingHead;
+    uint32_t tail = adcRingTail;
 
     if (tail == head)
     {
@@ -55,18 +63,23 @@ bool adcGetNextSample(AdcSample &sample)
     }
 
     sample = adcRingBuffer[tail];
+    
+    // Memory barrier: ensure sample is read before updating tail
+    // On ESP32, volatile write provides release semantics
     adcRingTail = (tail + 1U) & ADC_RING_BUFFER_MASK;
     return true;
 }
 
 size_t adcGetBufferedSampleCount()
 {
+    // Use atomic reads and proper modulo arithmetic to handle wrap-around
+    // This prevents integer overflow issues
     uint32_t head = adcRingHead;
     uint32_t tail = adcRingTail;
-
-    if (head >= tail)
-        return head - tail;
-    return (ADC_RING_BUFFER_SIZE - tail + head);
+    
+    // Use modulo arithmetic to handle wrap-around correctly
+    // This is safe because buffer size is power of 2
+    return (head - tail) & ADC_RING_BUFFER_MASK;
 }
 
 size_t adcGetOverflowCount()

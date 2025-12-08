@@ -20,4 +20,7 @@ void webConfigSetLoggerConfig(const LoggerConfig &config);
 // Check if web config is active
 bool webConfigIsActive();
 
+// Stream samples from logger (called from loggerTick)
+void streamLoggerSamples(const AdcSample* adc, const ImuSample* imu);
+
 

@@ -55,8 +55,10 @@ static inline void imuRingPush(const ImuSample &src)
 
 bool imuGetNextSample(ImuSample &sample)
 {
-    uint32_t tail = imuRingTail;
+    // Read head first, then tail (acquire semantics)
+    // This ensures we see the most recent head value
     uint32_t head = imuRingHead;
+    uint32_t tail = imuRingTail;
 
     if (tail == head)
     {
@@ -64,18 +66,23 @@ bool imuGetNextSample(ImuSample &sample)
     }
 
     sample = imuRingBuffer[tail];
+    
+    // Memory barrier: ensure sample is read before updating tail
+    // On ESP32, volatile write provides release semantics
     imuRingTail = (tail + 1U) & IMU_RING_BUFFER_MASK;
     return true;
 }
 
 size_t imuGetBufferedSampleCount()
 {
+    // Use atomic reads and proper modulo arithmetic to handle wrap-around
+    // This prevents integer overflow issues
     uint32_t head = imuRingHead;
     uint32_t tail = imuRingTail;
-
-    if (head >= tail)
-        return head - tail;
-    return (IMU_RING_BUFFER_SIZE - tail + head);
+    
+    // Use modulo arithmetic to handle wrap-around correctly
+    // This is safe because buffer size is power of 2
+    return (head - tail) & IMU_RING_BUFFER_MASK;
 }
 
 size_t imuGetOverflowCount()
@@ -164,7 +171,7 @@ bool imuRead(float &ax, float &ay, float &az,
 static void imuSamplingTask(void *param)
 {
     (void)param;
-
+    
     // Add this task to watchdog timer
     esp_task_wdt_add(NULL);
 

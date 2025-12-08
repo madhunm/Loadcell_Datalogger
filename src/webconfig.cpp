@@ -2,8 +2,10 @@
 
 #include <WiFi.h>
 #include <WebServer.h>
+#include <WebSocketsServer.h>
 #include <Preferences.h>
 #include <Update.h>
+#include <ArduinoJson.h>
 #include "logger.h"
 #include "adc.h"
 #include "imu.h"
@@ -14,6 +16,9 @@
 
 // Web server instance
 static WebServer server(80);
+
+// WebSocket server instance for real-time data streaming
+static WebSocketsServer webSocket(81);
 
 // Current logger configuration (can be modified via web interface)
 static LoggerConfig currentConfig = {
@@ -3760,26 +3765,55 @@ static void handleFirmwareUpload()
             return;
         }
         
-        // Get Content-Length from headers if available
-        String contentLengthStr = server.header("Content-Length");
-        if (contentLengthStr.length() > 0)
-        {
-            s_expectedFirmwareSize = contentLengthStr.toInt();
-            Serial.printf("[FIRMWARE] Expected file size: %u bytes\n", s_expectedFirmwareSize);
-        }
-        else
-        {
-            s_expectedFirmwareSize = 0; // Unknown size
-        }
-        
         // Calculate firmware size (ESP32-S3 with 4MB flash, app partition is typically ~1.5MB)
         // Allow up to 2MB for safety
         uint32_t maxSize = 2 * 1024 * 1024; // 2MB
         
+        // Get Content-Length from headers if available and validate
+        String contentLengthStr = server.header("Content-Length");
+        if (contentLengthStr.length() > 0)
+        {
+            uint32_t contentLength = contentLengthStr.toInt();
+            
+            // Validate file size before starting update
+            if (contentLength == 0 || contentLength > maxSize)
+            {
+                Serial.printf("[FIRMWARE] Error: Invalid file size: %u bytes (max: %u)\n", contentLength, maxSize);
+                s_expectedFirmwareSize = 0;
+                return;
+            }
+            
+            s_expectedFirmwareSize = contentLength;
+            Serial.printf("[FIRMWARE] Expected file size: %u bytes (validated)\n", s_expectedFirmwareSize);
+        }
+        else
+        {
+            s_expectedFirmwareSize = 0; // Unknown size
+            Serial.println("[FIRMWARE] Warning: Content-Length header not provided");
+        }
+        
+        // Check battery level if MAX17048 is present (prevent update if battery too low)
+        if (max17048IsPresent())
+        {
+            Max17048Status batteryStatus;
+            if (max17048ReadStatus(&batteryStatus))
+            {
+                const float MIN_BATTERY_FOR_UPDATE = 30.0f; // Require at least 30% battery
+                if (batteryStatus.soc < MIN_BATTERY_FOR_UPDATE)
+                {
+                    Serial.printf("[FIRMWARE] Error: Battery too low for update: %.1f%% (min: %.1f%%)\n", 
+                                 batteryStatus.soc, MIN_BATTERY_FOR_UPDATE);
+                    s_expectedFirmwareSize = 0;
+                    return;
+                }
+                Serial.printf("[FIRMWARE] Battery check passed: %.1f%% SOC\n", batteryStatus.soc);
+            }
+        }
+        
         // Begin OTA update
         if (!Update.begin(maxSize))
         {
-            Serial.println("[FIRMWARE] OTA begin failed");
+            Serial.printf("[FIRMWARE] OTA begin failed: %s\n", Update.errorString());
             s_expectedFirmwareSize = 0;
             return;
         }
@@ -3811,14 +3845,26 @@ static void handleFirmwareUpload()
     }
     else if (upload.status == UPLOAD_FILE_END)
     {
+        // Validate that we received the expected amount of data
+        if (s_expectedFirmwareSize > 0 && upload.totalSize != s_expectedFirmwareSize)
+        {
+            Serial.printf("[FIRMWARE] Error: Size mismatch. Expected: %u, Received: %u\n", 
+                         s_expectedFirmwareSize, upload.totalSize);
+            Update.abort();
+            s_expectedFirmwareSize = 0;
+            return;
+        }
+        
+        // Finalize update with verification
         if (Update.end(true))
         {
             Serial.printf("[FIRMWARE] Update successful: %u bytes\n", upload.totalSize);
-            Serial.println("[FIRMWARE] Rebooting in 2 seconds...");
+            Serial.println("[FIRMWARE] Update verified and committed to flash");
+            Serial.println("[FIRMWARE] Rebooting in 3 seconds to ensure flash write completes...");
         }
         else
         {
-            Serial.println("[FIRMWARE] Update failed: " + String(Update.errorString()));
+            Serial.printf("[FIRMWARE] Update failed: %s\n", Update.errorString());
             Update.abort();
         }
         s_expectedFirmwareSize = 0; // Reset
@@ -3846,8 +3892,14 @@ static void handleFirmwareUploadPost()
         Serial.println("[FIRMWARE] Upload complete, rebooting...");
         server.send(200, "application/json", "{\"success\":true,\"message\":\"Firmware update successful. Device will reboot.\"}");
         
-        // Reboot after short delay to allow response to be sent
-        delay(1000);
+        // Flush serial output to ensure messages are sent
+        Serial.flush();
+        
+        // Reboot after delay to ensure:
+        // 1. HTTP response is fully sent
+        // 2. Flash write operations are complete
+        // 3. All file handles are closed
+        delay(3000); // Increased from 1000ms to 3000ms for safety
         ESP.restart();
     }
 }
@@ -3935,11 +3987,148 @@ bool webConfigInit()
     server.on("/admin/firmware/upload", HTTP_POST, handleFirmwareUploadPost);
     server.onFileUpload(handleFirmwareUpload);
     
-    // Start server
+    // WebSocket event handler for real-time data streaming
+    webSocket.onEvent([](uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+        switch(type) {
+            case WStype_DISCONNECTED:
+                Serial.printf("[WEBSOCKET] Client %u disconnected\n", num);
+                break;
+            case WStype_CONNECTED:
+                {
+                    IPAddress ip = webSocket.remoteIP(num);
+                    Serial.printf("[WEBSOCKET] Client %u connected from %d.%d.%d.%d\n", num, ip[0], ip[1], ip[2], ip[3]);
+                }
+                break;
+            case WStype_TEXT:
+                // Handle incoming messages
+                if (length > 0)
+                {
+                    String message = String((char*)payload);
+                    if (message == "start")
+                    {
+                        s_streamingEnabled = true;
+                        webSocket.sendTXT(num, "{\"status\":\"streaming_started\"}");
+                        Serial.println("[WEBSOCKET] Streaming enabled by client");
+                    }
+                    else if (message == "stop")
+                    {
+                        s_streamingEnabled = false;
+                        webSocket.sendTXT(num, "{\"status\":\"streaming_stopped\"}");
+                        Serial.println("[WEBSOCKET] Streaming disabled by client");
+                    }
+                    else
+                    {
+                        webSocket.sendTXT(num, "{\"status\":\"connected\",\"commands\":[\"start\",\"stop\"]}");
+                    }
+                }
+                break;
+            default:
+                break;
+        }
+    });
+    
+    // Start servers
     server.begin();
+    webSocket.begin();
+    Serial.println("[WEBCONFIG] WebSocket server started on port 81");
     
     webConfigActive = true;
     return true;
+}
+
+// Real-time data streaming state
+static bool s_streamingEnabled = false;
+static uint32_t s_lastStreamTime = 0;
+static const uint32_t STREAM_INTERVAL_MS = 50; // Stream every 50ms (20 Hz update rate)
+
+// Latest samples for streaming (updated by loggerTick)
+static AdcSample s_latestAdcSample;
+static ImuSample s_latestImuSample;
+static bool s_hasLatestAdc = false;
+static bool s_hasLatestImu = false;
+static uint32_t s_lastAdcStreamIndex = 0;
+static uint32_t s_lastImuStreamIndex = 0;
+
+// Stream samples from logger (called from loggerTick after samples are written)
+void streamLoggerSamples(const AdcSample* adc, const ImuSample* imu)
+{
+    // Store latest samples for streaming (non-blocking copy)
+    // This is called from loggerTick() after samples are written to SD,
+    // so it doesn't interfere with logging operations
+    if (adc != nullptr)
+    {
+        s_latestAdcSample = *adc;
+        s_hasLatestAdc = true;
+    }
+    if (imu != nullptr)
+    {
+        s_latestImuSample = *imu;
+        s_hasLatestImu = true;
+    }
+}
+
+// Stream latest samples to WebSocket clients
+static void streamRealtimeData()
+{
+    if (!s_streamingEnabled || webSocket.connectedClients() == 0)
+    {
+        return;
+    }
+    
+    uint32_t now = millis();
+    if ((uint32_t)(now - s_lastStreamTime) < STREAM_INTERVAL_MS)
+    {
+        return; // Not time to stream yet
+    }
+    s_lastStreamTime = now;
+    
+    // Only stream if we have new data
+    bool hasNewData = false;
+    if (s_hasLatestAdc && s_latestAdcSample.index > s_lastAdcStreamIndex)
+    {
+        hasNewData = true;
+        s_lastAdcStreamIndex = s_latestAdcSample.index;
+    }
+    if (s_hasLatestImu && s_latestImuSample.index > s_lastImuStreamIndex)
+    {
+        hasNewData = true;
+        s_lastImuStreamIndex = s_latestImuSample.index;
+    }
+    
+    if (!hasNewData)
+    {
+        return; // No new data to stream
+    }
+    
+    // Build JSON message with latest samples
+    StaticJsonDocument<512> doc;
+    doc["timestamp"] = now;
+    doc["logging"] = loggerIsSessionOpen();
+    
+    if (s_hasLatestAdc)
+    {
+        // Convert ADC code to Force (N) using calibration
+        float forceN = (s_latestAdcSample.code - (int32_t)loadcellOffset) * loadcellScale;
+        doc["adc"]["index"] = s_latestAdcSample.index;
+        doc["adc"]["code"] = s_latestAdcSample.code;
+        doc["adc"]["force"] = forceN;
+    }
+    
+    if (s_hasLatestImu)
+    {
+        doc["imu"]["index"] = s_latestImuSample.index;
+        doc["imu"]["adcIndex"] = s_latestImuSample.adcSampleIndex;
+        doc["imu"]["ax"] = s_latestImuSample.ax;
+        doc["imu"]["ay"] = s_latestImuSample.ay;
+        doc["imu"]["az"] = s_latestImuSample.az;
+        doc["imu"]["gx"] = s_latestImuSample.gx;
+        doc["imu"]["gy"] = s_latestImuSample.gy;
+        doc["imu"]["gz"] = s_latestImuSample.gz;
+    }
+    
+    String jsonStr;
+    serializeJson(doc, jsonStr);
+    webSocket.broadcastTXT(jsonStr);
 }
 
 void webConfigHandleClient()
@@ -3947,6 +4136,10 @@ void webConfigHandleClient()
     if (webConfigActive)
     {
         server.handleClient();
+        webSocket.loop(); // Handle WebSocket events
+        
+        // Stream real-time data if enabled
+        streamRealtimeData();
     }
 }
 

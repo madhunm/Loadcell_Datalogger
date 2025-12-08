@@ -280,11 +280,13 @@ void loop()
     rtcHandleUpdate();
 
     // ---- Battery monitoring (check every 5 seconds) ----
+    // Note: millis() wraps after ~49 days, but unsigned subtraction handles this correctly
+    // (millis() - lastBatteryCheck) will work correctly even after wrap-around
     static uint32_t lastBatteryCheck = 0;
     static const uint32_t BATTERY_CHECK_INTERVAL_MS = 5000; // Check every 5 seconds
     static NeopixelPattern lastNonBatteryPattern = NEOPIXEL_PATTERN_OFF;
     
-    if (millis() - lastBatteryCheck >= BATTERY_CHECK_INTERVAL_MS)
+    if ((uint32_t)(millis() - lastBatteryCheck) >= BATTERY_CHECK_INTERVAL_MS)
     {
         lastBatteryCheck = millis();
         

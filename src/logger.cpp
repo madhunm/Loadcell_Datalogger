@@ -5,6 +5,7 @@
 #include "adc.h"
 #include "imu.h"
 #include "neopixel.h"
+#include "webconfig.h"
 
 #include "FS.h"
 #include <cstring>
@@ -378,11 +379,30 @@ bool loggerStartSession(const LoggerConfig &config)
         return false;
     }
 
+    // Validate baseName length to prevent buffer overflow
+    // Format: "/log/YYYYMMDD_HHMMSS_ADC.bin" = 32 chars max
+    // Format: "/log/YYYYMMDD_HHMMSS_IMU.bin" = 32 chars max  
+    // Format: "/log/YYYYMMDD_HHMMSS.csv" = 27 chars max
+    // baseName is "YYYYMMDD_HHMMSS" = 15 chars, so 64-byte buffer is safe
+    // But validate to be extra safe
+    if (baseName.length() > 20) // Allow some margin beyond expected 15 chars
+    {
+        LOG_ERROR("[LOGGER] ERROR: Base name too long: %s (max 20 chars)\n", baseName.c_str());
+        return false;
+    }
+    
     // Build filenames using stack buffers (avoid String concatenation)
     char adcFilename[64], imuFilename[64], csvFilename[64];
-    snprintf(adcFilename, sizeof(adcFilename), "/log/%s_ADC.bin", baseName.c_str());
-    snprintf(imuFilename, sizeof(imuFilename), "/log/%s_IMU.bin", baseName.c_str());
-    snprintf(csvFilename, sizeof(csvFilename), "/log/%s.csv", baseName.c_str());
+    int adcLen = snprintf(adcFilename, sizeof(adcFilename), "/log/%s_ADC.bin", baseName.c_str());
+    int imuLen = snprintf(imuFilename, sizeof(imuFilename), "/log/%s_IMU.bin", baseName.c_str());
+    int csvLen = snprintf(csvFilename, sizeof(csvFilename), "/log/%s.csv", baseName.c_str());
+    
+    // Verify snprintf didn't truncate (shouldn't happen with validation above)
+    if (adcLen >= sizeof(adcFilename) || imuLen >= sizeof(imuFilename) || csvLen >= sizeof(csvFilename))
+    {
+        LOG_ERROR("[LOGGER] ERROR: Filename buffer overflow detected\n");
+        return false;
+    }
 
     LOG_DEBUG("[LOGGER] Starting session with base name: %s\n", baseName.c_str());
     LOG_DEBUG("[LOGGER] ADC log file: %s\n", adcFilename);
@@ -513,8 +533,15 @@ void loggerTick()
     // Drain ADC ring buffer and write records (with limit)
     AdcSample adcSample;
     size_t adcSamplesProcessed = 0;
+    AdcSample latestAdcForStreaming; // Track latest for streaming
+    bool hasLatestAdc = false;
+    
     while (adcGetNextSample(adcSample) && adcSamplesProcessed < MAX_ADC_SAMPLES_PER_TICK)
     {
+        // Track latest sample for real-time streaming
+        latestAdcForStreaming = adcSample;
+        hasLatestAdc = true;
+        
         AdcLogRecord record;
         record.index = adcSample.index;
         record.code  = adcSample.code;
@@ -548,8 +575,15 @@ void loggerTick()
     // Drain IMU ring buffer and write records (with limit)
     ImuSample imuSample;
     size_t imuSamplesProcessed = 0;
+    ImuSample latestImuForStreaming; // Track latest for streaming
+    bool hasLatestImu = false;
+    
     while (imuGetNextSample(imuSample) && imuSamplesProcessed < MAX_IMU_SAMPLES_PER_TICK)
     {
+        // Track latest sample for real-time streaming
+        latestImuForStreaming = imuSample;
+        hasLatestImu = true;
+        
         ImuLogRecord record;
         record.index         = imuSample.index;
         record.adcSampleIndex = imuSample.adcSampleIndex;
@@ -584,6 +618,14 @@ void loggerTick()
             }
         }
         imuSamplesProcessed++;
+    }
+    
+    // Stream latest samples to WebSocket clients (non-blocking, only if enabled)
+    // This happens after samples are written to SD, so it doesn't interfere with logging
+    if (hasLatestAdc || hasLatestImu)
+    {
+        streamLoggerSamples(hasLatestAdc ? &latestAdcForStreaming : nullptr,
+                          hasLatestImu ? &latestImuForStreaming : nullptr);
     }
 
     // Periodic flush (every ~100ms worth of data or when buffers are getting full)
@@ -716,6 +758,12 @@ LoggerWriteStats loggerGetWriteStats()
 static void csvConversionTask(void *param)
 {
     (void)param;
+    
+    // Add this task to watchdog timer
+    esp_task_wdt_add(NULL);
+    
+    // Watchdog reset counter (reset every ~5 seconds for long-running task)
+    uint32_t lastWdtReset = 0;
     
     LOG_DEBUG("[LOGGER] CSV conversion task started\n");
     
