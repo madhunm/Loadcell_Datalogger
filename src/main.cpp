@@ -62,26 +62,85 @@ SystemState systemGetState()
  * 
  * @return true if all peripherals initialized successfully, false otherwise
  */
+// Retry helper function with exponential backoff (inline retry logic)
+static bool retryInit(const char* name, bool result, NeopixelPattern errorPattern, uint32_t maxRetries = 3)
+{
+    if (result) return true;
+    
+    uint32_t delayMs = 100;  // Start with 100ms delay
+    for (uint32_t attempt = 1; attempt < maxRetries; attempt++)
+    {
+        Serial.printf("[INIT] %s initialization failed, retrying in %u ms... (attempt %u/%u)\n", 
+                     name, delayMs, attempt + 1, maxRetries);
+        delay(delayMs);
+        delayMs *= 2;  // Exponential backoff: 100ms, 200ms, 400ms
+        // Note: Actual retry is done by caller
+    }
+    
+    Serial.printf("[INIT] %s initialization failed after %u attempts\n", name, maxRetries);
+    neopixelSetPattern(errorPattern);
+    return false;
+}
+
 bool initPeripherals()
 {
-    // Try each peripheral in turn; on failure, select a per-peripheral
+    // Try each peripheral in turn with retry logic; on failure, select a per-peripheral
     // error pattern and return false immediately.
 
-    if (!sdCardInit())
+    // SD Card with retry
+    uint32_t delayMs = 100;
+    bool sdOk = false;
+    for (uint32_t attempt = 0; attempt < 3; attempt++)
+    {
+        if (sdCardInit())
+        {
+            sdOk = true;
+            if (attempt > 0) Serial.printf("[INIT] SD card initialized after %u retries\n", attempt);
+            break;
+        }
+        if (attempt < 2) { delay(delayMs); delayMs *= 2; }
+    }
+    if (!sdOk)
     {
         Serial.println("[INIT] SD card initialisation failed.");
         neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_SD);
         return false;
     }
 
-    if (!imuInit(Wire))
+    // IMU with retry
+    delayMs = 100;
+    bool imuOk = false;
+    for (uint32_t attempt = 0; attempt < 3; attempt++)
+    {
+        if (imuInit(Wire))
+        {
+            imuOk = true;
+            if (attempt > 0) Serial.printf("[INIT] IMU initialized after %u retries\n", attempt);
+            break;
+        }
+        if (attempt < 2) { delay(delayMs); delayMs *= 2; }
+    }
+    if (!imuOk)
     {
         Serial.println("[INIT] IMU initialisation failed.");
         neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_IMU);
         return false;
     }
 
-    if (!rtcInit())
+    // RTC with retry
+    delayMs = 100;
+    bool rtcOk = false;
+    for (uint32_t attempt = 0; attempt < 3; attempt++)
+    {
+        if (rtcInit())
+        {
+            rtcOk = true;
+            if (attempt > 0) Serial.printf("[INIT] RTC initialized after %u retries\n", attempt);
+            break;
+        }
+        if (attempt < 2) { delay(delayMs); delayMs *= 2; }
+    }
+    if (!rtcOk)
     {
         Serial.println("[INIT] RTC initialisation failed.");
         neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_RTC);
@@ -101,15 +160,40 @@ bool initPeripherals()
     // For bring-up, choose a safe gain like x4 or x8
     AdcPgaGain gain = ADC_PGA_GAIN_4;
 
-    if (!adcInit(gain))
+    // ADC Init with retry
+    delayMs = 100;
+    bool adcOk = false;
+    for (uint32_t attempt = 0; attempt < 3; attempt++)
+    {
+        if (adcInit(gain))
+        {
+            adcOk = true;
+            if (attempt > 0) Serial.printf("[INIT] ADC initialized after %u retries\n", attempt);
+            break;
+        }
+        if (attempt < 2) { delay(delayMs); delayMs *= 2; }
+    }
+    if (!adcOk)
     {
         Serial.println("[INIT][ADC] adcInit() (including self-cal) failed.");
         neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_ADC);
         return false;
     }
 
-    // Start continuous conversion at 64 ksps (RATE code 0x0F)
-    if (!adcStartContinuous(0x0F))
+    // Start continuous conversion at 64 ksps (RATE code 0x0F) with retry
+    delayMs = 100;
+    bool adcStartOk = false;
+    for (uint32_t attempt = 0; attempt < 3; attempt++)
+    {
+        if (adcStartContinuous(0x0F))
+        {
+            adcStartOk = true;
+            if (attempt > 0) Serial.printf("[INIT] ADC continuous started after %u retries\n", attempt);
+            break;
+        }
+        if (attempt < 2) { delay(delayMs); delayMs *= 2; }
+    }
+    if (!adcStartOk)
     {
         Serial.println("[INIT][ADC] adcStartContinuous() failed.");
         neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_ADC);

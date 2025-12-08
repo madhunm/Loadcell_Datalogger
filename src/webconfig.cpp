@@ -6,6 +6,7 @@
 #include <Preferences.h>
 #include <Update.h>
 #include <ArduinoJson.h>
+#include <math.h>  // For sqrtf()
 #include "logger.h"
 #include "adc.h"
 #include "imu.h"
@@ -47,6 +48,97 @@ struct ProgressState
     uint32_t lastUpdate;
 };
 static ProgressState s_progressState = {0, 0, "", false, 0};
+
+// Real-time data streaming state (declared early for WebSocket handler)
+static bool s_streamingEnabled = false;
+static uint32_t s_lastStreamTime = 0;
+static const uint32_t STREAM_INTERVAL_MS = 50; // Stream every 50ms (20 Hz update rate)
+
+// Latest samples for streaming (updated by loggerTick)
+static AdcSample s_latestAdcSample;
+static ImuSample s_latestImuSample;
+static bool s_hasLatestAdc = false;
+static bool s_hasLatestImu = false;
+static uint32_t s_lastAdcStreamIndex = 0;
+static uint32_t s_lastImuStreamIndex = 0;
+
+// Remote logging control handlers (forward declarations)
+static void handleLoggingStart();
+static void handleLoggingStop();
+static void handleLoggingStatus();
+static void handleStatistics();
+static void handleErrors();
+
+// Error tracking system
+struct ErrorEntry
+{
+    uint32_t timestamp;
+    String code;
+    String message;
+    String recovery;
+};
+
+static ErrorEntry errorHistory[10];  // Store last 10 errors
+static size_t errorHistoryCount = 0;
+static size_t errorHistoryIndex = 0;
+
+// Add error to history
+static void addError(const char* code, const char* message, const char* recovery)
+{
+    errorHistory[errorHistoryIndex].timestamp = millis();
+    errorHistory[errorHistoryIndex].code = code;
+    errorHistory[errorHistoryIndex].message = message;
+    errorHistory[errorHistoryIndex].recovery = recovery;
+    errorHistoryIndex = (errorHistoryIndex + 1) % 10;
+    if (errorHistoryCount < 10) errorHistoryCount++;
+}
+
+// Error handler endpoint
+static void handleErrors()
+{
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    StaticJsonDocument<2048> doc;
+    #pragma GCC diagnostic pop
+    
+    JsonArray errors = doc.createNestedArray("errors");
+    
+    // Add current system errors
+    if (!sdCardIsMounted())
+    {
+        JsonObject err = errors.createNestedObject();
+        err["code"] = "SD_NOT_MOUNTED";
+        err["message"] = "SD card is not mounted";
+        err["recovery"] = "Check SD card connection and try restarting the device";
+        err["severity"] = "critical";
+    }
+    
+    LoggerWriteStats stats = loggerGetWriteStats();
+    if (stats.adcConsecutiveFailures > 5)
+    {
+        JsonObject err = errors.createNestedObject();
+        err["code"] = "ADC_WRITE_FAILURES";
+        err["message"] = "Multiple ADC write failures detected";
+        err["recovery"] = "Check SD card health and free space";
+        err["severity"] = "warning";
+    }
+    
+    // Add error history
+    JsonArray history = doc.createNestedArray("history");
+    for (size_t i = 0; i < errorHistoryCount; i++)
+    {
+        size_t idx = (errorHistoryIndex - errorHistoryCount + i + 10) % 10;
+        JsonObject err = history.createNestedObject();
+        err["timestamp"] = errorHistory[idx].timestamp;
+        err["code"] = errorHistory[idx].code;
+        err["message"] = errorHistory[idx].message;
+        err["recovery"] = errorHistory[idx].recovery;
+    }
+    
+    String jsonStr;
+    serializeJson(doc, jsonStr);
+    server.send(200, "application/json", jsonStr);
+}
 
 // Get or generate SSID (stored in NVS, generated once per device)
 static String getOrGenerateSSID()
@@ -524,6 +616,36 @@ static const char* htmlPage = R"HTML_PAGE(
                         <div class="progress-bar" style="margin-top: 8px;">
                             <div id="batteryProgressBar" class="progress-fill" style="width: 0%;"></div>
                         </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Real-time Data Visualization Section -->
+            <div class="section" style="margin-top: 30px;">
+                <h2>
+                    📊 Real-time Data Stream
+                    <button id="streamToggle" onclick="toggleStreaming()" style="float: right; padding: 8px 16px; background: #e2e8f0; color: #4a5568; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Start Streaming</button>
+                </h2>
+                <div id="streamStatus" style="margin-bottom: 15px; padding: 10px; border-radius: 6px; background: #f7fafc; font-size: 13px; color: #4a5568;">
+                    <span id="streamStatusText">Streaming: OFF</span>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px;">
+                    <div>
+                        <h3 style="font-size: 16px; margin-bottom: 10px;">Force (N)</h3>
+                        <canvas id="forceChart" style="max-height: 300px;"></canvas>
+                    </div>
+                    <div>
+                        <h3 style="font-size: 16px; margin-bottom: 10px;">IMU Acceleration (g)</h3>
+                        <canvas id="imuChart" style="max-height: 300px;"></canvas>
+                    </div>
+                </div>
+                <div style="margin-top: 20px; padding: 15px; background: #f7fafc; border-radius: 6px; font-size: 12px; color: #4a5568;">
+                    <strong>Latest Values:</strong>
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-top: 10px;">
+                        <div><strong>Force:</strong> <span id="latestForce">-</span> N</div>
+                        <div><strong>ADC Code:</strong> <span id="latestAdcCode">-</span></div>
+                        <div><strong>Accel Z:</strong> <span id="latestAccelZ">-</span> g</div>
+                        <div><strong>Sample Index:</strong> <span id="latestIndex">-</span></div>
                     </div>
                 </div>
             </div>
@@ -1823,10 +1945,152 @@ static const char* htmlPage = R"HTML_PAGE(
             }
         }
         
+        // Real-time data streaming via WebSocket
+        let ws = null;
+        let streamingEnabled = false;
+        let forceChart = null;
+        let imuChart = null;
+        const MAX_CHART_POINTS = 200;
+        let forceData = { labels: [], datasets: [{ label: 'Force (N)', data: [], borderColor: '#667eea', backgroundColor: 'rgba(102, 126, 234, 0.1)', tension: 0.4 }] };
+        let imuData = { labels: [], datasets: [
+            { label: 'AX', data: [], borderColor: '#f56565', backgroundColor: 'rgba(245, 101, 101, 0.1)', tension: 0.4 },
+            { label: 'AY', data: [], borderColor: '#48bb78', backgroundColor: 'rgba(72, 187, 120, 0.1)', tension: 0.4 },
+            { label: 'AZ', data: [], borderColor: '#4299e1', backgroundColor: 'rgba(66, 153, 225, 0.1)', tension: 0.4 }
+        ]};
+        
+        function initRealtimeCharts() {
+            const forceCtx = document.getElementById('forceChart');
+            const imuCtx = document.getElementById('imuChart');
+            if (!forceCtx || !imuCtx) return;
+            
+            forceChart = new Chart(forceCtx, {
+                type: 'line',
+                data: forceData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    scales: { y: { beginAtZero: false } },
+                    plugins: { legend: { display: true } }
+                }
+            });
+            
+            imuChart = new Chart(imuCtx, {
+                type: 'line',
+                data: imuData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    scales: { y: { beginAtZero: false } },
+                    plugins: { legend: { display: true } }
+                }
+            });
+        }
+        
+        function toggleStreaming() {
+            if (streamingEnabled) {
+                stopStreaming();
+            } else {
+                startStreaming();
+            }
+        }
+        
+        function startStreaming() {
+            if (ws && ws.readyState === WebSocket.OPEN) return;
+            
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = protocol + '//' + window.location.hostname + ':81';
+            
+            try {
+                ws = new WebSocket(wsUrl);
+                
+                ws.onopen = function() {
+                    streamingEnabled = true;
+                    document.getElementById('streamToggle').textContent = 'Stop Streaming';
+                    document.getElementById('streamStatusText').textContent = 'Streaming: ON (Connected)';
+                    document.getElementById('streamStatus').style.background = '#c6f6d5';
+                    ws.send('start');
+                    if (!forceChart || !imuChart) initRealtimeCharts();
+                };
+                
+                ws.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        updateRealtimeCharts(data);
+                    } catch (e) {
+                        console.error('Error parsing WebSocket data:', e);
+                    }
+                };
+                
+                ws.onerror = function(error) {
+                    console.error('WebSocket error:', error);
+                    document.getElementById('streamStatusText').textContent = 'Streaming: ERROR';
+                    document.getElementById('streamStatus').style.background = '#fed7d7';
+                };
+                
+                ws.onclose = function() {
+                    streamingEnabled = false;
+                    document.getElementById('streamToggle').textContent = 'Start Streaming';
+                    document.getElementById('streamStatusText').textContent = 'Streaming: OFF (Disconnected)';
+                    document.getElementById('streamStatus').style.background = '#f7fafc';
+                };
+            } catch (e) {
+                console.error('Error creating WebSocket:', e);
+                alert('Failed to connect to WebSocket server. Make sure the device is running.');
+            }
+        }
+        
+        function stopStreaming() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            streamingEnabled = false;
+        }
+        
+        function updateRealtimeCharts(data) {
+            if (!forceChart || !imuChart) return;
+            
+            const now = new Date().toLocaleTimeString();
+            
+            if (data.adc) {
+                const force = data.adc.force || 0;
+                forceData.labels.push(now);
+                forceData.datasets[0].data.push(force);
+                if (forceData.labels.length > MAX_CHART_POINTS) {
+                    forceData.labels.shift();
+                    forceData.datasets[0].data.shift();
+                }
+                forceChart.update('none');
+                
+                document.getElementById('latestForce').textContent = force.toFixed(2);
+                document.getElementById('latestAdcCode').textContent = data.adc.code || '-';
+                document.getElementById('latestIndex').textContent = data.adc.index || '-';
+            }
+            
+            if (data.imu) {
+                imuData.labels.push(now);
+                imuData.datasets[0].data.push(data.imu.ax || 0);
+                imuData.datasets[1].data.push(data.imu.ay || 0);
+                imuData.datasets[2].data.push(data.imu.az || 0);
+                if (imuData.labels.length > MAX_CHART_POINTS) {
+                    imuData.labels.shift();
+                    imuData.datasets[0].data.shift();
+                    imuData.datasets[1].data.shift();
+                    imuData.datasets[2].data.shift();
+                }
+                imuChart.update('none');
+                
+                document.getElementById('latestAccelZ').textContent = (data.imu.az || 0).toFixed(3);
+            }
+        }
+        
         // Load config on page load
         window.onload = function() {
             updateStatusIndicators();  // Initial update (includes battery status)
             initChart();
+            initRealtimeCharts();  // Initialize real-time charts
             generateNeopixelPatterns();  // Generate help section
             loadCalibration();  // Load calibration values
             // Auto-load latest CSV on page load
@@ -3995,8 +4259,10 @@ bool webConfigInit()
     
     // Statistics and analytics endpoints
     server.on("/api/statistics", HTTP_GET, handleStatistics);
+    server.on("/api/errors", HTTP_GET, handleErrors);
     
     // WebSocket event handler for real-time data streaming
+    // Note: Lambda captures s_streamingEnabled by reference (it's a static variable at file scope)
     webSocket.onEvent([](uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
         switch(type) {
             case WStype_DISCONNECTED:
@@ -4015,13 +4281,13 @@ bool webConfigInit()
                     String message = String((char*)payload);
                     if (message == "start")
                     {
-                        s_streamingEnabled = true;
+                        s_streamingEnabled = true;  // Access static variable at file scope
                         webSocket.sendTXT(num, "{\"status\":\"streaming_started\"}");
                         Serial.println("[WEBSOCKET] Streaming enabled by client");
                     }
                     else if (message == "stop")
                     {
-                        s_streamingEnabled = false;
+                        s_streamingEnabled = false;  // Access static variable at file scope
                         webSocket.sendTXT(num, "{\"status\":\"streaming_stopped\"}");
                         Serial.println("[WEBSOCKET] Streaming disabled by client");
                     }
@@ -4044,19 +4310,6 @@ bool webConfigInit()
     webConfigActive = true;
     return true;
 }
-
-// Real-time data streaming state
-static bool s_streamingEnabled = false;
-static uint32_t s_lastStreamTime = 0;
-static const uint32_t STREAM_INTERVAL_MS = 50; // Stream every 50ms (20 Hz update rate)
-
-// Latest samples for streaming (updated by loggerTick)
-static AdcSample s_latestAdcSample;
-static ImuSample s_latestImuSample;
-static bool s_hasLatestAdc = false;
-static bool s_hasLatestImu = false;
-static uint32_t s_lastAdcStreamIndex = 0;
-static uint32_t s_lastImuStreamIndex = 0;
 
 // Stream samples from logger (called from loggerTick after samples are written)
 void streamLoggerSamples(const AdcSample* adc, const ImuSample* imu)
@@ -4110,7 +4363,12 @@ static void streamRealtimeData()
     }
     
     // Build JSON message with latest samples
+    // ArduinoJson v7: StaticJsonDocument is deprecated but still functional
+    // Suppress deprecation warning - will migrate to JsonDocument in future update
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     StaticJsonDocument<512> doc;
+    #pragma GCC diagnostic pop
     doc["timestamp"] = now;
     doc["logging"] = loggerIsSessionOpen();
     
@@ -4138,6 +4396,167 @@ static void streamRealtimeData()
     String jsonStr;
     serializeJson(doc, jsonStr);
     webSocket.broadcastTXT(jsonStr);
+}
+
+// Remote logging control handlers
+static void handleLoggingStart()
+{
+    // Rate limiting
+    static uint32_t lastRequest = 0;
+    uint32_t now = millis();
+    if (now - lastRequest < 500)
+    {
+        server.send(429, "application/json", "{\"success\":false,\"error\":\"Too many requests\"}");
+        return;
+    }
+    lastRequest = now;
+    
+    SystemState currentState = systemGetState();
+    if (currentState == STATE_READY)
+    {
+        g_remoteLoggingAction = true; // start
+        g_remoteLoggingRequest = true;
+        server.send(200, "application/json", "{\"success\":true,\"message\":\"Logging start requested\"}");
+        Serial.println("[WEBCONFIG] Remote logging start requested");
+    }
+    else
+    {
+        String errorMsg = "System not in READY state (current: ";
+        switch(currentState)
+        {
+            case STATE_INIT: errorMsg += "INIT"; break;
+            case STATE_LOGGING: errorMsg += "LOGGING"; break;
+            case STATE_CONVERTING: errorMsg += "CONVERTING"; break;
+            default: errorMsg += "UNKNOWN"; break;
+        }
+        errorMsg += "). Please wait for system to be ready.";
+        server.send(400, "application/json", "{\"success\":false,\"error\":\"" + errorMsg + "\"}");
+    }
+}
+
+static void handleLoggingStop()
+{
+    // Rate limiting
+    static uint32_t lastRequest = 0;
+    uint32_t now = millis();
+    if (now - lastRequest < 500)
+    {
+        server.send(429, "application/json", "{\"success\":false,\"error\":\"Too many requests\"}");
+        return;
+    }
+    lastRequest = now;
+    
+    SystemState currentState = systemGetState();
+    if (currentState == STATE_LOGGING)
+    {
+        g_remoteLoggingAction = false; // stop
+        g_remoteLoggingRequest = true;
+        server.send(200, "application/json", "{\"success\":true,\"message\":\"Logging stop requested\"}");
+        Serial.println("[WEBCONFIG] Remote logging stop requested");
+    }
+    else
+    {
+        String errorMsg = "System not in LOGGING state (current: ";
+        switch(currentState)
+        {
+            case STATE_INIT: errorMsg += "INIT"; break;
+            case STATE_READY: errorMsg += "READY"; break;
+            case STATE_CONVERTING: errorMsg += "CONVERTING"; break;
+            default: errorMsg += "UNKNOWN"; break;
+        }
+        errorMsg += "). Cannot stop logging when not active.";
+        server.send(400, "application/json", "{\"success\":false,\"error\":\"" + errorMsg + "\"}");
+    }
+}
+
+static void handleLoggingStatus()
+{
+    SystemState currentState = systemGetState();
+    String json = "{";
+    json += "\"state\":";
+    switch(currentState)
+    {
+        case STATE_INIT: json += "0"; break;
+        case STATE_READY: json += "1"; break;
+        case STATE_LOGGING: json += "2"; break;
+        case STATE_CONVERTING: json += "3"; break;
+        default: json += "-1"; break;
+    }
+    json += ",\"stateName\":\"";
+    switch(currentState)
+    {
+        case STATE_INIT: json += "INIT"; break;
+        case STATE_READY: json += "READY"; break;
+        case STATE_LOGGING: json += "LOGGING"; break;
+        case STATE_CONVERTING: json += "CONVERTING"; break;
+        default: json += "UNKNOWN"; break;
+    }
+    json += "\",\"sessionOpen\":" + String(loggerIsSessionOpen() ? "true" : "false");
+    json += ",\"loggerState\":" + String((int)loggerGetState());
+    
+    // Add enhanced status information
+    if (loggerIsSessionOpen())
+    {
+        LoggerWriteStats stats = loggerGetWriteStats();
+        json += ",\"recordsWritten\":{";
+        json += "\"adc\":" + String(stats.adcRecordsWritten) + ",";
+        json += "\"imu\":" + String(stats.imuRecordsWritten);
+        json += "}";
+        json += ",\"writeFailures\":{";
+        json += "\"adc\":" + String(stats.adcWriteFailures) + ",";
+        json += "\"imu\":" + String(stats.imuWriteFailures);
+        json += "}";
+    }
+    
+    json += "}";
+    
+    server.send(200, "application/json", json);
+}
+
+// Statistics handler with min/max/avg/std dev calculation
+// Note: Uses latest streaming samples to avoid consuming ring buffer samples
+static void handleStatistics()
+{
+    // Use static variables already declared in file scope
+    
+    // Build JSON response with available statistics
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    StaticJsonDocument<1024> doc;
+    #pragma GCC diagnostic pop
+    
+    doc["adc"]["buffered"] = adcGetBufferedSampleCount();
+    doc["adc"]["overflow"] = adcGetOverflowCount();
+    doc["adc"]["totalSamples"] = adcGetSampleCounter();
+    if (s_hasLatestAdc)
+    {
+        doc["adc"]["latestCode"] = s_latestAdcSample.code;
+        doc["adc"]["latestIndex"] = s_latestAdcSample.index;
+    }
+    
+    doc["imu"]["buffered"] = imuGetBufferedSampleCount();
+    doc["imu"]["overflow"] = imuGetOverflowCount();
+    if (s_hasLatestImu)
+    {
+        doc["imu"]["latestAx"] = s_latestImuSample.ax;
+        doc["imu"]["latestAy"] = s_latestImuSample.ay;
+        doc["imu"]["latestAz"] = s_latestImuSample.az;
+        float mag = sqrtf(s_latestImuSample.ax * s_latestImuSample.ax + 
+                         s_latestImuSample.ay * s_latestImuSample.ay + 
+                         s_latestImuSample.az * s_latestImuSample.az);
+        doc["imu"]["latestMagnitude"] = mag;
+    }
+    
+    // Get write statistics
+    LoggerWriteStats writeStats = loggerGetWriteStats();
+    doc["logger"]["adcRecordsWritten"] = writeStats.adcRecordsWritten;
+    doc["logger"]["imuRecordsWritten"] = writeStats.imuRecordsWritten;
+    doc["logger"]["adcWriteFailures"] = writeStats.adcWriteFailures;
+    doc["logger"]["imuWriteFailures"] = writeStats.imuWriteFailures;
+    
+    String jsonStr;
+    serializeJson(doc, jsonStr);
+    server.send(200, "application/json", jsonStr);
 }
 
 void webConfigHandleClient()

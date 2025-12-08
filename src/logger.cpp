@@ -50,8 +50,8 @@ static TaskHandle_t  s_csvTaskHandle      = nullptr;
 static bool          s_csvConversionInProgress = false;
 static bool          s_csvConversionResult = false;
 
-// Write buffering for efficiency
-static const size_t  WRITE_BUFFER_SIZE    = 8192;   // 8 KB buffer per file
+// Write buffering for efficiency (optimized: increased from 8KB to 16KB)
+static const size_t  WRITE_BUFFER_SIZE    = 16384;  // 16 KB buffer per file (larger for better performance)
 static uint8_t       s_adcWriteBuffer[WRITE_BUFFER_SIZE];
 static uint8_t       s_imuWriteBuffer[WRITE_BUFFER_SIZE];
 static size_t        s_adcBufferPos        = 0;
@@ -250,16 +250,19 @@ static bool flushImuBuffer()
     return false;
 }
 
-// Write ADC record to buffer (flushes buffer if full)
+// Write ADC record to buffer (flushes buffer if full or >75% full for adaptive flush)
 // Returns true on success, false on failure
 static bool writeAdcRecord(const AdcLogRecord &record)
 {
     const size_t recordSize = sizeof(AdcLogRecord);
     
-    // Check if record fits in remaining buffer space
-    if (s_adcBufferPos + recordSize > WRITE_BUFFER_SIZE)
+    // Adaptive flush: flush when buffer > 75% full (optimization for better performance)
+    const size_t FLUSH_THRESHOLD = (WRITE_BUFFER_SIZE * 3) / 4;  // 75% of buffer size
+    
+    // Check if record fits in remaining buffer space OR if buffer is >75% full
+    if (s_adcBufferPos + recordSize > WRITE_BUFFER_SIZE || s_adcBufferPos >= FLUSH_THRESHOLD)
     {
-        // Buffer full - flush it first
+        // Buffer full or near-full - flush it first
         if (!flushAdcBuffer())
         {
             return false;  // Flush failed
@@ -274,16 +277,19 @@ static bool writeAdcRecord(const AdcLogRecord &record)
     return true;
 }
 
-// Write IMU record to buffer (flushes buffer if full)
+// Write IMU record to buffer (flushes buffer if full or >75% full for adaptive flush)
 // Returns true on success, false on failure
 static bool writeImuRecord(const ImuLogRecord &record)
 {
     const size_t recordSize = sizeof(ImuLogRecord);
     
-    // Check if record fits in remaining buffer space
-    if (s_imuBufferPos + recordSize > WRITE_BUFFER_SIZE)
+    // Adaptive flush: flush when buffer > 75% full (optimization for better performance)
+    const size_t FLUSH_THRESHOLD = (WRITE_BUFFER_SIZE * 3) / 4;  // 75% of buffer size
+    
+    // Check if record fits in remaining buffer space OR if buffer is >75% full
+    if (s_imuBufferPos + recordSize > WRITE_BUFFER_SIZE || s_imuBufferPos >= FLUSH_THRESHOLD)
     {
-        // Buffer full - flush it first
+        // Buffer full or near-full - flush it first
         if (!flushImuBuffer())
         {
             return false;  // Flush failed
