@@ -101,12 +101,14 @@ static void handleErrors()
     StaticJsonDocument<2048> doc;
     #pragma GCC diagnostic pop
     
-    JsonArray errors = doc.createNestedArray("errors");
+    // Use ArduinoJson v7 API: doc[key].to<JsonArray>() instead of createNestedArray()
+    JsonArray errors = doc["errors"].to<JsonArray>();
     
     // Add current system errors
     if (!sdCardIsMounted())
     {
-        JsonObject err = errors.createNestedObject();
+        // Use add<JsonObject>() instead of createNestedObject()
+        JsonObject err = errors.add<JsonObject>();
         err["code"] = "SD_NOT_MOUNTED";
         err["message"] = "SD card is not mounted";
         err["recovery"] = "Check SD card connection and try restarting the device";
@@ -116,19 +118,21 @@ static void handleErrors()
     LoggerWriteStats stats = loggerGetWriteStats();
     if (stats.adcConsecutiveFailures > 5)
     {
-        JsonObject err = errors.createNestedObject();
+        // Use add<JsonObject>() instead of createNestedObject()
+        JsonObject err = errors.add<JsonObject>();
         err["code"] = "ADC_WRITE_FAILURES";
         err["message"] = "Multiple ADC write failures detected";
         err["recovery"] = "Check SD card health and free space";
         err["severity"] = "warning";
     }
     
-    // Add error history
-    JsonArray history = doc.createNestedArray("history");
+    // Add error history - use doc[key].to<JsonArray>() instead of createNestedArray()
+    JsonArray history = doc["history"].to<JsonArray>();
     for (size_t i = 0; i < errorHistoryCount; i++)
     {
         size_t idx = (errorHistoryIndex - errorHistoryCount + i + 10) % 10;
-        JsonObject err = history.createNestedObject();
+        // Use add<JsonObject>() instead of createNestedObject()
+        JsonObject err = history.add<JsonObject>();
         err["timestamp"] = errorHistory[idx].timestamp;
         err["code"] = errorHistory[idx].code;
         err["message"] = errorHistory[idx].message;
