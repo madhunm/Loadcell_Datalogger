@@ -288,8 +288,8 @@ bool adcAutoDetectLoadPoint(int32_t previousAdc, int32_t changeThreshold,
  * @param baselineAdc Baseline ADC value at zero force (required for SNR modes, ignored for NOISE_ONLY)
  * @param loadPoints Array of load points for multi-point optimization (required for SNR_MULTIPOINT, nullptr otherwise)
  * @param numLoadPoints Number of load points (required for SNR_MULTIPOINT, 0 otherwise)
- * @param result Output: optimal settings and performance metric
  * @param progressCallback Optional callback for progress updates (nullptr = no updates)
+ * @param result Output: optimal settings and performance metric
  * @return true if optimization completed, false on error
  */
 bool adcOptimizeSettings(
@@ -301,5 +301,5 @@ bool adcOptimizeSettings(
     int32_t baselineAdc,
     AdcLoadPoint *loadPoints,
     size_t numLoadPoints,
-    AdcOptimizationResult &result,
-    void (*progressCallback)(size_t current, size_t total, const char* status) = nullptr);
+    void (*progressCallback)(size_t current, size_t total, const char* status),
+    AdcOptimizationResult &result);

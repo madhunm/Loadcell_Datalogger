@@ -25,6 +25,7 @@
 #include "adc.h"
 #include "logger.h"
 #include "webconfig.h"
+#include "max17048.h"
 
 // ============================================================================
 // SYSTEM STATE MACHINE
@@ -113,6 +114,21 @@ bool initPeripherals()
         Serial.println("[INIT][ADC] adcStartContinuous() failed.");
         neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_ADC);
         return false;
+    }
+
+    // Initialize MAX17048 fuel gauge (non-critical - don't fail if not present)
+    if (max17048Init(Wire))
+    {
+        Max17048Status batteryStatus;
+        if (max17048ReadStatus(&batteryStatus))
+        {
+            Serial.printf("[MAX17048] Battery: %.2fV, SOC: %.1f%%, Charge Rate: %.2f%%/hr\n",
+                         batteryStatus.voltage, batteryStatus.soc, batteryStatus.chargeRate);
+        }
+    }
+    else
+    {
+        Serial.println("[MAX17048] Fuel gauge not detected (optional component)");
     }
 
     return true;
@@ -262,6 +278,62 @@ void loop()
 
     // Service RTC 1 Hz update interrupt (if a tick occurred)
     rtcHandleUpdate();
+
+    // ---- Battery monitoring (check every 5 seconds) ----
+    static uint32_t lastBatteryCheck = 0;
+    static const uint32_t BATTERY_CHECK_INTERVAL_MS = 5000; // Check every 5 seconds
+    static NeopixelPattern lastNonBatteryPattern = NEOPIXEL_PATTERN_OFF;
+    
+    if (millis() - lastBatteryCheck >= BATTERY_CHECK_INTERVAL_MS)
+    {
+        lastBatteryCheck = millis();
+        
+        // Only check battery if MAX17048 is present
+        if (max17048IsPresent())
+        {
+            Max17048Status batteryStatus;
+            if (max17048ReadStatus(&batteryStatus))
+            {
+                // Low battery threshold: < 20% SOC
+                const float LOW_BATTERY_THRESHOLD = 20.0f;
+                
+                // Check if battery is low
+                if (batteryStatus.soc < LOW_BATTERY_THRESHOLD)
+                {
+                    // Only set low battery pattern if we're not in a critical error state
+                    // Critical errors take priority over low battery warning
+                    NeopixelPattern currentPattern = neopixelGetCurrentPattern();
+                    if (currentPattern != NEOPIXEL_PATTERN_ERROR_SD &&
+                        currentPattern != NEOPIXEL_PATTERN_ERROR_RTC &&
+                        currentPattern != NEOPIXEL_PATTERN_ERROR_IMU &&
+                        currentPattern != NEOPIXEL_PATTERN_ERROR_ADC &&
+                        currentPattern != NEOPIXEL_PATTERN_ERROR_WRITE_FAILURE &&
+                        currentPattern != NEOPIXEL_PATTERN_ERROR_BUFFER_FULL)
+                    {
+                        // Save the current pattern if it's not already low battery
+                        if (currentPattern != NEOPIXEL_PATTERN_LOW_BATTERY)
+                        {
+                            lastNonBatteryPattern = currentPattern;
+                        }
+                        neopixelSetPattern(NEOPIXEL_PATTERN_LOW_BATTERY);
+                        Serial.printf("[BATTERY] Low battery warning: %.1f%% SOC, %.2fV\n", 
+                                     batteryStatus.soc, batteryStatus.voltage);
+                    }
+                }
+                else
+                {
+                    // Battery is OK - restore previous pattern if we were showing low battery
+                    NeopixelPattern currentPattern = neopixelGetCurrentPattern();
+                    if (currentPattern == NEOPIXEL_PATTERN_LOW_BATTERY)
+                    {
+                        neopixelSetPattern(lastNonBatteryPattern);
+                        Serial.printf("[BATTERY] Battery OK: %.1f%% SOC, %.2fV\n", 
+                                     batteryStatus.soc, batteryStatus.voltage);
+                    }
+                }
+            }
+        }
+    }
 
     // ---- Logstart button handling ----
     static bool lastButton = false;

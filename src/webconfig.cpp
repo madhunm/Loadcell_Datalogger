@@ -3,12 +3,14 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Preferences.h>
+#include <Update.h>
 #include "logger.h"
 #include "adc.h"
 #include "imu.h"
 #include "sdcard.h"
 #include "FS.h"
 #include "loadcell_cal.h"
+#include "max17048.h"
 
 // Web server instance
 static WebServer server(80);
@@ -460,6 +462,7 @@ static const char* htmlPage = R"HTML_PAGE(
         <div class="tabs">
             <button class="tab active" onclick="switchTab('status', this)">📈 Status</button>
             <button class="tab" onclick="switchTab('data', this)">📊 Data Visualization</button>
+            <button class="tab" onclick="switchTab('admin', this)">⚙️ Admin</button>
             <button class="tab" onclick="switchTab('help', this)">❓ Help & User Guide</button>
         </div>
         
@@ -504,6 +507,19 @@ static const char* htmlPage = R"HTML_PAGE(
                         <span id="loggerState" class="status-value">-</span>
                     </div>
                 </div>
+                <div class="status-card" id="batteryCard" style="display: none;">
+                    <div class="status-header">
+                        <span class="status-label">🔋 Battery</span>
+                        <span id="batteryStatusMain" class="status-value">-</span>
+                    </div>
+                    <div style="margin-top: 10px; font-size: 13px; color: #4a5568;">
+                        <div><strong>Voltage:</strong> <span id="batteryVoltage">-</span> V</div>
+                        <div><strong>Charge Rate:</strong> <span id="batteryChargeRate">-</span> %/hr</div>
+                        <div class="progress-bar" style="margin-top: 8px;">
+                            <div id="batteryProgressBar" class="progress-fill" style="width: 0%;"></div>
+                        </div>
+                    </div>
+                </div>
             </div>
             </div>
         </div>
@@ -540,6 +556,47 @@ static const char* htmlPage = R"HTML_PAGE(
                     <div id="maxDecel" style="display: flex; flex-wrap: wrap; gap: 8px;"></div>
                 </div>
             </div>
+            </div>
+        </div>
+        
+        <!-- Admin Tab -->
+        <div id="tab-admin" class="tab-content">
+            <div class="section">
+                <h2>⚙️ Admin Panel</h2>
+                <div class="warning" style="background: #fff3cd; border: 2px solid #ffc107; border-radius: 8px; padding: 15px; margin-bottom: 25px; color: #856404;">
+                    <strong>⚠️ Administrator Functions</strong>
+                    <p style="margin: 8px 0 0 0;">These functions are for advanced users only. Use with caution.</p>
+                </div>
+                
+                <div class="form-group" style="margin-top: 30px;">
+                    <h3 style="color: #2d3748; margin-top: 0; font-size: 18px;">📤 Firmware Upgrade</h3>
+                    <p style="color: #4a5568; margin-bottom: 15px;">
+                        Upload a new firmware binary file to update the device. The device will reboot after a successful update.
+                        <strong>Warning: Do not power off the device during the update process!</strong>
+                    </p>
+                    
+                    <div class="file-input-wrapper" style="margin-bottom: 15px;">
+                        <input type="file" id="firmwareFile" accept=".bin" onchange="handleFirmwareFileSelect(event)">
+                        <label for="firmwareFile" class="file-input-label">📁 Select Firmware File (.bin)</label>
+                    </div>
+                    
+                    <div id="firmwareFileInfo" style="margin: 10px 0; padding: 10px; background: #f7fafc; border-radius: 6px; display: none;">
+                        <strong>Selected file:</strong> <span id="firmwareFileName"></span><br>
+                        <strong>Size:</strong> <span id="firmwareFileSize"></span>
+                    </div>
+                    
+                    <button type="button" class="button" id="uploadFirmwareBtn" onclick="uploadFirmware()" disabled style="background: linear-gradient(135deg, #f56565 0%, #e53e3e 100%);">
+                        🚀 Upload & Update Firmware
+                    </button>
+                    
+                    <div id="firmwareStatus" style="margin-top: 15px;"></div>
+                    <div id="firmwareProgress" style="margin-top: 10px; display: none;">
+                        <div style="background: #e2e8f0; border-radius: 4px; height: 20px; overflow: hidden;">
+                            <div id="firmwareProgressBar" style="background: linear-gradient(90deg, #667eea, #764ba2); height: 100%; width: 0%; transition: width 0.3s;"></div>
+                        </div>
+                        <div id="firmwareProgressText" style="margin-top: 8px; font-size: 12px; color: #718096;"></div>
+                    </div>
+                </div>
             </div>
         </div>
         
@@ -700,6 +757,51 @@ static const char* htmlPage = R"HTML_PAGE(
                     loggerStateEl.className = 'status-value status-warning';
                 } else {
                     loggerStateEl.className = 'status-value';
+                }
+                
+                // Battery Status
+                const batteryCard = document.getElementById('batteryCard');
+                const batteryStatusEl = document.getElementById('batteryStatusMain');
+                const batteryVoltageEl = document.getElementById('batteryVoltage');
+                const batteryChargeRateEl = document.getElementById('batteryChargeRate');
+                const batteryProgressBar = document.getElementById('batteryProgressBar');
+                
+                if (data.battery && data.battery.present) {
+                    batteryCard.style.display = 'block';
+                    
+                    if (data.battery.error) {
+                        batteryStatusEl.textContent = 'Error';
+                        batteryStatusEl.className = 'status-value status-error';
+                        batteryVoltageEl.textContent = '-';
+                        batteryChargeRateEl.textContent = '-';
+                        batteryProgressBar.style.width = '0%';
+                    } else {
+                        const soc = data.battery.soc || 0;
+                        const voltage = data.battery.voltage || 0;
+                        const chargeRate = data.battery.chargeRate || 0;
+                        
+                        batteryStatusEl.textContent = soc.toFixed(1) + '%';
+                        batteryVoltageEl.textContent = voltage.toFixed(2);
+                        batteryChargeRateEl.textContent = chargeRate >= 0 ? 
+                            '+' + chargeRate.toFixed(2) : chargeRate.toFixed(2);
+                        
+                        // Update progress bar
+                        batteryProgressBar.style.width = soc + '%';
+                        
+                        // Color coding
+                        if (soc < 20) {
+                            batteryStatusEl.className = 'status-value status-error';
+                            batteryProgressBar.className = 'progress-fill error';
+                        } else if (soc < 50) {
+                            batteryStatusEl.className = 'status-value status-warning';
+                            batteryProgressBar.className = 'progress-fill warning';
+                        } else {
+                            batteryStatusEl.className = 'status-value status-ok';
+                            batteryProgressBar.className = 'progress-fill';
+                        }
+                    }
+                } else {
+                    batteryCard.style.display = 'none';
                 }
             } catch (error) {
                 console.error('Error updating status indicators:', error);
@@ -1610,9 +1712,114 @@ static const char* htmlPage = R"HTML_PAGE(
             statusEl.style.color = '#718096';
         }
         
+        // ========================================================================
+        // Firmware Upload Functions
+        // ========================================================================
+        function handleFirmwareFileSelect(event) {
+            const file = event.target.files[0];
+            const fileInfo = document.getElementById('firmwareFileInfo');
+            const fileName = document.getElementById('firmwareFileName');
+            const fileSize = document.getElementById('firmwareFileSize');
+            const uploadBtn = document.getElementById('uploadFirmwareBtn');
+            
+            if (file) {
+                if (!file.name.endsWith('.bin')) {
+                    alert('Error: Please select a .bin firmware file');
+                    event.target.value = '';
+                    return;
+                }
+                
+                fileName.textContent = file.name;
+                fileSize.textContent = (file.size / 1024).toFixed(1) + ' KB';
+                fileInfo.style.display = 'block';
+                uploadBtn.disabled = false;
+            } else {
+                fileInfo.style.display = 'none';
+                uploadBtn.disabled = true;
+            }
+        }
+        
+        async function uploadFirmware() {
+            const fileInput = document.getElementById('firmwareFile');
+            const file = fileInput.files[0];
+            const statusDiv = document.getElementById('firmwareStatus');
+            const progressDiv = document.getElementById('firmwareProgress');
+            const progressBar = document.getElementById('firmwareProgressBar');
+            const progressText = document.getElementById('firmwareProgressText');
+            const uploadBtn = document.getElementById('uploadFirmwareBtn');
+            
+            if (!file) {
+                statusDiv.className = 'status error';
+                statusDiv.textContent = '❌ Please select a firmware file first';
+                return;
+            }
+            
+            // Confirm action
+            if (!confirm('⚠️ WARNING: This will update the device firmware and reboot it.\n\nDo not power off the device during the update!\n\nContinue?')) {
+                return;
+            }
+            
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = '⏳ Uploading...';
+            progressDiv.style.display = 'block';
+            progressBar.style.width = '0%';
+            progressText.textContent = 'Starting upload...';
+            
+            statusDiv.className = 'status info';
+            statusDiv.textContent = '📤 Uploading firmware... Please wait. Do not close this page!';
+            
+            try {
+                const formData = new FormData();
+                formData.append('firmware', file);
+                
+                const xhr = new XMLHttpRequest();
+                
+                // Track upload progress
+                xhr.upload.addEventListener('progress', (e) => {
+                    if (e.lengthComputable) {
+                        const percent = Math.round((e.loaded / e.total) * 100);
+                        progressBar.style.width = percent + '%';
+                        progressText.textContent = `Uploading: ${percent}% (${(e.loaded / 1024).toFixed(1)} KB / ${(e.total / 1024).toFixed(1)} KB)`;
+                    }
+                });
+                
+                xhr.addEventListener('load', () => {
+                    if (xhr.status === 200) {
+                        progressBar.style.width = '100%';
+                        progressText.textContent = 'Upload complete!';
+                        statusDiv.className = 'status success';
+                        statusDiv.textContent = '✅ Firmware uploaded successfully! Device is rebooting...';
+                        uploadBtn.textContent = '✅ Update Complete';
+                        
+                        // Wait a bit then show message
+                        setTimeout(() => {
+                            statusDiv.innerHTML = '✅ Firmware update complete!<br>The device is rebooting. You can close this page.<br>It may take 30-60 seconds for the device to come back online.';
+                        }, 2000);
+                    } else {
+                        throw new Error('Upload failed: ' + xhr.statusText);
+                    }
+                });
+                
+                xhr.addEventListener('error', () => {
+                    throw new Error('Upload failed: Network error');
+                });
+                
+                xhr.open('POST', '/admin/firmware/upload');
+                xhr.send(formData);
+                
+            } catch (error) {
+                statusDiv.className = 'status error';
+                statusDiv.textContent = '❌ Error: ' + error.message;
+                progressBar.style.width = '0%';
+                progressText.textContent = 'Failed';
+                uploadBtn.disabled = false;
+                uploadBtn.textContent = '🚀 Upload & Update Firmware';
+            }
+        }
+        
         // Load config on page load
         window.onload = function() {
-            updateStatusIndicators();  // Initial update
+            updateStatusIndicators();  // Initial update (includes battery status)
             initChart();
             generateNeopixelPatterns();  // Generate help section
             loadCalibration();  // Load calibration values
@@ -1944,8 +2151,8 @@ static void handleAdcOptimize()
         samplesPerTest,
         baselineAdc,
         nullptr, 0,  // No load points for single-point modes
-        result,
-        progressCallback);
+        progressCallback,
+        result);
     
     if (!success || !result.success)
     {
@@ -2103,8 +2310,8 @@ static void handleAdcOptimizeMultipoint()
         0,  // Baseline not used in multi-point mode
         loadPoints,
         numLoadPoints,
-        result,
-        progressCallback);
+        progressCallback,
+        result);
     
     if (!success || !result.success)
     {
@@ -3335,8 +3542,40 @@ static void handleStatus()
     uint32_t freeHeap = ESP.getFreeHeap();
     uint32_t totalHeap = ESP.getHeapSize();
     
+    // Get battery status if MAX17048 is present
+    String batteryJson = "";
+    if (max17048IsPresent())
+    {
+        Max17048Status batteryStatus;
+        if (max17048ReadStatus(&batteryStatus))
+        {
+            char batteryBuffer[256];
+            snprintf(batteryBuffer, sizeof(batteryBuffer),
+                "\"battery\":{"
+                    "\"voltage\":%.3f,"
+                    "\"soc\":%.1f,"
+                    "\"chargeRate\":%.2f,"
+                    "\"alert\":%s,"
+                    "\"present\":true"
+                "},",
+                batteryStatus.voltage,
+                batteryStatus.soc,
+                batteryStatus.chargeRate,
+                batteryStatus.alert ? "true" : "false");
+            batteryJson = String(batteryBuffer);
+        }
+        else
+        {
+            batteryJson = "\"battery\":{\"present\":true,\"error\":\"read_failed\"},";
+        }
+    }
+    else
+    {
+        batteryJson = "\"battery\":{\"present\":false},";
+    }
+    
     // Build JSON response (expanded buffer for additional fields)
-    char jsonBuffer[768];
+    char jsonBuffer[1024];
     snprintf(jsonBuffer, sizeof(jsonBuffer),
         "{"
         "\"adc\":{"
@@ -3371,7 +3610,8 @@ static void handleStatus()
             "\"freeHeap\":%u,"
             "\"totalHeap\":%u,"
             "\"freePercent\":%.1f"
-        "}"
+        "},"
+        "%s"
         "}",
         (unsigned)adcBuffered, (unsigned)adcOverflow, (unsigned long)adcCounter,
         (unsigned)imuBuffered, (unsigned)imuOverflow,
@@ -3382,7 +3622,8 @@ static void handleStatus()
         writeStats.adcWriteFailures, writeStats.imuWriteFailures,
         writeStats.adcConsecutiveFailures, writeStats.imuConsecutiveFailures,
         writeStats.adcRecordsWritten, writeStats.imuRecordsWritten,
-        freeHeap, totalHeap, (100.0f * freeHeap / totalHeap));
+        freeHeap, totalHeap, (100.0f * freeHeap / totalHeap),
+        batteryJson.c_str());
     
     server.send(200, "application/json", jsonBuffer);
 }
@@ -3499,6 +3740,118 @@ static void handleCsvFile()
     file.close();
 }
 
+// Static variable to track expected firmware size
+static uint32_t s_expectedFirmwareSize = 0;
+
+// Handle firmware upload (called during upload process)
+static void handleFirmwareUpload()
+{
+    HTTPUpload& upload = server.upload();
+    
+    if (upload.status == UPLOAD_FILE_START)
+    {
+        Serial.printf("[FIRMWARE] Upload start: %s\n", upload.filename.c_str());
+        
+        // Validate file extension
+        if (!upload.filename.endsWith(".bin"))
+        {
+            Serial.println("[FIRMWARE] Error: File must be .bin");
+            s_expectedFirmwareSize = 0;
+            return;
+        }
+        
+        // Get Content-Length from headers if available
+        String contentLengthStr = server.header("Content-Length");
+        if (contentLengthStr.length() > 0)
+        {
+            s_expectedFirmwareSize = contentLengthStr.toInt();
+            Serial.printf("[FIRMWARE] Expected file size: %u bytes\n", s_expectedFirmwareSize);
+        }
+        else
+        {
+            s_expectedFirmwareSize = 0; // Unknown size
+        }
+        
+        // Calculate firmware size (ESP32-S3 with 4MB flash, app partition is typically ~1.5MB)
+        // Allow up to 2MB for safety
+        uint32_t maxSize = 2 * 1024 * 1024; // 2MB
+        
+        // Begin OTA update
+        if (!Update.begin(maxSize))
+        {
+            Serial.println("[FIRMWARE] OTA begin failed");
+            s_expectedFirmwareSize = 0;
+            return;
+        }
+        
+        Serial.println("[FIRMWARE] OTA update started");
+    }
+    else if (upload.status == UPLOAD_FILE_WRITE)
+    {
+        // Write chunk to flash
+        if (Update.write(upload.buf, upload.currentSize) != upload.currentSize)
+        {
+            Serial.println("[FIRMWARE] Write failed");
+            Update.abort();
+            s_expectedFirmwareSize = 0;
+            return;
+        }
+        
+        // Calculate and log progress if we know the expected size
+        if (s_expectedFirmwareSize > 0)
+        {
+            float progress = (float)upload.totalSize / (float)s_expectedFirmwareSize * 100.0f;
+            Serial.printf("[FIRMWARE] Progress: %.1f%% (%u / %u bytes)\n", 
+                         progress, upload.totalSize, s_expectedFirmwareSize);
+        }
+        else
+        {
+            Serial.printf("[FIRMWARE] Progress: %u bytes uploaded\n", upload.totalSize);
+        }
+    }
+    else if (upload.status == UPLOAD_FILE_END)
+    {
+        if (Update.end(true))
+        {
+            Serial.printf("[FIRMWARE] Update successful: %u bytes\n", upload.totalSize);
+            Serial.println("[FIRMWARE] Rebooting in 2 seconds...");
+        }
+        else
+        {
+            Serial.println("[FIRMWARE] Update failed: " + String(Update.errorString()));
+            Update.abort();
+        }
+        s_expectedFirmwareSize = 0; // Reset
+    }
+    else if (upload.status == UPLOAD_FILE_ABORTED)
+    {
+        Serial.println("[FIRMWARE] Upload aborted");
+        Update.abort();
+        s_expectedFirmwareSize = 0; // Reset
+    }
+}
+
+// Handle firmware upload request (POST - called after upload completes)
+static void handleFirmwareUploadPost()
+{
+    if (Update.hasError())
+    {
+        String error = "Update failed: " + String(Update.errorString());
+        Serial.println("[FIRMWARE] " + error);
+        server.send(500, "application/json", "{\"success\":false,\"error\":\"" + error + "\"}");
+        Update.abort();
+    }
+    else
+    {
+        Serial.println("[FIRMWARE] Upload complete, rebooting...");
+        server.send(200, "application/json", "{\"success\":true,\"message\":\"Firmware update successful. Device will reboot.\"}");
+        
+        // Reboot after short delay to allow response to be sent
+        delay(1000);
+        ESP.restart();
+    }
+}
+
 bool webConfigInit()
 {
     // Load calibration values from NVS
@@ -3577,6 +3930,10 @@ bool webConfigInit()
     server.on("/cal/optimize-multipoint", HTTP_POST, handleAdcOptimizeMultipoint);  // Multi-point optimization
     server.on("/cal/measure-load-point", HTTP_GET, handleMeasureLoadPoint);  // Measure load point
     server.on("/cal/progress", HTTP_GET, handleProgressSSE);  // SSE progress stream
+    
+    // Firmware upgrade endpoints
+    server.on("/admin/firmware/upload", HTTP_POST, handleFirmwareUploadPost);
+    server.onFileUpload(handleFirmwareUpload);
     
     // Start server
     server.begin();

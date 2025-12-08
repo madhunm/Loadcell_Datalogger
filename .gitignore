@@ -8,3 +8,7 @@
 Thumbs.db
 *.log
 
+# Documentation files (kept locally, not in git)
+*.md
+.github/*.md
+

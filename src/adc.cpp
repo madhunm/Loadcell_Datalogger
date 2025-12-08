@@ -990,8 +990,8 @@ bool adcOptimizeSettings(
     int32_t baselineAdc,
     AdcLoadPoint *loadPoints,
     size_t numLoadPoints,
-    AdcOptimizationResult &result,
-    AdcOptimizationProgressCallback progressCallback)
+    AdcOptimizationProgressCallback progressCallback,
+    AdcOptimizationResult &result)
 {
     result.success = false;
     

@@ -130,6 +130,17 @@ static void configureErrorPattern(NeopixelPattern pattern)
         blinkGroupGapMs = 400;
         break;
 
+    case NEOPIXEL_PATTERN_LOW_BATTERY:
+        // Low battery: Orange solid glow (customer requirement)
+        baseR = 255;
+        baseG = 165;
+        baseB = 0;
+        blinkOnMs = 0;  // Solid (no blinking)
+        blinkOffMs = 0;
+        blinkPulsesPerGroup = 0;
+        blinkGroupGapMs = 0;
+        break;
+
     default:
         // Should not happen for non-error patterns
         baseR = baseG = baseB = 0;
@@ -156,6 +167,11 @@ void neopixelInit()
     currentPattern = NEOPIXEL_PATTERN_OFF;
     baseR = baseG = baseB = 0;
     applyStaticColour();
+}
+
+NeopixelPattern neopixelGetCurrentPattern()
+{
+    return currentPattern;
 }
 
 void neopixelSetPattern(NeopixelPattern pattern)
@@ -225,6 +241,14 @@ void neopixelSetPattern(NeopixelPattern pattern)
         lastBlinkChange = millis();
         pixel.setPixelColor(0, pixel.Color(baseR, baseG, baseB));
         pixel.show();
+        break;
+
+    case NEOPIXEL_PATTERN_LOW_BATTERY:
+        // LOW_BATTERY: Orange solid glow (customer requirement)
+        baseR = 255;
+        baseG = 165;
+        baseB = 0;
+        applyStaticColour();
         break;
 
     case NEOPIXEL_PATTERN_ERROR_SD:

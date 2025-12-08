@@ -466,6 +466,7 @@
           <div class="tabs">
                <button class="tab active" onclick="switchTab('status', this)">📈 Status</button>
                <button class="tab" onclick="switchTab('data', this)">📊 Data Visualization</button>
+               <button class="tab" onclick="switchTab('admin', this)">⚙️ Admin</button>
                <button class="tab" onclick="switchTab('help', this)">❓ Help & User Guide</button>
           </div>
 
@@ -515,6 +516,69 @@
                               <div class="status-header">
                                    <span class="status-label">🔌 Logger State</span>
                                    <span id="loggerState" class="status-value">-</span>
+                              </div>
+                         </div>
+                         <div class="status-card" id="batteryCard" style="display: none;">
+                              <div class="status-header">
+                                   <span class="status-label">🔋 Battery</span>
+                                   <span id="batteryStatusMain" class="status-value">-</span>
+                              </div>
+                              <div style="margin-top: 10px; font-size: 13px; color: #4a5568;">
+                                   <div><strong>Voltage:</strong> <span id="batteryVoltage">-</span> V</div>
+                                   <div><strong>Charge Rate:</strong> <span id="batteryChargeRate">-</span> %/hr</div>
+                                   <div class="progress-bar" style="margin-top: 8px;">
+                                        <div id="batteryProgressBar" class="progress-fill" style="width: 0%;"></div>
+                                   </div>
+                              </div>
+                         </div>
+                    </div>
+               </div>
+          </div>
+
+          <!-- Admin Tab -->
+          <div id="tab-admin" class="tab-content">
+               <div class="section">
+                    <h2>⚙️ Admin Panel</h2>
+                    <div class="warning"
+                         style="background: #fff3cd; border: 2px solid #ffc107; border-radius: 8px; padding: 15px; margin-bottom: 25px; color: #856404;">
+                         <strong>⚠️ Administrator Functions</strong>
+                         <p style="margin: 8px 0 0 0;">These functions are for advanced users only. Use with caution.
+                         </p>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 30px;">
+                         <h3 style="color: #2d3748; margin-top: 0; font-size: 18px;">📤 Firmware Upgrade</h3>
+                         <p style="color: #4a5568; margin-bottom: 15px;">
+                              Upload a new firmware binary file to update the device. The device will reboot after a
+                              successful update.
+                              <strong>Warning: Do not power off the device during the update process!</strong>
+                         </p>
+
+                         <div class="file-input-wrapper" style="margin-bottom: 15px;">
+                              <input type="file" id="firmwareFile" accept=".bin"
+                                   onchange="handleFirmwareFileSelect(event)">
+                              <label for="firmwareFile" class="file-input-label">📁 Select Firmware File (.bin)</label>
+                         </div>
+
+                         <div id="firmwareFileInfo"
+                              style="margin: 10px 0; padding: 10px; background: #f7fafc; border-radius: 6px; display: none;">
+                              <strong>Selected file:</strong> <span id="firmwareFileName"></span><br>
+                              <strong>Size:</strong> <span id="firmwareFileSize"></span>
+                         </div>
+
+                         <button type="button" class="button" id="uploadFirmwareBtn" onclick="uploadFirmware()" disabled
+                              style="background: linear-gradient(135deg, #f56565 0%, #e53e3e 100%);">
+                              🚀 Upload & Update Firmware
+                         </button>
+
+                         <div id="firmwareStatus" style="margin-top: 15px;"></div>
+                         <div id="firmwareProgress" style="margin-top: 10px; display: none;">
+                              <div style="background: #e2e8f0; border-radius: 4px; height: 20px; overflow: hidden;">
+                                   <div id="firmwareProgressBar"
+                                        style="background: linear-gradient(90deg, #667eea, #764ba2); height: 100%; width: 0%; transition: width 0.3s;">
+                                   </div>
+                              </div>
+                              <div id="firmwareProgressText" style="margin-top: 8px; font-size: 12px; color: #718096;">
                               </div>
                          </div>
                     </div>
@@ -1358,9 +1422,15 @@
                     logger: { state: 0, sessionOpen: false },
                     sd: { mounted: false, present: false, freeSpace: 0, totalSpace: 0, freePercent: 0 },
                     writes: { adcFailures: 20, imuFailures: 15, adcConsecutiveFailures: 8, imuConsecutiveFailures: 6 },
-                    memory: { freeHeap: 50000, totalHeap: 500000, freePercent: 10.0 }
+                    memory: { freeHeap: 50000, totalHeap: 500000, freePercent: 10.0 },
+                    battery: { present: true, voltage: 3.7, soc: 15.0, chargeRate: -2.5, alert: true }
                }
           ];
+
+          // Add battery data to other scenarios
+          mockStatusScenarios[0].battery = { present: true, voltage: 4.2, soc: 85.0, chargeRate: 0.5, alert: false };
+          mockStatusScenarios[1].battery = { present: true, voltage: 3.9, soc: 65.0, chargeRate: -1.2, alert: false };
+          mockStatusScenarios[2].battery = { present: true, voltage: 3.6, soc: 35.0, chargeRate: -2.0, alert: false };
 
           function showStatus(message, type) {
                const statusDiv = document.getElementById('status');
@@ -1493,6 +1563,51 @@
                     } else {
                          loggerStateEl.className = 'status-value';
                     }
+
+                    // Battery Status
+                    const batteryCard = document.getElementById('batteryCard');
+                    const batteryStatusEl = document.getElementById('batteryStatusMain');
+                    const batteryVoltageEl = document.getElementById('batteryVoltage');
+                    const batteryChargeRateEl = document.getElementById('batteryChargeRate');
+                    const batteryProgressBar = document.getElementById('batteryProgressBar');
+
+                    if (data.battery && data.battery.present) {
+                         batteryCard.style.display = 'block';
+
+                         if (data.battery.error) {
+                              batteryStatusEl.textContent = 'Error';
+                              batteryStatusEl.className = 'status-value status-error';
+                              batteryVoltageEl.textContent = '-';
+                              batteryChargeRateEl.textContent = '-';
+                              batteryProgressBar.style.width = '0%';
+                         } else {
+                              const soc = data.battery.soc || 0;
+                              const voltage = data.battery.voltage || 0;
+                              const chargeRate = data.battery.chargeRate || 0;
+
+                              batteryStatusEl.textContent = soc.toFixed(1) + '%';
+                              batteryVoltageEl.textContent = voltage.toFixed(2);
+                              batteryChargeRateEl.textContent = chargeRate >= 0 ?
+                                   '+' + chargeRate.toFixed(2) : chargeRate.toFixed(2);
+
+                              // Update progress bar
+                              batteryProgressBar.style.width = soc + '%';
+
+                              // Color coding
+                              if (soc < 20) {
+                                   batteryStatusEl.className = 'status-value status-error';
+                                   batteryProgressBar.className = 'progress-fill error';
+                              } else if (soc < 50) {
+                                   batteryStatusEl.className = 'status-value status-warning';
+                                   batteryProgressBar.className = 'progress-fill warning';
+                              } else {
+                                   batteryStatusEl.className = 'status-value status-ok';
+                                   batteryProgressBar.className = 'progress-fill';
+                              }
+                         }
+                    } else {
+                         batteryCard.style.display = 'none';
+                    }
                } catch (error) {
                     console.error('Error updating status indicators:', error);
                } finally {
@@ -1600,6 +1715,13 @@
                     color: '#FF0080', // RGB(255, 0, 128) - purple/magenta
                     pattern: 'triple-blink',
                     timing: { on: 60, off: 60, pulses: 3, gap: 500 }
+               },
+               {
+                    name: 'LOW BATTERY',
+                    description: 'Battery state of charge below 20% (orange solid glow)',
+                    color: '#FFA500', // RGB(255, 165, 0) - orange
+                    pattern: 'solid',
+                    timing: null
                }
           ];
 
@@ -1679,6 +1801,111 @@
                     setTimeout(loadLatestCsv, 100);
                } else if (tabName === 'help' && document.getElementById('neopixelPatterns').children.length === 0) {
                     generateNeopixelPatterns();
+               }
+          }
+
+          // ========================================================================
+          // Firmware Upload Functions
+          // ========================================================================
+          function handleFirmwareFileSelect(event) {
+               const file = event.target.files[0];
+               const fileInfo = document.getElementById('firmwareFileInfo');
+               const fileName = document.getElementById('firmwareFileName');
+               const fileSize = document.getElementById('firmwareFileSize');
+               const uploadBtn = document.getElementById('uploadFirmwareBtn');
+
+               if (file) {
+                    if (!file.name.endsWith('.bin')) {
+                         alert('Error: Please select a .bin firmware file');
+                         event.target.value = '';
+                         return;
+                    }
+
+                    fileName.textContent = file.name;
+                    fileSize.textContent = (file.size / 1024).toFixed(1) + ' KB';
+                    fileInfo.style.display = 'block';
+                    uploadBtn.disabled = false;
+               } else {
+                    fileInfo.style.display = 'none';
+                    uploadBtn.disabled = true;
+               }
+          }
+
+          async function uploadFirmware() {
+               const fileInput = document.getElementById('firmwareFile');
+               const file = fileInput.files[0];
+               const statusDiv = document.getElementById('firmwareStatus');
+               const progressDiv = document.getElementById('firmwareProgress');
+               const progressBar = document.getElementById('firmwareProgressBar');
+               const progressText = document.getElementById('firmwareProgressText');
+               const uploadBtn = document.getElementById('uploadFirmwareBtn');
+
+               if (!file) {
+                    statusDiv.className = 'status error';
+                    statusDiv.textContent = '❌ Please select a firmware file first';
+                    return;
+               }
+
+               // Confirm action
+               if (!confirm('⚠️ WARNING: This will update the device firmware and reboot it.\n\nDo not power off the device during the update!\n\nContinue?')) {
+                    return;
+               }
+
+               uploadBtn.disabled = true;
+               uploadBtn.textContent = '⏳ Uploading...';
+               progressDiv.style.display = 'block';
+               progressBar.style.width = '0%';
+               progressText.textContent = 'Starting upload...';
+
+               statusDiv.className = 'status info';
+               statusDiv.textContent = '📤 Uploading firmware... Please wait. Do not close this page!';
+
+               try {
+                    const formData = new FormData();
+                    formData.append('firmware', file);
+
+                    const xhr = new XMLHttpRequest();
+
+                    // Track upload progress
+                    xhr.upload.addEventListener('progress', (e) => {
+                         if (e.lengthComputable) {
+                              const percent = Math.round((e.loaded / e.total) * 100);
+                              progressBar.style.width = percent + '%';
+                              progressText.textContent = `Uploading: ${percent}% (${(e.loaded / 1024).toFixed(1)} KB / ${(e.total / 1024).toFixed(1)} KB)`;
+                         }
+                    });
+
+                    xhr.addEventListener('load', () => {
+                         if (xhr.status === 200) {
+                              progressBar.style.width = '100%';
+                              progressText.textContent = 'Upload complete!';
+                              statusDiv.className = 'status success';
+                              statusDiv.textContent = '✅ Firmware uploaded successfully! Device is rebooting...';
+                              uploadBtn.textContent = '✅ Update Complete';
+
+                              // Wait a bit then show message
+                              setTimeout(() => {
+                                   statusDiv.innerHTML = '✅ Firmware update complete!<br>The device is rebooting. You can close this page.<br>It may take 30-60 seconds for the device to come back online.';
+                              }, 2000);
+                         } else {
+                              throw new Error('Upload failed: ' + xhr.statusText);
+                         }
+                    });
+
+                    xhr.addEventListener('error', () => {
+                         throw new Error('Upload failed: Network error');
+                    });
+
+                    xhr.open('POST', '/admin/firmware/upload');
+                    xhr.send(formData);
+
+               } catch (error) {
+                    statusDiv.className = 'status error';
+                    statusDiv.textContent = '❌ Error: ' + error.message;
+                    progressBar.style.width = '0%';
+                    progressText.textContent = 'Failed';
+                    uploadBtn.disabled = false;
+                    uploadBtn.textContent = '🚀 Upload & Update Firmware';
                }
           }
 

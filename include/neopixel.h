@@ -19,7 +19,8 @@ enum NeopixelPattern
     
     NEOPIXEL_PATTERN_ERROR_WRITE_FAILURE,  // Write failure (red fast blink)
     NEOPIXEL_PATTERN_ERROR_LOW_SPACE,      // Low SD card space (orange/yellow)
-    NEOPIXEL_PATTERN_ERROR_BUFFER_FULL    // Buffer overflow (purple/magenta)
+    NEOPIXEL_PATTERN_ERROR_BUFFER_FULL,    // Buffer overflow (purple/magenta)
+    NEOPIXEL_PATTERN_LOW_BATTERY            // Low battery warning (orange solid glow)
 };
 
 // Must be called once at startup
@@ -27,6 +28,9 @@ void neopixelInit();
 
 // Set the high-level pattern; the implementation decides colours/blink style.
 void neopixelSetPattern(NeopixelPattern pattern);
+
+// Get the current pattern
+NeopixelPattern neopixelGetCurrentPattern();
 
 // Call from loop() to update animations (blinking, etc.)
 void neopixelUpdate();
