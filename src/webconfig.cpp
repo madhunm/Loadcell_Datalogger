@@ -13,6 +13,7 @@
 #include "FS.h"
 #include "loadcell_cal.h"
 #include "max17048.h"
+#include "system.h"
 
 // Web server instance
 static WebServer server(80);
@@ -3986,6 +3987,14 @@ bool webConfigInit()
     // Firmware upgrade endpoints
     server.on("/admin/firmware/upload", HTTP_POST, handleFirmwareUploadPost);
     server.onFileUpload(handleFirmwareUpload);
+    
+    // Remote logging control endpoints
+    server.on("/api/logging/start", HTTP_POST, handleLoggingStart);
+    server.on("/api/logging/stop", HTTP_POST, handleLoggingStop);
+    server.on("/api/logging/status", HTTP_GET, handleLoggingStatus);
+    
+    // Statistics and analytics endpoints
+    server.on("/api/statistics", HTTP_GET, handleStatistics);
     
     // WebSocket event handler for real-time data streaming
     webSocket.onEvent([](uint8_t num, WStype_t type, uint8_t * payload, size_t length) {

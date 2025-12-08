@@ -26,29 +26,29 @@
 #include "logger.h"
 #include "webconfig.h"
 #include "max17048.h"
+#include "system.h"
 
 // ============================================================================
 // SYSTEM STATE MACHINE
 // ============================================================================
 
-/**
- * @brief System operational states
- * @details The system transitions through these states based on user input
- *          (button presses) and internal events (conversion completion).
- */
-enum SystemState
-{
-    STATE_INIT = 0,        ///< Initialization state - bringing up peripherals
-    STATE_READY,           ///< Ready state - waiting for user to start logging
-    STATE_LOGGING,         ///< Logging state - actively recording data
-    STATE_CONVERTING       ///< Converting state - converting binary logs to CSV
-};
+#include "system.h"
 
 /** @brief Current system state - initialized to INIT on boot */
 SystemState systemState = STATE_INIT;
 
 /** @brief Flag to ensure sampling tasks are started only once per session */
 static bool samplingTasksStarted = false;
+
+/** @brief External control flag for remote logging control */
+volatile bool g_remoteLoggingRequest = false;
+volatile bool g_remoteLoggingAction = false; // false = stop, true = start
+
+// Get current system state (thread-safe)
+SystemState systemGetState()
+{
+    return systemState;
+}
 
 // ============================================================================
 // PERIPHERAL INITIALIZATION
@@ -333,6 +333,71 @@ void loop()
                                      batteryStatus.soc, batteryStatus.voltage);
                     }
                 }
+            }
+        }
+    }
+
+    // ---- Remote logging control (from web interface) ----
+    if (g_remoteLoggingRequest)
+    {
+        g_remoteLoggingRequest = false;
+        bool shouldStart = g_remoteLoggingAction;
+        
+        if (shouldStart && systemState == STATE_READY)
+        {
+            // Start logging (same logic as button press)
+            if (!samplingTasksStarted)
+            {
+                samplingTasksStarted = true;
+                if (!adcStartSamplingTask(0))
+                {
+                    Serial.println("[ERROR] Failed to create ADC sampling task!");
+                    neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_ADC);
+                    samplingTasksStarted = false;
+                    return;
+                }
+                if (!imuStartSamplingTask(0))
+                {
+                    Serial.println("[ERROR] Failed to create IMU sampling task!");
+                    neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_IMU);
+                    samplingTasksStarted = false;
+                    return;
+                }
+                Serial.println("[TASK] ADC and IMU sampling tasks started on core 0.");
+            }
+            
+            LoggerConfig config = webConfigIsActive() ? webConfigGetLoggerConfig() : makeLoggerConfig();
+            if (loggerStartSession(config))
+            {
+                systemState = STATE_LOGGING;
+                Serial.println("[STATE] LOGGING: logging started (remote).");
+                neopixelSetPattern(NEOPIXEL_PATTERN_LOGGING);
+            }
+            else
+            {
+                Serial.println("[ERROR] Failed to start logging session (remote).");
+                neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_SD);
+            }
+        }
+        else if (!shouldStart && systemState == STATE_LOGGING)
+        {
+            // Stop logging (same logic as button press)
+            if (loggerStopSessionAndFlush())
+            {
+                systemState = STATE_CONVERTING;
+                Serial.println("[STATE] CONVERTING: logging stopped (remote), starting CSV conversion...");
+                neopixelSetPattern(NEOPIXEL_PATTERN_CONVERTING);
+                
+                if (!loggerConvertLastSessionToCsv())
+                {
+                    Serial.println("[ERROR] Failed to start CSV conversion task.");
+                    systemState = STATE_READY;
+                    neopixelSetPattern(NEOPIXEL_PATTERN_ERROR_SD);
+                }
+            }
+            else
+            {
+                Serial.println("[ERROR] Failed to stop logging session (remote).");
             }
         }
     }

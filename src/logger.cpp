@@ -6,6 +6,7 @@
 #include "imu.h"
 #include "neopixel.h"
 #include "webconfig.h"
+#include "esp_task_wdt.h"
 
 #include "FS.h"
 #include <cstring>
