@@ -24,13 +24,21 @@ namespace Logger {
 
 /** @brief Logger configuration */
 struct Config {
-    uint32_t adcRateHz;         // Target ADC sample rate (e.g., 64000)
-    uint32_t imuDecimation;     // IMU reads every N ADC samples (e.g., 64)
-    const char* outputDir;      // Output directory (e.g., "/data")
-    bool autoFilename;          // Generate filename from timestamp
-    const char* filename;       // Manual filename (if not auto)
-    size_t bufferSizeKB;        // Buffer size in KB (default 8)
-    uint32_t maxDurationSec;    // Max log duration for pre-allocation (default 3600 = 1hr)
+    uint32_t adcRateHz;             // Target ADC sample rate (e.g., 64000)
+    uint32_t imuDecimation;         // IMU reads every N ADC samples (e.g., 64)
+    const char* outputDir;          // Output directory (e.g., "/data")
+    bool autoFilename;              // Generate filename from timestamp
+    const char* filename;           // Manual filename (if not auto)
+    size_t bufferSizeKB;            // Buffer size in KB (default 8)
+    uint32_t maxDurationSec;        // Max log duration for pre-allocation (default 3600 = 1hr)
+    
+    // Hardening options
+    uint32_t checkpointIntervalSec; // Checkpoint frequency (0 = disabled, default 30)
+    uint32_t maxFileSizeMB;         // File rotation size limit (0 = no limit)
+    uint32_t maxFileDurationSec;    // File rotation time limit (0 = no limit)
+    bool enableCrc32;               // Compute CRC32 (slight CPU cost)
+    bool enableTempCompensation;    // Temperature drift correction
+    float tempCoefficient;          // Temperature coefficient (ppm/degC)
 };
 
 /** @brief Default configuration */
@@ -42,13 +50,27 @@ inline Config defaultConfig() {
         .autoFilename = true,
         .filename = nullptr,
         .bufferSizeKB = 8,
-        .maxDurationSec = 3600  // 1 hour default pre-allocation
+        .maxDurationSec = 3600,         // 1 hour default pre-allocation
+        .checkpointIntervalSec = 30,    // Checkpoint every 30 seconds
+        .maxFileSizeMB = 0,             // No size limit by default
+        .maxFileDurationSec = 0,        // No time limit by default
+        .enableCrc32 = true,            // Enable CRC32 by default
+        .enableTempCompensation = false,// Disabled until calibrated
+        .tempCoefficient = -0.0005f     // Default temp coeff (ppm/degC)
     };
 }
 
 // ============================================================================
 // Status
 // ============================================================================
+
+/** @brief Write latency statistics */
+struct WriteStats {
+    uint32_t minUs;             // Minimum write latency
+    uint32_t maxUs;             // Maximum write latency
+    uint32_t avgUs;             // Average write latency
+    uint32_t countOver10ms;     // Writes exceeding 10ms threshold
+};
 
 /** @brief Logger status */
 struct Status {
@@ -62,6 +84,14 @@ struct Status {
     float fillPercent;          // Ring buffer fill level
     uint32_t durationMs;        // Recording duration
     char currentFile[64];       // Current output filename
+    
+    // Hardening status
+    WriteStats writeStats;      // SD write latency stats
+    uint32_t bufferHighWater;   // Ring buffer high-water mark (%)
+    uint32_t checkpointCount;   // Number of checkpoints written
+    uint32_t saturationCount;   // ADC saturation events
+    uint32_t fileRotations;     // Number of file rotations
+    uint32_t crc32;             // Current running CRC32
 };
 
 // ============================================================================
@@ -183,6 +213,39 @@ void getRingBufferStats(size_t* capacity, size_t* used, uint32_t* overflows);
  * @return true if all data flushed
  */
 bool flush(uint32_t timeoutMs = 5000);
+
+// ============================================================================
+// Recovery API
+// ============================================================================
+
+/**
+ * @brief Check if there's recoverable session data from a crash
+ * 
+ * @return true if there's a session that can be recovered
+ */
+bool hasRecoveryData();
+
+/**
+ * @brief Recover a crashed session
+ * 
+ * Restores session state from NVS and prepares to continue logging.
+ * Call start() after this to resume acquisition.
+ * 
+ * @return true if recovery successful
+ */
+bool recoverSession();
+
+/**
+ * @brief Clear any recovery data (acknowledge clean state)
+ */
+void clearRecoveryData();
+
+/**
+ * @brief Get write latency statistics
+ * 
+ * @return Current write statistics
+ */
+WriteStats getWriteStats();
 
 } // namespace Logger
 

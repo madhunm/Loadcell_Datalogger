@@ -27,6 +27,103 @@ namespace {
     constexpr const char* KEY_ID_PREFIX = "id_";
     constexpr const char* KEY_CAL_PREFIX = "cal_";
     
+    // Forward declarations
+    void saveIndex();
+    int findIdIndex(const char* id);
+    void getCalKey(const char* id, char* keyOut, size_t maxLen);
+    
+    // Write-ahead log keys
+    constexpr const char* KEY_WAL_OP = "wal_op";       // Operation type: 0=none, 1=save, 2=remove
+    constexpr const char* KEY_WAL_ID = "wal_id";      // ID being modified
+    constexpr const char* KEY_WAL_DATA = "wal_data";  // Data for save operation
+    
+    // WAL operation types
+    enum class WalOp : uint8_t {
+        None = 0,
+        Save = 1,
+        Remove = 2
+    };
+    
+    // Begin a WAL transaction for save
+    bool walBeginSave(const char* id, const Calibration::LoadcellCalibration& cal) {
+        prefs.putUChar(KEY_WAL_OP, static_cast<uint8_t>(WalOp::Save));
+        prefs.putString(KEY_WAL_ID, id);
+        prefs.putBytes(KEY_WAL_DATA, &cal, sizeof(cal));
+        return true;
+    }
+    
+    // Begin a WAL transaction for remove
+    bool walBeginRemove(const char* id) {
+        prefs.putUChar(KEY_WAL_OP, static_cast<uint8_t>(WalOp::Remove));
+        prefs.putString(KEY_WAL_ID, id);
+        return true;
+    }
+    
+    // Complete (commit) a WAL transaction
+    void walCommit() {
+        prefs.putUChar(KEY_WAL_OP, static_cast<uint8_t>(WalOp::None));
+        prefs.remove(KEY_WAL_ID);
+        prefs.remove(KEY_WAL_DATA);
+    }
+    
+    // Check and recover from any incomplete WAL transaction
+    void walRecover() {
+        WalOp op = static_cast<WalOp>(prefs.getUChar(KEY_WAL_OP, 0));
+        if (op == WalOp::None) return;
+        
+        char id[Calibration::MAX_ID_LENGTH] = {0};
+        prefs.getString(KEY_WAL_ID, id, sizeof(id));
+        
+        if (id[0] == '\0') {
+            // Invalid WAL entry, clear it
+            walCommit();
+            return;
+        }
+        
+        ESP_LOGW(TAG, "WAL recovery: op=%d, id=%s", (int)op, id);
+        
+        if (op == WalOp::Save) {
+            // Try to complete the save
+            Calibration::LoadcellCalibration cal;
+            size_t len = prefs.getBytes(KEY_WAL_DATA, &cal, sizeof(cal));
+            if (len == sizeof(cal)) {
+                // Re-save the calibration
+                char key[16];
+                getCalKey(id, key, sizeof(key));
+                prefs.putBytes(key, &cal, sizeof(cal));
+                
+                // Update index if needed
+                if (findIdIndex(id) < 0 && storedCount < MAX_LOADCELLS) {
+                    strncpy(storedIds[storedCount], id, sizeof(storedIds[storedCount]) - 1);
+                    storedCount++;
+                    saveIndex();
+                }
+                
+                ESP_LOGI(TAG, "WAL recovery: completed save for %s", id);
+            }
+        } else if (op == WalOp::Remove) {
+            // Try to complete the remove
+            char key[16];
+            getCalKey(id, key, sizeof(key));
+            prefs.remove(key);
+            
+            // Update index
+            int idx = findIdIndex(id);
+            if (idx >= 0) {
+                for (int i = idx; i < storedCount - 1; i++) {
+                    strcpy(storedIds[i], storedIds[i + 1]);
+                }
+                storedCount--;
+                saveIndex();
+            }
+            
+            ESP_LOGI(TAG, "WAL recovery: completed remove for %s", id);
+        }
+        
+        // Clear WAL after recovery
+        walCommit();
+    }
+    
     // Save index to NVS
     void saveIndex() {
         prefs.putUChar(KEY_COUNT, storedCount);
@@ -90,6 +187,9 @@ bool init() {
     
     loadIndex();
     
+    // Check for and recover any incomplete WAL transactions
+    walRecover();
+    
     initialized = true;
     ESP_LOGI(TAG, "Initialized: %d loadcells, active='%s'", storedCount, activeId);
     return true;
@@ -114,12 +214,10 @@ bool save(const Calibration::LoadcellCalibration& cal) {
             ESP_LOGE(TAG, "Storage full (%d max)", MAX_LOADCELLS);
             return false;
         }
-        
-        // Add to index
-        strncpy(storedIds[storedCount], cal.id, sizeof(storedIds[0]) - 1);
-        storedCount++;
-        saveIndex();
     }
+    
+    // Begin WAL transaction
+    walBeginSave(cal.id, cal);
     
     // Generate key and save calibration blob
     char key[16];
@@ -128,8 +226,19 @@ bool save(const Calibration::LoadcellCalibration& cal) {
     size_t written = prefs.putBytes(key, &cal, sizeof(cal));
     if (written != sizeof(cal)) {
         ESP_LOGE(TAG, "Failed to save calibration: wrote %zu of %zu", written, sizeof(cal));
+        walCommit();  // Clear WAL even on failure
         return false;
     }
+    
+    // Update index if new entry
+    if (idx < 0) {
+        strncpy(storedIds[storedCount], cal.id, sizeof(storedIds[0]) - 1);
+        storedCount++;
+        saveIndex();
+    }
+    
+    // Commit WAL transaction
+    walCommit();
     
     ESP_LOGI(TAG, "Saved calibration: %s (%d points)", cal.id, cal.numPoints);
     return true;
@@ -162,6 +271,9 @@ bool remove(const char* id) {
     int idx = findIdIndex(id);
     if (idx < 0) return false;
     
+    // Begin WAL transaction
+    walBeginRemove(id);
+    
     // Remove calibration blob
     char key[16];
     getCalKey(id, key, sizeof(key));
@@ -180,6 +292,10 @@ bool remove(const char* id) {
     }
     
     saveIndex();
+    
+    // Commit WAL transaction
+    walCommit();
+    
     ESP_LOGI(TAG, "Removed calibration: %s", id);
     return true;
 }

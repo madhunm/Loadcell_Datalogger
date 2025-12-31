@@ -11,9 +11,12 @@
 #include "../drivers/lsm6dsv.h"
 #include "../drivers/sd_manager.h"
 #include "../drivers/max17048.h"
+#include "../drivers/rx8900ce.h"
 #include "../calibration/calibration_storage.h"
 #include <esp_log.h>
 #include <esp_task_wdt.h>
+#include <esp_crc.h>
+#include <Preferences.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <atomic>
@@ -48,6 +51,33 @@ namespace {
     // Sequence counter for gap detection
     std::atomic<uint32_t> adcSequenceNum{0};
     
+    // CRC32 for data integrity (computed incrementally)
+    uint32_t runningCrc32 = 0;
+    
+    // Write latency monitoring
+    uint32_t writeLatencyMinUs = UINT32_MAX;
+    uint32_t writeLatencyMaxUs = 0;
+    uint64_t writeLatencySumUs = 0;
+    uint32_t writeLatencyCount = 0;
+    std::atomic<uint32_t> writeLatencyOver10ms{0};
+    
+    // Buffer statistics for dual-core monitoring
+    std::atomic<uint32_t> bufferHighWaterMark{0};
+    std::atomic<uint32_t> isrTimeUs{0};
+    std::atomic<uint32_t> loggerTimeUs{0};
+    
+    // Checkpoint and recovery
+    uint32_t lastCheckpointMs = 0;
+    uint32_t fileRotationIndex = 0;
+    char sessionBasePath[64] = {0};
+    
+    // ADC saturation tracking
+    std::atomic<uint32_t> saturationCount{0};
+    
+    // Temperature compensation
+    float lastTemperature = 25.0f;
+    uint32_t lastTempReadMs = 0;
+    
     // ADC Ring buffer for this logger (128ms at 64ksps for SD latency headroom)
     ADCRingBufferLarge* adcBuffer = nullptr;
     
@@ -63,6 +93,16 @@ namespace {
     uint8_t* writeBuffer = nullptr;
     size_t writeBufferSize = 0;
     size_t writeBufferUsed = 0;
+    
+    // Forward declarations
+    bool flushWriteBuffer();
+    bool bufferWrite(const void* data, size_t len);
+    bool writeHeader();
+    void saveSessionState();
+    void clearSessionState();
+    bool hasRecoverableSession();
+    bool loadSessionState(char* filepath, size_t maxLen, uint64_t* adcCount, 
+                          uint64_t* imuCount, uint32_t* sequence, uint32_t* crc);
     
     // Estimate file size for pre-allocation
     size_t estimateFileSize(uint32_t adcRateHz, uint32_t imuDecimation, uint32_t durationSec) {
@@ -112,6 +152,102 @@ namespace {
         snprintf(out, maxLen, "%s/log_%lu.bin", currentConfig.outputDir, epoch);
     }
     
+    // Generate filename with rotation index
+    void generateRotatedFilename(char* out, size_t maxLen) {
+        snprintf(out, maxLen, "%s_%03lu.bin", sessionBasePath, fileRotationIndex);
+    }
+    
+    // Check if file should be rotated
+    bool shouldRotateFile() {
+        if (!running || !logFile) return false;
+        
+        // Check size limit
+        if (currentConfig.maxFileSizeMB > 0) {
+            uint32_t currentSizeMB = bytesWritten.load() / (1024 * 1024);
+            if (currentSizeMB >= currentConfig.maxFileSizeMB) {
+                return true;
+            }
+        }
+        
+        // Check duration limit
+        if (currentConfig.maxFileDurationSec > 0) {
+            uint32_t durationSec = (millis() - sessionStartMs) / 1000;
+            if (durationSec >= currentConfig.maxFileDurationSec) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    // Rotate to a new file
+    static uint32_t rotationCount = 0;
+    bool rotateFile() {
+        ESP_LOGI(TAG, "Rotating file...");
+        
+        // Write rotation event to current file
+        BinaryFormat::EventRecord event;
+        event.timestampOffsetUs = (uint32_t)(TimestampSync::getEpochMicros() - sessionStartUs);
+        event.eventCode = BinaryFormat::EventCode::FileRotation;
+        event.dataLength = 0;
+        bufferWrite(&event, sizeof(event));
+        
+        // Flush and close current file
+        flushWriteBuffer();
+        
+        // Write partial footer
+        BinaryFormat::FileFooter footer;
+        footer.init();
+        footer.totalAdcSamples = adcSamplesLogged.load();
+        footer.totalImuSamples = imuSamplesLogged.load();
+        footer.droppedSamples = droppedSamples.load();
+        footer.endTimestampUs = (uint32_t)(TimestampSync::getEpochMicros() - sessionStartUs);
+        footer.crc32 = runningCrc32;
+        logFile.write((uint8_t*)&footer, sizeof(footer));
+        
+        logFile.flush();
+        logFile.close();
+        
+        // Increment rotation index and open new file
+        fileRotationIndex++;
+        rotationCount++;
+        generateRotatedFilename(currentFilePath, sizeof(currentFilePath));
+        
+        logFile = SDManager::open(currentFilePath, FILE_WRITE);
+        if (!logFile) {
+            ESP_LOGE(TAG, "Failed to open rotated file: %s", currentFilePath);
+            running = false;
+            return false;
+        }
+        
+        // Pre-allocate new file
+        if (currentConfig.maxDurationSec > 0) {
+            size_t estimatedSize = estimateFileSize(
+                currentConfig.adcRateHz,
+                currentConfig.imuDecimation,
+                currentConfig.maxFileDurationSec > 0 ? currentConfig.maxFileDurationSec : currentConfig.maxDurationSec
+            );
+            preAllocateFile(logFile, estimatedSize);
+        }
+        
+        // Reset CRC for new file
+        runningCrc32 = 0;
+        
+        // Write header to new file
+        if (!writeHeader()) {
+            logFile.close();
+            running = false;
+            return false;
+        }
+        
+        // Reset timing for new file (but keep sequence numbers continuous)
+        sessionStartUs = TimestampSync::getEpochMicros();
+        sessionStartMs = millis();
+        
+        ESP_LOGI(TAG, "Rotated to: %s (rotation #%lu)", currentFilePath, rotationCount);
+        return true;
+    }
+    
     // Write file header
     bool writeHeader() {
         BinaryFormat::FileHeader header;
@@ -136,19 +272,148 @@ namespace {
             return false;
         }
         
+        // Include header in CRC32
+        if (currentConfig.enableCrc32) {
+            runningCrc32 = esp_crc32_le(0, (uint8_t*)&header, sizeof(header));
+        }
+        
         bytesWritten += written;
         return true;
     }
     
-    // Flush write buffer to file
+    // Write a checkpoint marker for crash recovery
+    static uint32_t checkpointCount = 0;
+    bool writeCheckpoint() {
+        // Flush any pending data first
+        flushWriteBuffer();
+        
+        // Write checkpoint event
+        BinaryFormat::EventRecord event;
+        event.timestampOffsetUs = (uint32_t)(TimestampSync::getEpochMicros() - sessionStartUs);
+        event.eventCode = BinaryFormat::EventCode::Checkpoint;
+        event.dataLength = sizeof(BinaryFormat::FileFooter);
+        
+        uint8_t tag = static_cast<uint8_t>(BinaryFormat::RecordType::Event);
+        logFile.write(&tag, 1);
+        logFile.write((uint8_t*)&event, sizeof(event));
+        
+        // Write partial footer as checkpoint data
+        BinaryFormat::FileFooter checkpoint;
+        checkpoint.init();
+        checkpoint.totalAdcSamples = adcSamplesLogged.load();
+        checkpoint.totalImuSamples = imuSamplesLogged.load();
+        checkpoint.droppedSamples = droppedSamples.load();
+        checkpoint.endTimestampUs = event.timestampOffsetUs;
+        checkpoint.crc32 = runningCrc32;  // CRC up to this point
+        
+        logFile.write((uint8_t*)&checkpoint, sizeof(checkpoint));
+        logFile.flush();
+        
+        checkpointCount++;
+        ESP_LOGI(TAG, "Checkpoint #%lu: %llu ADC, %llu IMU samples",
+                 checkpointCount, checkpoint.totalAdcSamples, checkpoint.totalImuSamples);
+        
+        // Save session state to NVS for recovery
+        saveSessionState();
+        
+        return true;
+    }
+    
+    // Save session state to NVS for power-fail recovery
+    void saveSessionState() {
+        Preferences prefs;
+        if (prefs.begin("logger_state", false)) {
+            prefs.putString("filepath", currentFilePath);
+            prefs.putULong64("adc_count", adcSamplesLogged.load());
+            prefs.putULong64("imu_count", imuSamplesLogged.load());
+            prefs.putULong("sequence", adcSequenceNum.load());
+            prefs.putULong("bytes", bytesWritten.load());
+            prefs.putULong("crc32", runningCrc32);
+            prefs.putULong("timestamp", millis());
+            prefs.putBool("active", true);
+            prefs.end();
+        }
+    }
+    
+    // Clear session state (called on clean stop)
+    void clearSessionState() {
+        Preferences prefs;
+        if (prefs.begin("logger_state", false)) {
+            prefs.putBool("active", false);
+            prefs.end();
+        }
+    }
+    
+    // Check if there's a recoverable session
+    bool hasRecoverableSession() {
+        Preferences prefs;
+        bool active = false;
+        if (prefs.begin("logger_state", true)) {
+            active = prefs.getBool("active", false);
+            prefs.end();
+        }
+        return active;
+    }
+    
+    // Load session state for recovery
+    bool loadSessionState(char* filepath, size_t maxLen, uint64_t* adcCount, 
+                          uint64_t* imuCount, uint32_t* sequence, uint32_t* crc) {
+        Preferences prefs;
+        if (!prefs.begin("logger_state", true)) return false;
+        
+        if (!prefs.getBool("active", false)) {
+            prefs.end();
+            return false;
+        }
+        
+        String path = prefs.getString("filepath", "");
+        if (path.length() == 0) {
+            prefs.end();
+            return false;
+        }
+        
+        strncpy(filepath, path.c_str(), maxLen - 1);
+        *adcCount = prefs.getULong64("adc_count", 0);
+        *imuCount = prefs.getULong64("imu_count", 0);
+        *sequence = prefs.getULong("sequence", 0);
+        *crc = prefs.getULong("crc32", 0);
+        
+        prefs.end();
+        return true;
+    }
+    
+    // Flush write buffer to file with latency monitoring and CRC32
     bool flushWriteBuffer() {
         if (writeBufferUsed == 0) return true;
         
+        // Measure write latency
+        uint32_t startUs = micros();
+        
         size_t written = logFile.write(writeBuffer, writeBufferUsed);
+        
+        uint32_t latencyUs = micros() - startUs;
+        
+        // Update latency statistics
+        if (latencyUs < writeLatencyMinUs) writeLatencyMinUs = latencyUs;
+        if (latencyUs > writeLatencyMaxUs) writeLatencyMaxUs = latencyUs;
+        writeLatencySumUs += latencyUs;
+        writeLatencyCount++;
+        
+        // Warn on high latency (>10ms)
+        if (latencyUs > 10000) {
+            writeLatencyOver10ms++;
+            ESP_LOGW(TAG, "High write latency: %lu us", latencyUs);
+        }
+        
         if (written != writeBufferUsed) {
             ESP_LOGE(TAG, "Write error: %zu of %zu", written, writeBufferUsed);
             droppedBuffers++;
             return false;
+        }
+        
+        // Update running CRC32 if enabled
+        if (currentConfig.enableCrc32) {
+            runningCrc32 = esp_crc32_le(runningCrc32, writeBuffer, writeBufferUsed);
         }
         
         bytesWritten += written;
@@ -169,22 +434,50 @@ namespace {
         return true;
     }
     
+    // ADC saturation threshold (0.1% of 24-bit range)
+    static constexpr int32_t ADC_SATURATION_THRESHOLD = 8380000;
+    
     // Process samples from ring buffer
     void processSamples() {
         if (!running || paused || !adcBuffer) return;
+        
+        // Track buffer high water mark for diagnostics
+        uint32_t currentFill = adcBuffer->available();
+        uint32_t currentHighWater = bufferHighWaterMark.load();
+        if (currentFill > currentHighWater) {
+            bufferHighWaterMark.store(currentFill);
+        }
         
         // Process ADC samples from ring buffer
         ADCSample sample;
         uint32_t processed = 0;
         
         while (adcBuffer->pop(sample) && processed < 1000) {
+            // Check for ADC saturation
+            if (abs(sample.raw) > ADC_SATURATION_THRESHOLD) {
+                saturationCount++;
+                // Log saturation event (throttled to avoid spam)
+                static uint32_t lastSatWarn = 0;
+                if (millis() - lastSatWarn > 1000) {
+                    ESP_LOGW(TAG, "ADC saturation detected: %ld", sample.raw);
+                    lastSatWarn = millis();
+                }
+            }
+            
+            // Apply temperature compensation if enabled
+            int32_t rawValue = sample.raw;
+            if (currentConfig.enableTempCompensation) {
+                float compensated = rawValue * (1.0f + currentConfig.tempCoefficient * (lastTemperature - 25.0f));
+                rawValue = (int32_t)compensated;
+            }
+            
             // Calculate timestamp offset
             uint32_t offsetUs = (uint32_t)(sample.timestamp_us - (uint32_t)sessionStartUs);
             
             // Write ADC record with sequence number for gap detection
             BinaryFormat::ADCRecord adcRec;
             adcRec.timestampOffsetUs = offsetUs;
-            adcRec.rawAdc = sample.raw;
+            adcRec.rawAdc = rawValue;
             adcRec.sequenceNum = adcSequenceNum.fetch_add(1, std::memory_order_relaxed);
             
             if (!bufferWrite(&adcRec, sizeof(adcRec))) {
@@ -244,7 +537,12 @@ void loggerTaskFunc(void* param) {
         esp_task_wdt_reset();
         
         if (running && !paused) {
+            uint32_t loopStartUs = micros();
+            
             processSamples();
+            
+            // Track logger task time for diagnostics
+            loggerTimeUs.store(micros() - loopStartUs);
             
             // Periodic battery check for low battery protection
             if (millis() - lastBatteryCheckMs > BATTERY_CHECK_INTERVAL_MS) {
@@ -255,10 +553,37 @@ void loggerTaskFunc(void* param) {
                     if (batt.socPercent < LOW_BATTERY_THRESHOLD) {
                         ESP_LOGW(TAG, "LOW BATTERY (%.1f%%) - stopping logger to protect data",
                                  batt.socPercent);
+                        // Write low battery event
+                        BinaryFormat::EventRecord event;
+                        event.timestampOffsetUs = (uint32_t)(TimestampSync::getEpochMicros() - sessionStartUs);
+                        event.eventCode = BinaryFormat::EventCode::LowBattery;
+                        event.dataLength = 0;
+                        bufferWrite(&event, sizeof(event));
+                        
                         running = false;  // Trigger graceful stop
-                        // The stop() function will be called by main loop detecting !running
                     }
                 }
+            }
+            
+            // Periodic checkpoint for crash recovery
+            if (currentConfig.checkpointIntervalSec > 0 &&
+                millis() - lastCheckpointMs > currentConfig.checkpointIntervalSec * 1000) {
+                lastCheckpointMs = millis();
+                writeCheckpoint();
+            }
+            
+            // Periodic temperature read for compensation
+            if (currentConfig.enableTempCompensation && millis() - lastTempReadMs > 5000) {
+                lastTempReadMs = millis();
+                float temp = RX8900CE::getTemperature();
+                if (temp > -40.0f && temp < 85.0f) {  // Valid range check
+                    lastTemperature = temp;
+                }
+            }
+            
+            // Check for file rotation conditions
+            if (shouldRotateFile()) {
+                rotateFile();
             }
         }
         
@@ -380,6 +705,27 @@ bool start() {
     droppedBuffers = 0;
     adcSequenceNum = 0;  // Reset sequence counter
     
+    // Reset hardening state
+    runningCrc32 = 0;
+    writeLatencyMinUs = UINT32_MAX;
+    writeLatencyMaxUs = 0;
+    writeLatencySumUs = 0;
+    writeLatencyCount = 0;
+    writeLatencyOver10ms = 0;
+    bufferHighWaterMark = 0;
+    saturationCount = 0;
+    checkpointCount = 0;
+    rotationCount = 0;
+    fileRotationIndex = 0;
+    lastCheckpointMs = millis();
+    lastTempReadMs = millis();
+    lastTemperature = 25.0f;
+    
+    // Save session base path for file rotation (without .bin extension)
+    strncpy(sessionBasePath, currentFilePath, sizeof(sessionBasePath) - 1);
+    char* ext = strrchr(sessionBasePath, '.');
+    if (ext) *ext = '\0';
+    
     // Record start time
     sessionStartUs = TimestampSync::getEpochMicros();
     sessionStartMs = millis();
@@ -475,7 +821,7 @@ void stop() {
     BinaryFormat::EndRecord endRec;
     endRec.type = static_cast<uint8_t>(BinaryFormat::RecordType::End);
     endRec.totalRecords = adcSamplesLogged + imuSamplesLogged;
-    endRec.checksum = 0;  // Reserved
+    endRec.checksum = runningCrc32;
     logFile.write((uint8_t*)&endRec, sizeof(endRec));
     
     // Write file footer for integrity verification
@@ -485,20 +831,36 @@ void stop() {
     footer.totalImuSamples = imuSamplesLogged.load();
     footer.droppedSamples = droppedSamples.load();
     footer.endTimestampUs = (uint32_t)(TimestampSync::getEpochMicros() - sessionStartUs);
-    footer.crc32 = 0;  // TODO: Compute CRC if needed
+    footer.crc32 = runningCrc32;  // Final CRC32 of all data
     logFile.write((uint8_t*)&footer, sizeof(footer));
     
-    ESP_LOGI(TAG, "Footer written: %llu ADC, %llu IMU, %lu dropped",
-             footer.totalAdcSamples, footer.totalImuSamples, footer.droppedSamples);
+    ESP_LOGI(TAG, "Footer written: %llu ADC, %llu IMU, %lu dropped, CRC32=0x%08lX",
+             footer.totalAdcSamples, footer.totalImuSamples, footer.droppedSamples, footer.crc32);
     
     // Close file
     logFile.flush();
     logFile.close();
     
+    // Clear session state (clean shutdown)
+    clearSessionState();
+    
     uint32_t durationMs = millis() - sessionStartMs;
     ESP_LOGI(TAG, "Stopped: %llu ADC + %llu IMU samples, %lu bytes, %lu ms",
              adcSamplesLogged.load(), imuSamplesLogged.load(),
              bytesWritten.load(), durationMs);
+    
+    // Log write latency statistics
+    if (writeLatencyCount > 0) {
+        ESP_LOGI(TAG, "Write latency: min=%luus, max=%luus, avg=%luus, >10ms=%lu times",
+                 writeLatencyMinUs, writeLatencyMaxUs, 
+                 (uint32_t)(writeLatencySumUs / writeLatencyCount),
+                 writeLatencyOver10ms.load());
+    }
+    
+    // Log saturation events
+    if (saturationCount.load() > 0) {
+        ESP_LOGW(TAG, "ADC saturation detected %lu times during session", saturationCount.load());
+    }
 }
 
 bool isRunning() {
@@ -521,6 +883,26 @@ Status getStatus() {
     }
     status.durationMs = running ? (millis() - sessionStartMs) : 0;
     strncpy(status.currentFile, currentFilePath, sizeof(status.currentFile) - 1);
+    
+    // Write latency statistics
+    status.writeStats.minUs = (writeLatencyMinUs == UINT32_MAX) ? 0 : writeLatencyMinUs;
+    status.writeStats.maxUs = writeLatencyMaxUs;
+    status.writeStats.avgUs = (writeLatencyCount > 0) ? (writeLatencySumUs / writeLatencyCount) : 0;
+    status.writeStats.countOver10ms = writeLatencyOver10ms.load();
+    
+    // Buffer high water mark (as percentage)
+    if (adcBuffer && adcBuffer->capacity() > 0) {
+        status.bufferHighWater = (bufferHighWaterMark.load() * 100) / adcBuffer->capacity();
+    } else {
+        status.bufferHighWater = 0;
+    }
+    
+    // Other hardening stats
+    status.checkpointCount = checkpointCount;
+    status.saturationCount = saturationCount.load();
+    status.fileRotations = rotationCount;
+    status.crc32 = runningCrc32;
+    
     return status;
 }
 
@@ -614,6 +996,90 @@ bool flush(uint32_t timeoutMs) {
     }
     
     return false;
+}
+
+bool hasRecoveryData() {
+    return hasRecoverableSession();
+}
+
+bool recoverSession() {
+    if (!hasRecoverableSession()) {
+        ESP_LOGI(TAG, "No session to recover");
+        return false;
+    }
+    
+    char filepath[64];
+    uint64_t adcCount, imuCount;
+    uint32_t sequence, crc;
+    
+    if (!loadSessionState(filepath, sizeof(filepath), &adcCount, &imuCount, &sequence, &crc)) {
+        ESP_LOGE(TAG, "Failed to load session state");
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "Recovering session: %s", filepath);
+    ESP_LOGI(TAG, "  ADC: %llu, IMU: %llu, Seq: %lu", adcCount, imuCount, sequence);
+    
+    // Check if the file exists
+    if (!SDManager::isMounted()) {
+        if (!SDManager::mount()) {
+            ESP_LOGE(TAG, "SD card not available for recovery");
+            return false;
+        }
+    }
+    
+    if (!SDManager::exists(filepath)) {
+        ESP_LOGE(TAG, "Recovery file not found: %s", filepath);
+        clearSessionState();
+        return false;
+    }
+    
+    // Open file for append
+    logFile = SDManager::open(filepath, FILE_APPEND);
+    if (!logFile) {
+        ESP_LOGE(TAG, "Failed to open recovery file");
+        clearSessionState();
+        return false;
+    }
+    
+    // Restore state
+    strncpy(currentFilePath, filepath, sizeof(currentFilePath) - 1);
+    adcSamplesLogged = adcCount;
+    imuSamplesLogged = imuCount;
+    adcSequenceNum = sequence;
+    runningCrc32 = crc;
+    bytesWritten = logFile.size();
+    
+    // Write recovery event
+    BinaryFormat::EventRecord event;
+    event.timestampOffsetUs = 0;  // Will be set properly once we have timing
+    event.eventCode = BinaryFormat::EventCode::Recovery;
+    event.dataLength = 0;
+    
+    uint8_t tag = static_cast<uint8_t>(BinaryFormat::RecordType::Event);
+    logFile.write(&tag, 1);
+    logFile.write((uint8_t*)&event, sizeof(event));
+    
+    ESP_LOGI(TAG, "Session recovered, ready to continue");
+    
+    // Note: caller should still call start() to resume logging
+    // This just restores state, doesn't restart acquisition
+    
+    return true;
+}
+
+void clearRecoveryData() {
+    clearSessionState();
+    ESP_LOGI(TAG, "Recovery data cleared");
+}
+
+WriteStats getWriteStats() {
+    WriteStats stats;
+    stats.minUs = (writeLatencyMinUs == UINT32_MAX) ? 0 : writeLatencyMinUs;
+    stats.maxUs = writeLatencyMaxUs;
+    stats.avgUs = (writeLatencyCount > 0) ? (writeLatencySumUs / writeLatencyCount) : 0;
+    stats.countOver10ms = writeLatencyOver10ms.load();
+    return stats;
 }
 
 } // namespace Logger

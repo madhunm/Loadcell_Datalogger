@@ -204,6 +204,14 @@ namespace EventCode {
     constexpr uint16_t SyncLost         = 0x0030;  // RTC sync lost
     constexpr uint16_t SyncRestored     = 0x0031;  // RTC sync restored
     constexpr uint16_t CalibrationPoint = 0x0100;  // Calibration reference
+    
+    // Hardening event codes
+    constexpr uint16_t Checkpoint       = 0x00F0;  // Periodic checkpoint marker
+    constexpr uint16_t FileRotation     = 0x00F1;  // File rotation occurred
+    constexpr uint16_t LowBattery       = 0x00F2;  // Low battery warning
+    constexpr uint16_t Saturation       = 0x00F3;  // ADC saturation detected
+    constexpr uint16_t WriteLatency     = 0x00F4;  // High write latency warning
+    constexpr uint16_t Recovery         = 0x00F5;  // Session recovered from crash
 }
 
 // ============================================================================
