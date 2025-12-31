@@ -10,8 +10,10 @@
 #include "../drivers/max11270.h"
 #include "../drivers/lsm6dsv.h"
 #include "../drivers/sd_manager.h"
+#include "../drivers/max17048.h"
 #include "../calibration/calibration_storage.h"
 #include <esp_log.h>
+#include <esp_task_wdt.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <atomic>
@@ -61,6 +63,45 @@ namespace {
     uint8_t* writeBuffer = nullptr;
     size_t writeBufferSize = 0;
     size_t writeBufferUsed = 0;
+    
+    // Estimate file size for pre-allocation
+    size_t estimateFileSize(uint32_t adcRateHz, uint32_t imuDecimation, uint32_t durationSec) {
+        // ADC: each sample is 16 bytes (timestamp + value + sequence)
+        size_t adcBytes = (size_t)adcRateHz * durationSec * sizeof(BinaryFormat::ADCRecord);
+        
+        // IMU: sampled at adcRateHz / imuDecimation, each record is 28 bytes
+        uint32_t imuRate = (imuDecimation > 0) ? (adcRateHz / imuDecimation) : 0;
+        size_t imuBytes = (size_t)imuRate * durationSec * sizeof(BinaryFormat::IMURecord);
+        
+        // Header + footer + 10% margin for events and alignment
+        size_t overhead = sizeof(BinaryFormat::FileHeader) + sizeof(BinaryFormat::FileFooter);
+        size_t total = adcBytes + imuBytes + overhead;
+        
+        return (size_t)(total * 1.1);  // 10% safety margin
+    }
+    
+    // Pre-allocate file space to avoid fragmentation
+    bool preAllocateFile(File& file, size_t bytes) {
+        ESP_LOGI(TAG, "Pre-allocating %.1f MB for log file", bytes / (1024.0 * 1024.0));
+        
+        // Use fallocate-style approach: seek to end and write a marker
+        if (!file.seek(bytes - 1)) {
+            ESP_LOGW(TAG, "Pre-allocation seek failed");
+            return false;
+        }
+        
+        uint8_t marker = 0;
+        if (file.write(&marker, 1) != 1) {
+            ESP_LOGW(TAG, "Pre-allocation write failed");
+            file.seek(0);
+            return false;
+        }
+        
+        // Return to start for actual writing
+        file.seek(0);
+        ESP_LOGI(TAG, "Pre-allocation successful");
+        return true;
+    }
     
     // Generate filename from timestamp
     void generateFilename(char* out, size_t maxLen) {
@@ -191,13 +232,42 @@ namespace {
 void loggerTaskFunc(void* param) {
     ESP_LOGI(TAG, "Logger task started on Core %d", xPortGetCoreID());
     
+    // Add task to watchdog (5 second timeout configured in main)
+    esp_task_wdt_add(nullptr);
+    
+    uint32_t lastBatteryCheckMs = 0;
+    constexpr uint32_t BATTERY_CHECK_INTERVAL_MS = 10000;  // Every 10 seconds
+    constexpr float LOW_BATTERY_THRESHOLD = 5.0f;  // Stop at 5% SOC
+    
     while (taskShouldRun) {
+        // Feed the watchdog
+        esp_task_wdt_reset();
+        
         if (running && !paused) {
             processSamples();
+            
+            // Periodic battery check for low battery protection
+            if (millis() - lastBatteryCheckMs > BATTERY_CHECK_INTERVAL_MS) {
+                lastBatteryCheckMs = millis();
+                
+                MAX17048::BatteryData batt;
+                if (MAX17048::isPresent() && MAX17048::getBatteryData(&batt)) {
+                    if (batt.socPercent < LOW_BATTERY_THRESHOLD) {
+                        ESP_LOGW(TAG, "LOW BATTERY (%.1f%%) - stopping logger to protect data",
+                                 batt.socPercent);
+                        running = false;  // Trigger graceful stop
+                        // The stop() function will be called by main loop detecting !running
+                    }
+                }
+            }
         }
+        
         // Small delay to prevent tight loop, allows other tasks to run
         vTaskDelay(pdMS_TO_TICKS(1));
     }
+    
+    // Remove from watchdog before exit
+    esp_task_wdt_delete(nullptr);
     
     ESP_LOGI(TAG, "Logger task stopping");
     vTaskDelete(nullptr);
@@ -287,6 +357,18 @@ bool start() {
     if (!logFile) {
         ESP_LOGE(TAG, "Failed to open: %s", currentFilePath);
         return false;
+    }
+    
+    // Pre-allocate file space to reduce fragmentation-induced write spikes
+    if (currentConfig.maxDurationSec > 0) {
+        size_t estimatedSize = estimateFileSize(
+            currentConfig.adcRateHz,
+            currentConfig.imuDecimation,
+            currentConfig.maxDurationSec
+        );
+        if (!preAllocateFile(logFile, estimatedSize)) {
+            ESP_LOGW(TAG, "File pre-allocation failed - may have write latency spikes");
+        }
     }
     
     // Reset state

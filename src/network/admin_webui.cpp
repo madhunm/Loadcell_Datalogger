@@ -16,6 +16,7 @@
 #include "../drivers/sd_manager.h"
 #include "../drivers/lsm6dsv.h"
 #include "../drivers/rx8900ce.h"
+#include "../logging/logger_module.h"
 #include <esp_http_server.h>
 #include <esp_ota_ops.h>
 #include <freertos/FreeRTOS.h>
@@ -243,12 +244,32 @@ namespace {
             sendError(req, "Logging not allowed", 403);
             return ESP_OK;
         }
+        
+        if (Logger::isRunning()) {
+            sendError(req, "Already logging", 400);
+            return ESP_OK;
+        }
+        
+        if (!Logger::start()) {
+            sendError(req, "Failed to start logger - check SD card", 500);
+            return ESP_OK;
+        }
+        
         StatusLED::setState(StatusLED::State::Logging);
-        sendSuccess(req, "Logging started");
+        
+        snprintf(jsonBuf, sizeof(jsonBuf),
+            "{\"success\":true,\"message\":\"Logging started\",\"file\":\"%s\"}",
+            Logger::getCurrentFilePath()
+        );
+        sendJson(req, jsonBuf);
         return ESP_OK;
     }
     
     esp_err_t handleLoggingStop(httpd_req_t* req) {
+        if (Logger::isRunning()) {
+            Logger::stop();
+        }
+        
         switch (AppMode::getMode()) {
             case AppMode::Mode::User:
                 StatusLED::setState(StatusLED::State::IdleUser);

@@ -30,6 +30,7 @@ struct Config {
     bool autoFilename;          // Generate filename from timestamp
     const char* filename;       // Manual filename (if not auto)
     size_t bufferSizeKB;        // Buffer size in KB (default 8)
+    uint32_t maxDurationSec;    // Max log duration for pre-allocation (default 3600 = 1hr)
 };
 
 /** @brief Default configuration */
@@ -40,7 +41,8 @@ inline Config defaultConfig() {
         .outputDir = "/data",
         .autoFilename = true,
         .filename = nullptr,
-        .bufferSizeKB = 8
+        .bufferSizeKB = 8,
+        .maxDurationSec = 3600  // 1 hour default pre-allocation
     };
 }
 

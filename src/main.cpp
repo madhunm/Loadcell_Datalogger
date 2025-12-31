@@ -20,6 +20,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <esp_task_wdt.h>
 #include "pin_config.h"
 
 // Drivers
@@ -648,6 +649,16 @@ void setup() {
     
     // Button
     pinMode(PIN_LOG_BUTTON, INPUT);
+    
+    // Configure task watchdog (5 second timeout, panic on timeout)
+    // The logger task will add itself to the watchdog when it starts
+    esp_task_wdt_config_t wdt_config = {
+        .timeout_ms = 5000,            // 5 second timeout
+        .idle_core_mask = 0,           // Don't watch idle tasks
+        .trigger_panic = true          // Panic on timeout
+    };
+    esp_task_wdt_init(&wdt_config);
+    Serial.println("[Init] Watchdog timer configured (5s timeout)");
     
     // Hardware
     bool hwOk = initHardware();
