@@ -112,12 +112,27 @@ namespace {
     }
     
     esp_err_t handleGetStatus(httpd_req_t* req) {
+        // Get SD card info
+        bool sdPresent = SDManager::isMounted();
+        uint64_t sdTotalMB = 0, sdUsedMB = 0;
+        if (sdPresent) {
+            SDManager::CardInfo info;
+            if (SDManager::getCardInfo(&info)) {
+                sdTotalMB = info.totalBytes / (1024 * 1024);
+                sdUsedMB = info.usedBytes / (1024 * 1024);
+            }
+        }
+        
         snprintf(jsonBuf, sizeof(jsonBuf),
-            "{\"mode\":\"%s\",\"wifi\":true,\"uptime_ms\":%lu,\"free_heap\":%u,\"adc_present\":%s}",
+            "{\"mode\":\"%s\",\"wifi\":true,\"uptime_ms\":%lu,\"free_heap\":%u,"
+            "\"adc_present\":%s,\"sd_present\":%s,\"sd_total_mb\":%llu,\"sd_used_mb\":%llu}",
             AppMode::getModeString(),
             millis(),
             ESP.getFreeHeap(),
-            MAX11270::isPresent() ? "true" : "false"
+            MAX11270::isPresent() ? "true" : "false",
+            sdPresent ? "true" : "false",
+            sdTotalMB,
+            sdUsedMB
         );
         sendJson(req, jsonBuf);
         return ESP_OK;

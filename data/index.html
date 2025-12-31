@@ -231,9 +231,16 @@
             document.getElementById('stat-logging').style.color = status.logging ? 'var(--accent-orange)' : 'var(--text-primary)';
             updateLoggingButton();
             
-            // SD Card
-            document.getElementById('stat-sd').textContent = status.sd_present ? 'OK' : 'MISSING';
-            document.getElementById('stat-sd').style.color = status.sd_present ? 'var(--accent-green)' : 'var(--accent-red)';
+            // SD Card - show used/total capacity
+            if (status.sd_present && status.sd_total_mb > 0) {
+                const usedGB = (status.sd_used_mb / 1024).toFixed(1);
+                const totalGB = (status.sd_total_mb / 1024).toFixed(1);
+                document.getElementById('stat-sd').textContent = `${usedGB}/${totalGB} GB`;
+                document.getElementById('stat-sd').style.color = 'var(--accent-green)';
+            } else {
+                document.getElementById('stat-sd').textContent = 'MISSING';
+                document.getElementById('stat-sd').style.color = 'var(--accent-red)';
+            }
             
             // Device info
             if (status.uptime_ms) {
