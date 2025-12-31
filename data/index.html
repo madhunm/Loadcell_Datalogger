@@ -1,0 +1,1420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Loadcell Data Logger</title>
+    <style>
+        :root {
+            --bg-dark: #0a0e17;
+            --bg-card: #111827;
+            --bg-input: #1f2937;
+            --bg-hover: #374151;
+            --accent: #06b6d4;
+            --accent-glow: rgba(6, 182, 212, 0.3);
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --text: #f9fafb;
+            --text-dim: #9ca3af;
+            --border: #374151;
+            --shadow: 0 4px 20px rgba(0,0,0,0.4);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg-dark);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(180deg, #1f2937 0%, var(--bg-dark) 100%);
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, var(--accent), #0891b2);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+        }
+
+        .logo h1 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            background: linear-gradient(90deg, var(--text), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .mode-badge {
+            padding: 0.4rem 0.9rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .mode-badge.user { background: var(--bg-input); color: var(--text-dim); }
+        .mode-badge.admin { background: rgba(245, 158, 11, 0.2); color: var(--warning); }
+        .mode-badge.factory { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+
+        .header-status {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .status-pill {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.35rem 0.75rem;
+            background: var(--bg-input);
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+        }
+
+        .status-dot.warning { background: var(--warning); }
+        .status-dot.danger { background: var(--danger); }
+        .status-dot.pulse { animation: pulse 1.5s infinite; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(0.9); }
+        }
+
+        /* Navigation */
+        .nav-tabs {
+            display: flex;
+            gap: 0.25rem;
+            background: var(--bg-input);
+            padding: 0.25rem;
+            border-radius: 12px;
+            margin: 1.5rem auto;
+            max-width: fit-content;
+        }
+
+        .nav-tab {
+            padding: 0.6rem 1.25rem;
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: all 0.2s;
+            display: none;
+        }
+
+        .nav-tab.visible { display: block; }
+        .nav-tab:hover { color: var(--text); background: var(--bg-hover); }
+        .nav-tab.active { color: var(--text); background: var(--accent); }
+
+        /* Main Content */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 1.5rem 2rem;
+        }
+
+        .page { display: none; }
+        .page.active { display: block; }
+
+        /* Cards */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 1.25rem;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            overflow: hidden;
+            box-shadow: var(--shadow);
+        }
+
+        .card-header {
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .card-title {
+            font-size: 0.9rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .card-body { padding: 1.25rem; }
+
+        /* Live Display */
+        .live-display {
+            text-align: center;
+            padding: 2rem 1rem;
+        }
+
+        .live-value {
+            font-size: 4.5rem;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', 'SF Mono', monospace;
+            color: var(--accent);
+            text-shadow: 0 0 40px var(--accent-glow);
+            line-height: 1;
+        }
+
+        .live-unit {
+            font-size: 1.75rem;
+            color: var(--text-dim);
+            margin-left: 0.25rem;
+        }
+
+        .live-label {
+            font-size: 0.9rem;
+            color: var(--text-dim);
+            margin-top: 0.5rem;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 0.75rem;
+        }
+
+        .stat-box {
+            background: var(--bg-input);
+            padding: 1rem;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.25rem;
+            font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text);
+        }
+
+        .stat-label {
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-top: 0.25rem;
+        }
+
+        /* Forms */
+        .form-group { margin-bottom: 1rem; }
+
+        .form-label {
+            display: block;
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            margin-bottom: 0.4rem;
+            font-weight: 500;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 0.65rem 0.9rem;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 0.9rem;
+            transition: border-color 0.2s;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1rem;
+        }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            padding: 0.65rem 1.25rem;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s;
+        }
+
+        .btn-primary { background: var(--accent); color: #000; }
+        .btn-primary:hover { background: #22d3ee; transform: translateY(-1px); }
+
+        .btn-success { background: var(--success); color: #fff; }
+        .btn-success:hover { background: #34d399; }
+
+        .btn-danger { background: var(--danger); color: #fff; }
+        .btn-danger:hover { background: #f87171; }
+
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-dim);
+            border: 1px solid var(--border);
+        }
+        .btn-ghost:hover { background: var(--bg-hover); color: var(--text); }
+
+        .btn-block { width: 100%; }
+        .btn-group { display: flex; gap: 0.75rem; margin-top: 1rem; }
+
+        /* Calibration Table */
+        .cal-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .cal-table th {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            padding: 0.5rem;
+            text-align: center;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .cal-table td {
+            padding: 0.4rem;
+            text-align: center;
+        }
+
+        .cal-table input {
+            width: 80px;
+            padding: 0.4rem;
+            text-align: center;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 0.85rem;
+        }
+
+        .cal-table input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        /* File List */
+        .file-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .file-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem;
+            border-radius: 8px;
+            margin-bottom: 0.5rem;
+            background: var(--bg-input);
+        }
+
+        .file-info { display: flex; flex-direction: column; }
+
+        .file-name {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+        }
+
+        .file-meta {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+        }
+
+        /* Progress Bar */
+        .progress-container { margin-bottom: 1rem; }
+
+        .progress-info {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            margin-bottom: 0.4rem;
+        }
+
+        .progress-bar {
+            height: 8px;
+            background: var(--bg-input);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent), #22d3ee);
+            border-radius: 4px;
+            transition: width 0.3s;
+        }
+
+        /* Test Cards */
+        .test-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 0.75rem;
+        }
+
+        .test-card {
+            background: var(--bg-input);
+            padding: 1rem;
+            border-radius: 10px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 2px solid transparent;
+        }
+
+        .test-card:hover { transform: translateY(-2px); border-color: var(--border); }
+        .test-card.pass { border-color: var(--success); }
+        .test-card.fail { border-color: var(--danger); }
+        .test-card.running { border-color: var(--warning); animation: pulse 1s infinite; }
+
+        .test-icon { font-size: 1.5rem; margin-bottom: 0.5rem; }
+        .test-name { font-size: 0.8rem; font-weight: 500; }
+        .test-status { font-size: 0.7rem; color: var(--text-dim); margin-top: 0.25rem; }
+
+        /* LED Test */
+        .led-display {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem;
+        }
+
+        .led-preview {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            background: #333;
+            margin-bottom: 1rem;
+            box-shadow: 0 0 0 4px var(--bg-input);
+            transition: all 0.3s;
+        }
+
+        .led-preview.red { background: #ef4444; box-shadow: 0 0 40px #ef4444; }
+        .led-preview.green { background: #22c55e; box-shadow: 0 0 40px #22c55e; }
+        .led-preview.blue { background: #3b82f6; box-shadow: 0 0 40px #3b82f6; }
+        .led-preview.cyan { background: #06b6d4; box-shadow: 0 0 40px #06b6d4; }
+        .led-preview.orange { background: #f97316; box-shadow: 0 0 40px #f97316; }
+        .led-preview.magenta { background: #d946ef; box-shadow: 0 0 40px #d946ef; }
+
+        .led-state-name { font-size: 1.1rem; font-weight: 500; margin-bottom: 0.5rem; }
+        .led-state-counter { font-size: 0.8rem; color: var(--text-dim); }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 200;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s;
+        }
+
+        .modal-overlay.show { opacity: 1; visibility: visible; }
+
+        .modal {
+            background: var(--bg-card);
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            padding: 1.5rem;
+            min-width: 340px;
+            max-width: 90%;
+            transform: scale(0.9);
+            transition: transform 0.3s;
+        }
+
+        .modal-overlay.show .modal { transform: scale(1); }
+        .modal-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem; }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 1.5rem;
+            right: 1.5rem;
+            padding: 1rem 1.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s;
+            z-index: 1000;
+        }
+
+        .toast.show { transform: translateY(0); opacity: 1; }
+        .toast.success { border-color: var(--success); }
+        .toast.error { border-color: var(--danger); }
+
+        /* Mode Info Banner */
+        .mode-info {
+            background: var(--bg-input);
+            padding: 0.75rem 1rem;
+            border-radius: 10px;
+            margin-bottom: 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 0.85rem;
+        }
+
+        .mode-info.admin { border-left: 3px solid var(--warning); }
+        .mode-info.factory { border-left: 3px solid var(--danger); }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .header-content { flex-direction: column; align-items: flex-start; }
+            .form-row { grid-template-columns: 1fr; }
+            .live-value { font-size: 3rem; }
+            .nav-tabs { flex-wrap: wrap; justify-content: center; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">
+                <div class="logo-icon">⚖️</div>
+                <h1>Loadcell Data Logger</h1>
+            </div>
+            <div class="header-right">
+                <div class="mode-badge user" id="mode-badge" onclick="showModeModal()">
+                    👤 USER
+                </div>
+                <div class="header-status">
+                    <div class="status-pill">
+                        <span class="status-dot" id="status-wifi"></span>
+                        <span>WiFi</span>
+                    </div>
+                    <div class="status-pill">
+                        <span class="status-dot" id="status-sd"></span>
+                        <span>SD</span>
+                    </div>
+                    <div class="status-pill">
+                        <span class="status-dot" id="status-log"></span>
+                        <span id="status-log-text">Idle</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Navigation -->
+    <nav class="nav-tabs" id="nav-tabs">
+        <button class="nav-tab visible active" data-page="dashboard" data-modes="user,admin,factory">📊 Dashboard</button>
+        <button class="nav-tab" data-page="config" data-modes="admin,factory">⚙️ Configuration</button>
+        <button class="nav-tab" data-page="tests" data-modes="factory">🔧 Factory Tests</button>
+    </nav>
+
+    <div class="container">
+        <!-- ==================== USER MODE: Dashboard ==================== -->
+        <div class="page active" id="page-dashboard">
+            <div class="grid">
+                <!-- Live Reading -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">📊 Live Reading</span>
+                        <button class="btn btn-ghost" onclick="toggleLiveUpdate()">
+                            <span id="live-toggle-text">⏸ Pause</span>
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="live-display">
+                            <div>
+                                <span class="live-value" id="live-load">---</span>
+                                <span class="live-unit">kg</span>
+                            </div>
+                            <div class="live-label">Current Load</div>
+                        </div>
+                        <div class="stats-grid">
+                            <div class="stat-box">
+                                <div class="stat-value" id="stat-raw">---</div>
+                                <div class="stat-label">Raw ADC</div>
+                            </div>
+                            <div class="stat-box">
+                                <div class="stat-value" id="stat-accel">---</div>
+                                <div class="stat-label">Accel Z (g)</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Logging Control -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">🔴 Data Logging</span>
+                    </div>
+                    <div class="card-body">
+                        <div id="log-idle">
+                            <p style="color: var(--text-dim); margin-bottom: 1rem; font-size: 0.9rem;">
+                                Record data at 64,000 samples/second with synchronized IMU.
+                            </p>
+                            <button class="btn btn-success btn-block" onclick="startLogging()">
+                                ▶️ Start Logging
+                            </button>
+                        </div>
+                        <div id="log-active" style="display: none;">
+                            <div style="background: rgba(245,158,11,0.15); border: 1px solid var(--warning); border-radius: 10px; padding: 1rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.75rem;">
+                                <span class="status-dot pulse" style="background: var(--warning);"></span>
+                                <span style="font-weight: 500;">Recording...</span>
+                            </div>
+                            <div class="stats-grid" style="margin-bottom: 1rem;">
+                                <div class="stat-box">
+                                    <div class="stat-value" id="log-samples">0</div>
+                                    <div class="stat-label">Samples</div>
+                                </div>
+                                <div class="stat-box">
+                                    <div class="stat-value" id="log-duration">00:00</div>
+                                    <div class="stat-label">Duration</div>
+                                </div>
+                            </div>
+                            <button class="btn btn-danger btn-block" onclick="stopLogging()">
+                                ⏹️ Stop Logging
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Active Loadcell Info (Read-only for users) -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">⚖️ Active Loadcell</span>
+                    </div>
+                    <div class="card-body">
+                        <div style="background: var(--bg-input); border-radius: 10px; padding: 1rem;">
+                            <div style="font-size: 1.2rem; font-weight: 600; margin-bottom: 0.75rem; color: var(--accent);" id="active-lc-id">---</div>
+                            <div style="font-size: 0.85rem; color: var(--text-dim); line-height: 1.8;">
+                                <div>Model: <span id="active-lc-model" style="color: var(--text);">---</span></div>
+                                <div>Capacity: <span id="active-lc-capacity" style="color: var(--text);">---</span> kg</div>
+                                <div>Calibration: <span id="active-lc-points" style="color: var(--text);">---</span> points</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SD Card / Files -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">💾 Log Files</span>
+                        <button class="btn btn-ghost" onclick="refreshFiles()">↻</button>
+                    </div>
+                    <div class="card-body">
+                        <div class="progress-container">
+                            <div class="progress-info">
+                                <span>Used: <span id="sd-used">0</span> MB</span>
+                                <span>Free: <span id="sd-free">0</span> MB</span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="sd-progress" style="width: 0%;"></div>
+                            </div>
+                        </div>
+                        <div class="file-list" id="file-list">
+                            <div class="file-item">
+                                <span style="color: var(--text-dim);">Loading...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- System Status -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">ℹ️ System Status</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="stats-grid">
+                            <div class="stat-box">
+                                <div class="stat-value" id="sys-uptime">---</div>
+                                <div class="stat-label">Uptime</div>
+                            </div>
+                            <div class="stat-box">
+                                <div class="stat-value" id="sys-heap">---</div>
+                                <div class="stat-label">Free Heap</div>
+                            </div>
+                            <div class="stat-box">
+                                <div class="stat-value" id="sys-battery">---%</div>
+                                <div class="stat-label">Battery</div>
+                            </div>
+                            <div class="stat-box">
+                                <div class="stat-value" id="sys-ip">---</div>
+                                <div class="stat-label">IP Address</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== ADMIN MODE: Configuration ==================== -->
+        <div class="page" id="page-config">
+            <div class="mode-info admin">
+                🔧 <strong>Field Admin Mode</strong> — Configure loadcell parameters and calibration
+            </div>
+            
+            <div class="grid">
+                <!-- Loadcell Setup -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">⚙️ Loadcell Setup</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label class="form-label">Loadcell ID</label>
+                                <input type="text" class="form-input" id="cfg-id" placeholder="TC023L0-000025">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Model</label>
+                                <input type="text" class="form-input" id="cfg-model" placeholder="TC023L0">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label class="form-label">Serial Number</label>
+                                <input type="text" class="form-input" id="cfg-serial" placeholder="000025">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Capacity (kg)</label>
+                                <input type="number" class="form-input" id="cfg-capacity" placeholder="2000">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label class="form-label">Excitation Voltage (V)</label>
+                                <input type="number" class="form-input" id="cfg-excitation" step="0.1" placeholder="10.0">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">PGA Gain</label>
+                                <select class="form-input" id="cfg-gain">
+                                    <option value="1">1x</option>
+                                    <option value="2">2x</option>
+                                    <option value="4">4x</option>
+                                    <option value="8">8x</option>
+                                    <option value="16">16x</option>
+                                    <option value="32">32x</option>
+                                    <option value="64">64x</option>
+                                    <option value="128" selected>128x</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="saveConfig()">💾 Save</button>
+                            <button class="btn btn-ghost" onclick="loadConfig()">↻ Reload</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Calibration Curve -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">📐 Calibration Curve</span>
+                        <button class="btn btn-ghost" onclick="addCalPoint()">+ Add</button>
+                    </div>
+                    <div class="card-body">
+                        <table class="cal-table">
+                            <thead>
+                                <tr>
+                                    <th>Load (kg)</th>
+                                    <th>Output (µV)</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="cal-points"></tbody>
+                        </table>
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="saveConfig()">💾 Save</button>
+                            <button class="btn btn-ghost" onclick="capturePoint()">📍 Capture</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- IMU Settings -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">🎯 IMU Settings</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label class="form-label">Accelerometer Range</label>
+                                <select class="form-input" id="cfg-imu-g">
+                                    <option value="2">±2g</option>
+                                    <option value="4">±4g</option>
+                                    <option value="8">±8g</option>
+                                    <option value="16" selected>±16g</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Gyroscope Range</label>
+                                <select class="form-input" id="cfg-imu-dps">
+                                    <option value="250">±250°/s</option>
+                                    <option value="500">±500°/s</option>
+                                    <option value="1000">±1000°/s</option>
+                                    <option value="2000" selected>±2000°/s</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== FACTORY MODE: Tests ==================== -->
+        <div class="page" id="page-tests">
+            <div class="mode-info factory">
+                🏭 <strong>Factory Mode</strong> — Hardware diagnostics and module testing
+            </div>
+            
+            <div class="grid">
+                <!-- Sensor Tests -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">🔬 Sensor Tests</span>
+                        <button class="btn btn-ghost" onclick="runAllTests()">▶️ Run All</button>
+                    </div>
+                    <div class="card-body">
+                        <div class="test-grid">
+                            <div class="test-card" onclick="runTest('adc')" id="test-adc">
+                                <div class="test-icon">📊</div>
+                                <div class="test-name">ADC</div>
+                                <div class="test-status">Not tested</div>
+                            </div>
+                            <div class="test-card" onclick="runTest('imu')" id="test-imu">
+                                <div class="test-icon">🎯</div>
+                                <div class="test-name">IMU</div>
+                                <div class="test-status">Not tested</div>
+                            </div>
+                            <div class="test-card" onclick="runTest('rtc')" id="test-rtc">
+                                <div class="test-icon">⏰</div>
+                                <div class="test-name">RTC</div>
+                                <div class="test-status">Not tested</div>
+                            </div>
+                            <div class="test-card" onclick="runTest('sd')" id="test-sd">
+                                <div class="test-icon">💾</div>
+                                <div class="test-name">SD Card</div>
+                                <div class="test-status">Not tested</div>
+                            </div>
+                            <div class="test-card" onclick="runTest('neopixel')" id="test-neopixel">
+                                <div class="test-icon">💡</div>
+                                <div class="test-name">NeoPixel</div>
+                                <div class="test-status">Not tested</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- LED Test -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">💡 LED Pattern Test</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="led-display">
+                            <div class="led-preview" id="led-preview"></div>
+                            <div class="led-state-name" id="led-state-name">Off</div>
+                            <div class="led-state-counter" id="led-state-counter">State 0 of 24</div>
+                        </div>
+                        <div class="btn-group" style="justify-content: center;">
+                            <button class="btn btn-ghost" onclick="ledPrev()">◀ Prev</button>
+                            <button class="btn btn-primary" onclick="ledNext()">Next ▶</button>
+                        </div>
+                        <div style="margin-top: 1rem; text-align: center;">
+                            <button class="btn btn-ghost" onclick="toggleLedCycle()" id="led-cycle-btn">
+                                🔄 Auto Cycle
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Test Summary -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">📋 Test Summary</span>
+                    </div>
+                    <div class="card-body">
+                        <div id="test-summary" style="font-size: 0.9rem; color: var(--text-dim);">
+                            <p>Run tests to see results here.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mode Selection Modal -->
+    <div class="modal-overlay" id="mode-modal">
+        <div class="modal">
+            <div class="modal-title">🔐 Select Access Mode</div>
+            
+            <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1rem;">
+                <button class="btn btn-block" style="background: var(--bg-input); justify-content: flex-start; padding: 1rem;" onclick="selectMode('user')">
+                    <span style="font-size: 1.25rem; margin-right: 0.5rem;">👤</span>
+                    <div style="text-align: left;">
+                        <div style="font-weight: 600;">User Mode</div>
+                        <div style="font-size: 0.75rem; color: var(--text-dim);">View data, start/stop logging</div>
+                    </div>
+                </button>
+                
+                <button class="btn btn-block" style="background: var(--bg-input); justify-content: flex-start; padding: 1rem;" onclick="selectMode('admin')">
+                    <span style="font-size: 1.25rem; margin-right: 0.5rem;">🔧</span>
+                    <div style="text-align: left;">
+                        <div style="font-weight: 600;">Field Admin</div>
+                        <div style="font-size: 0.75rem; color: var(--text-dim);">Configure loadcell & calibration</div>
+                    </div>
+                </button>
+                
+                <button class="btn btn-block" style="background: var(--bg-input); justify-content: flex-start; padding: 1rem;" onclick="selectMode('factory')">
+                    <span style="font-size: 1.25rem; margin-right: 0.5rem;">🏭</span>
+                    <div style="text-align: left;">
+                        <div style="font-weight: 600;">Factory Mode</div>
+                        <div style="font-size: 0.75rem; color: var(--text-dim);">Full access + hardware tests</div>
+                    </div>
+                </button>
+            </div>
+            
+            <button class="btn btn-ghost btn-block" onclick="closeModeModal()">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Password Modal -->
+    <div class="modal-overlay" id="password-modal">
+        <div class="modal">
+            <div class="modal-title">🔐 Enter Password</div>
+            <div class="form-group">
+                <label class="form-label">Password for <span id="password-mode-name">Admin</span> mode</label>
+                <input type="password" class="form-input" id="modal-password" placeholder="Enter password">
+            </div>
+            <div class="btn-group">
+                <button class="btn btn-ghost" onclick="closePasswordModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="submitPassword()">Unlock</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <script>
+        // ==================== STATE ====================
+        let currentMode = 'user';
+        let pendingMode = null;
+        let isLogging = false;
+        let liveUpdateEnabled = true;
+        let liveInterval = null;
+        let ledCycling = false;
+        let ledStateIndex = 0;
+
+        // ==================== INIT ====================
+        document.addEventListener('DOMContentLoaded', () => {
+            setupNavigation();
+            loadMode();
+            loadConfig();
+            loadStatus();
+            refreshFiles();
+            startLiveUpdates();
+            initCalPoints();
+        });
+
+        // ==================== MODE MANAGEMENT ====================
+        function showModeModal() {
+            document.getElementById('mode-modal').classList.add('show');
+        }
+
+        function closeModeModal() {
+            document.getElementById('mode-modal').classList.remove('show');
+        }
+
+        function selectMode(mode) {
+            closeModeModal();
+            if (mode === 'user') {
+                setMode('user');
+            } else {
+                pendingMode = mode;
+                document.getElementById('password-mode-name').textContent = 
+                    mode === 'admin' ? 'Field Admin' : 'Factory';
+                document.getElementById('password-modal').classList.add('show');
+                document.getElementById('modal-password').focus();
+            }
+        }
+
+        function closePasswordModal() {
+            document.getElementById('password-modal').classList.remove('show');
+            document.getElementById('modal-password').value = '';
+        }
+
+        async function submitPassword() {
+            const password = document.getElementById('modal-password').value;
+            closePasswordModal();
+            
+            const resp = await api('/api/mode', 'POST', { mode: pendingMode, password });
+            if (resp?.success) {
+                setMode(pendingMode);
+            } else {
+                showToast(resp?.error || 'Invalid password', 'error');
+            }
+        }
+
+        async function loadMode() {
+            const resp = await api('/api/mode');
+            if (resp?.mode) {
+                setMode(resp.mode);
+            }
+        }
+
+        function setMode(mode) {
+            currentMode = mode;
+            updateModeUI();
+            updateNavTabs();
+            
+            // Switch to dashboard if current page not allowed
+            const currentPage = document.querySelector('.page.active')?.id?.replace('page-', '');
+            const allowedPages = getTabsForMode(mode);
+            if (!allowedPages.includes(currentPage)) {
+                showPage('dashboard');
+            }
+        }
+
+        function updateModeUI() {
+            const badge = document.getElementById('mode-badge');
+            badge.className = 'mode-badge ' + currentMode;
+            
+            const icons = { user: '👤', admin: '🔧', factory: '🏭' };
+            const names = { user: 'USER', admin: 'ADMIN', factory: 'FACTORY' };
+            badge.textContent = `${icons[currentMode]} ${names[currentMode]}`;
+        }
+
+        function getTabsForMode(mode) {
+            if (mode === 'factory') return ['dashboard', 'config', 'tests'];
+            if (mode === 'admin') return ['dashboard', 'config'];
+            return ['dashboard'];
+        }
+
+        function updateNavTabs() {
+            const allowed = getTabsForMode(currentMode);
+            document.querySelectorAll('.nav-tab').forEach(tab => {
+                const page = tab.dataset.page;
+                tab.classList.toggle('visible', allowed.includes(page));
+            });
+        }
+
+        // ==================== NAVIGATION ====================
+        function setupNavigation() {
+            document.querySelectorAll('.nav-tab').forEach(tab => {
+                tab.addEventListener('click', () => showPage(tab.dataset.page));
+            });
+        }
+
+        function showPage(page) {
+            document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            
+            document.querySelector(`[data-page="${page}"]`)?.classList.add('active');
+            document.getElementById(`page-${page}`)?.classList.add('active');
+        }
+
+        // ==================== API ====================
+        async function api(endpoint, method = 'GET', data = null) {
+            try {
+                const opts = { method, headers: { 'Content-Type': 'application/json' } };
+                if (data) opts.body = JSON.stringify(data);
+                const resp = await fetch(endpoint, opts);
+                return await resp.json();
+            } catch (e) {
+                console.error('API error:', e);
+                return null;
+            }
+        }
+
+        // ==================== LIVE UPDATES ====================
+        function startLiveUpdates() {
+            liveInterval = setInterval(updateLive, 500);
+        }
+
+        function toggleLiveUpdate() {
+            liveUpdateEnabled = !liveUpdateEnabled;
+            document.getElementById('live-toggle-text').textContent = 
+                liveUpdateEnabled ? '⏸ Pause' : '▶ Resume';
+        }
+
+        async function updateLive() {
+            if (!liveUpdateEnabled) return;
+            
+            const data = await api('/api/live');
+            if (data) {
+                document.getElementById('live-load').textContent = data.load_kg?.toFixed(2) ?? '---';
+                document.getElementById('stat-raw').textContent = data.raw_adc?.toLocaleString() ?? '---';
+                document.getElementById('stat-accel').textContent = data.accel_z?.toFixed(3) ?? '---';
+            }
+
+            const status = await api('/api/status');
+            if (status) {
+                const sec = Math.floor((status.uptime_ms || 0) / 1000);
+                const m = Math.floor(sec / 60), s = sec % 60;
+                document.getElementById('sys-uptime').textContent = `${m}:${s.toString().padStart(2, '0')}`;
+                document.getElementById('sys-heap').textContent = `${Math.round((status.free_heap || 0) / 1024)}K`;
+                
+                document.getElementById('status-wifi').className = 'status-dot' + (status.wifi ? '' : ' danger');
+                document.getElementById('status-sd').className = 'status-dot' + (status.sd_present ? '' : ' danger');
+                
+                if (status.logging !== isLogging) {
+                    isLogging = status.logging;
+                    updateLoggingUI();
+                }
+            }
+        }
+
+        async function loadStatus() {
+            document.getElementById('sys-ip').textContent = '192.168.4.1';
+            
+            const battery = await api('/api/battery');
+            if (battery) {
+                document.getElementById('sys-battery').textContent = `${battery.percent || 0}%`;
+            }
+        }
+
+        // ==================== CONFIG ====================
+        async function loadConfig() {
+            const cfg = await api('/api/config');
+            if (cfg) {
+                document.getElementById('cfg-id').value = cfg.loadcell_id || '';
+                document.getElementById('cfg-model').value = cfg.loadcell_model || '';
+                document.getElementById('cfg-serial').value = cfg.loadcell_serial || '';
+                document.getElementById('cfg-capacity').value = cfg.capacity_kg || '';
+                document.getElementById('cfg-excitation').value = cfg.excitation_V || '';
+                document.getElementById('cfg-gain').value = cfg.adc_pga_gain || 128;
+                document.getElementById('cfg-imu-g').value = cfg.imu_g_range || 16;
+                document.getElementById('cfg-imu-dps').value = cfg.imu_gyro_dps || 2000;
+
+                // Dashboard display
+                document.getElementById('active-lc-id').textContent = cfg.loadcell_id || 'Not configured';
+                document.getElementById('active-lc-model').textContent = cfg.loadcell_model || '---';
+                document.getElementById('active-lc-capacity').textContent = cfg.capacity_kg || '---';
+
+                // Cal points
+                if (cfg.calibration_points?.length) {
+                    document.getElementById('cal-points').innerHTML = '';
+                    cfg.calibration_points.forEach(pt => addCalPointWithValues(pt.load_kg, pt.output_uV));
+                    document.getElementById('active-lc-points').textContent = cfg.calibration_points.length;
+                }
+            }
+        }
+
+        async function saveConfig() {
+            if (currentMode === 'user') {
+                showToast('Admin access required', 'error');
+                return;
+            }
+
+            const cfg = {
+                loadcell_id: document.getElementById('cfg-id').value,
+                loadcell_model: document.getElementById('cfg-model').value,
+                loadcell_serial: document.getElementById('cfg-serial').value,
+                capacity_kg: parseFloat(document.getElementById('cfg-capacity').value) || 2000,
+                excitation_V: parseFloat(document.getElementById('cfg-excitation').value) || 10,
+                adc_pga_gain: parseInt(document.getElementById('cfg-gain').value),
+                imu_g_range: parseInt(document.getElementById('cfg-imu-g').value),
+                imu_gyro_dps: parseInt(document.getElementById('cfg-imu-dps').value),
+                calibration_points: getCalibrationPoints()
+            };
+
+            const resp = await api('/api/config', 'POST', cfg);
+            if (resp?.success) {
+                showToast('Configuration saved!', 'success');
+                loadConfig();
+            } else {
+                showToast(resp?.error || 'Failed to save', 'error');
+            }
+        }
+
+        // ==================== CALIBRATION ====================
+        function initCalPoints() {
+            addCalPointWithValues(0, 0);
+            addCalPointWithValues(1000, 5000);
+            addCalPointWithValues(2000, 10000);
+        }
+
+        function getCalibrationPoints() {
+            const rows = document.querySelectorAll('#cal-points tr');
+            const pts = [];
+            rows.forEach(row => {
+                const inputs = row.querySelectorAll('input');
+                if (inputs.length >= 2) {
+                    pts.push({
+                        load_kg: parseFloat(inputs[0].value) || 0,
+                        output_uV: parseFloat(inputs[1].value) || 0
+                    });
+                }
+            });
+            return pts.sort((a, b) => a.output_uV - b.output_uV);
+        }
+
+        function addCalPoint() { addCalPointWithValues(0, 0); }
+
+        function addCalPointWithValues(load, uv) {
+            const tbody = document.getElementById('cal-points');
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td><input type="number" value="${load}" step="0.1"></td>
+                <td><input type="number" value="${uv}" step="0.1"></td>
+                <td><button class="btn btn-ghost" style="padding:0.3rem 0.5rem;" onclick="this.closest('tr').remove()">✕</button></td>
+            `;
+            tbody.appendChild(row);
+        }
+
+        async function capturePoint() {
+            const data = await api('/api/live');
+            if (data) {
+                const load = prompt('Enter the known load (kg):');
+                if (load !== null) {
+                    const uv = (data.raw_adc / 8388608) * 2500000 / 128;
+                    addCalPointWithValues(parseFloat(load), uv.toFixed(1));
+                    showToast('Point captured!', 'success');
+                }
+            }
+        }
+
+        // ==================== LOGGING ====================
+        function updateLoggingUI() {
+            document.getElementById('log-idle').style.display = isLogging ? 'none' : 'block';
+            document.getElementById('log-active').style.display = isLogging ? 'block' : 'none';
+            document.getElementById('status-log').className = 'status-dot' + (isLogging ? ' pulse warning' : '');
+            document.getElementById('status-log-text').textContent = isLogging ? 'REC' : 'Idle';
+        }
+
+        async function startLogging() {
+            const resp = await api('/api/logging/start', 'POST');
+            if (resp?.success) {
+                isLogging = true;
+                updateLoggingUI();
+                showToast('Logging started', 'success');
+            }
+        }
+
+        async function stopLogging() {
+            const resp = await api('/api/logging/stop', 'POST');
+            if (resp?.success) {
+                isLogging = false;
+                updateLoggingUI();
+                showToast('Logging stopped', 'success');
+                refreshFiles();
+            }
+        }
+
+        // ==================== FILES ====================
+        async function refreshFiles() {
+            const data = await api('/api/sdcard');
+            if (data) {
+                document.getElementById('sd-used').textContent = data.used_mb || 0;
+                document.getElementById('sd-free').textContent = data.free_mb || 0;
+                const pct = data.total_mb ? (data.used_mb / data.total_mb * 100) : 0;
+                document.getElementById('sd-progress').style.width = `${pct}%`;
+
+                const list = document.getElementById('file-list');
+                if (data.files?.length) {
+                    list.innerHTML = data.files.map(f => `
+                        <div class="file-item">
+                            <div class="file-info">
+                                <span class="file-name">${f.name}</span>
+                                <span class="file-meta">${f.date} • ${(f.size_kb/1024).toFixed(1)} MB</span>
+                            </div>
+                            <button class="btn btn-ghost" style="padding:0.4rem 0.6rem;">📥</button>
+                        </div>
+                    `).join('');
+                } else {
+                    list.innerHTML = '<div class="file-item"><span style="color:var(--text-dim);">No files</span></div>';
+                }
+            }
+        }
+
+        // ==================== FACTORY TESTS ====================
+        async function runTest(sensor) {
+            if (currentMode !== 'factory') {
+                showToast('Factory mode required', 'error');
+                return;
+            }
+            
+            const card = document.getElementById(`test-${sensor}`);
+            card.className = 'test-card running';
+            card.querySelector('.test-status').textContent = 'Testing...';
+
+            const resp = await api(`/api/test/${sensor}`, 'POST');
+            
+            if (resp) {
+                card.className = 'test-card ' + (resp.passed ? 'pass' : 'fail');
+                card.querySelector('.test-status').textContent = resp.passed ? 'PASS ✓' : 'FAIL ✗';
+                updateTestSummary();
+            } else {
+                card.className = 'test-card fail';
+                card.querySelector('.test-status').textContent = 'Error';
+            }
+        }
+
+        async function runAllTests() {
+            for (const sensor of ['adc', 'imu', 'rtc', 'sd', 'neopixel']) {
+                await runTest(sensor);
+                await new Promise(r => setTimeout(r, 500));
+            }
+        }
+
+        function updateTestSummary() {
+            const cards = document.querySelectorAll('.test-card');
+            let pass = 0, fail = 0, total = cards.length;
+            cards.forEach(c => {
+                if (c.classList.contains('pass')) pass++;
+                if (c.classList.contains('fail')) fail++;
+            });
+            
+            const el = document.getElementById('test-summary');
+            if (pass + fail > 0) {
+                el.innerHTML = `
+                    <div style="font-size: 1.5rem; font-weight: 600; margin-bottom: 0.5rem;">
+                        ${pass}/${total} Passed
+                    </div>
+                    <div style="color: ${fail > 0 ? 'var(--danger)' : 'var(--success)'};">
+                        ${fail > 0 ? `${fail} test(s) failed` : 'All tests passed!'}
+                    </div>
+                `;
+            }
+        }
+
+        // ==================== LED TEST ====================
+        async function ledNext() {
+            if (currentMode !== 'factory') {
+                showToast('Factory mode required', 'error');
+                return;
+            }
+            
+            const resp = await api('/api/led/next', 'POST');
+            if (resp?.success) {
+                ledStateIndex = resp.state_index;
+                updateLedDisplay(resp.state_name);
+            }
+        }
+
+        function ledPrev() {
+            showToast('Use Next to cycle through states', 'info');
+        }
+
+        function updateLedDisplay(name) {
+            document.getElementById('led-state-name').textContent = name || 'Unknown';
+            document.getElementById('led-state-counter').textContent = `State ${ledStateIndex + 1} of 24`;
+            
+            const preview = document.getElementById('led-preview');
+            preview.className = 'led-preview';
+            
+            const n = name?.toLowerCase() || '';
+            if (n.includes('red')) preview.classList.add('red');
+            else if (n.includes('green')) preview.classList.add('green');
+            else if (n.includes('blue')) preview.classList.add('blue');
+            else if (n.includes('cyan')) preview.classList.add('cyan');
+            else if (n.includes('orange')) preview.classList.add('orange');
+            else if (n.includes('magenta')) preview.classList.add('magenta');
+        }
+
+        async function toggleLedCycle() {
+            if (currentMode !== 'factory') {
+                showToast('Factory mode required', 'error');
+                return;
+            }
+            
+            ledCycling = !ledCycling;
+            const endpoint = ledCycling ? '/api/led/cycle/start' : '/api/led/cycle/stop';
+            await api(endpoint, 'POST', { interval_ms: 1500 });
+            document.getElementById('led-cycle-btn').textContent = ledCycling ? '⏹ Stop' : '🔄 Auto Cycle';
+        }
+
+        // ==================== TOAST ====================
+        function showToast(msg, type = 'info') {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.className = 'toast show ' + type;
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+
+        // ==================== KEYBOARD ====================
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && document.getElementById('password-modal').classList.contains('show')) {
+                submitPassword();
+            }
+            if (e.key === 'Escape') {
+                closeModeModal();
+                closePasswordModal();
+            }
+        });
+    </script>
+</body>
+</html>
