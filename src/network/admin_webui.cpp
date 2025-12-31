@@ -409,6 +409,47 @@ namespace {
         return ESP_OK;
     }
     
+    esp_err_t handleTestBattery(httpd_req_t* req) {
+        if (!AppMode::canFactoryTest()) {
+            sendError(req, "Factory mode required", 403);
+            return ESP_OK;
+        }
+        
+        StatusLED::setState(StatusLED::State::FactoryTesting);
+        
+        bool passed = false;
+        const char* message = "Not detected";
+        float voltage = 0, soc = 0;
+        
+        if (MAX17048::isPresent()) {
+            MAX17048::BatteryData batt;
+            if (MAX17048::getBatteryData(&batt)) {
+                voltage = batt.voltage;
+                soc = batt.socPercent;
+                
+                // Basic validation: voltage should be reasonable (2.5V - 4.5V for LiPo)
+                if (voltage > 2.5f && voltage < 4.5f) {
+                    passed = true;
+                    message = "OK";
+                } else {
+                    message = "Voltage out of range";
+                }
+            } else {
+                message = "Read failed";
+            }
+        }
+        
+        snprintf(jsonBuf, sizeof(jsonBuf),
+            "{\"sensor\":\"battery\",\"passed\":%s,\"message\":\"%s\","
+            "\"voltage_V\":%.3f,\"soc_percent\":%.1f}",
+            passed ? "true" : "false", message, voltage, soc
+        );
+        
+        StatusLED::setState(StatusLED::State::IdleFactory);
+        sendJson(req, jsonBuf);
+        return ESP_OK;
+    }
+    
     esp_err_t handleGetSDCard(httpd_req_t* req) {
         bool present = SDManager::isMounted();
         uint64_t totalMB = 0, freeMB = 0, usedMB = 0;
@@ -814,6 +855,10 @@ bool beginServer() {
     httpd_uri_t post_test_neopixel = { .uri = "/api/test/neopixel", .method = HTTP_POST,
         .handler = handleTestLed, .user_ctx = nullptr };  // Alias for LED test
     httpd_register_uri_handler(server, &post_test_neopixel);
+    
+    httpd_uri_t post_test_battery = { .uri = "/api/test/battery", .method = HTTP_POST,
+        .handler = handleTestBattery, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &post_test_battery);
     
     httpd_uri_t post_ota = { .uri = "/api/ota", .method = HTTP_POST,
         .handler = handleOtaUpload, .user_ctx = nullptr };

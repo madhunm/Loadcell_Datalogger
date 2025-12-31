@@ -184,6 +184,20 @@
                         <div style="font-family: monospace;" id="live-az">--</div>
                     </div>
                 </div>
+                <div class="grid grid--3 mt-md" style="text-align: center;">
+                    <div>
+                        <div class="text-muted">Gyro X</div>
+                        <div style="font-family: monospace;" id="live-gx">--</div>
+                    </div>
+                    <div>
+                        <div class="text-muted">Gyro Y</div>
+                        <div style="font-family: monospace;" id="live-gy">--</div>
+                    </div>
+                    <div>
+                        <div class="text-muted">Gyro Z</div>
+                        <div style="font-family: monospace;" id="live-gz">--</div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -462,6 +476,9 @@
                     document.getElementById('live-ax').textContent = data.accel_x?.toFixed(3) + ' g' || '--';
                     document.getElementById('live-ay').textContent = data.accel_y?.toFixed(3) + ' g' || '--';
                     document.getElementById('live-az').textContent = data.accel_z?.toFixed(3) + ' g' || '--';
+                    document.getElementById('live-gx').textContent = data.gyro_x?.toFixed(1) + ' dps' || '--';
+                    document.getElementById('live-gy').textContent = data.gyro_y?.toFixed(1) + ' dps' || '--';
+                    document.getElementById('live-gz').textContent = data.gyro_z?.toFixed(1) + ' dps' || '--';
                 } catch (error) {
                     // Silently fail for live updates
                 }

@@ -501,6 +501,15 @@
             try {
                 const data = await API.get('/api/battery');
                 
+                // Check if battery is present
+                if (!data.present) {
+                    document.getElementById('battery-percent').textContent = 'N/A';
+                    document.getElementById('battery-voltage').textContent = 'Not detected';
+                    document.getElementById('battery-charging').classList.add('hidden');
+                    UI.setProgress('#battery-progress', 0, 'secondary');
+                    return;
+                }
+                
                 const percent = data.soc_percent || 0;
                 document.getElementById('battery-percent').textContent = percent.toFixed(0) || '--';
                 document.getElementById('battery-voltage').textContent = (data.voltage_V || 0).toFixed(2) + ' V';
@@ -514,6 +523,7 @@
                 
             } catch (error) {
                 document.getElementById('battery-percent').textContent = '--';
+                document.getElementById('battery-voltage').textContent = '--';
             }
         }
 

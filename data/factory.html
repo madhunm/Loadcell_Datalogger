@@ -44,7 +44,7 @@
                     <div class="stat-card__label">Fail</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-card__value" style="color: var(--text-muted);" id="summary-pending">5</div>
+                    <div class="stat-card__value" style="color: var(--text-muted);" id="summary-pending">6</div>
                     <div class="stat-card__label">Pending</div>
                 </div>
                 <div class="stat-card">
@@ -117,6 +117,18 @@
                 <div class="test-result__status">
                     <span id="test-neopixel-status">Pending</span>
                     <button class="btn btn--small btn--secondary" onclick="runTest('neopixel')">Test</button>
+                </div>
+            </div>
+
+            <!-- Battery/Fuel Gauge Test -->
+            <div class="test-result test-result--pending" id="test-battery">
+                <div>
+                    <div class="test-result__name">MAX17048 Fuel Gauge</div>
+                    <div class="text-muted" id="test-battery-details">Battery voltage and SOC</div>
+                </div>
+                <div class="test-result__status">
+                    <span id="test-battery-status">Pending</span>
+                    <button class="btn btn--small btn--secondary" onclick="runTest('battery')">Test</button>
                 </div>
             </div>
         </div>
@@ -221,7 +233,8 @@
             imu: null,
             rtc: null,
             sd: null,
-            neopixel: null
+            neopixel: null,
+            battery: null
         };
 
         // Log message to test log
@@ -300,7 +313,7 @@
             log('=== Starting All Tests ===', 'info');
             resetTests();
             
-            const sensors = ['adc', 'imu', 'rtc', 'sd', 'neopixel'];
+            const sensors = ['adc', 'imu', 'rtc', 'sd', 'neopixel', 'battery'];
             
             for (const sensor of sensors) {
                 await runTest(sensor);
@@ -319,7 +332,7 @@
 
         // Reset all tests
         function resetTests() {
-            const sensors = ['adc', 'imu', 'rtc', 'sd', 'neopixel'];
+            const sensors = ['adc', 'imu', 'rtc', 'sd', 'neopixel', 'battery'];
             
             sensors.forEach(sensor => {
                 testResults[sensor] = null;
