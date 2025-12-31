@@ -72,6 +72,19 @@ struct WriteStats {
     uint32_t countOver10ms;     // Writes exceeding 10ms threshold
 };
 
+/** @brief Session summary with peak values */
+struct SessionSummary {
+    float peakLoadN;            // Maximum load value in Newtons
+    uint32_t peakLoadTimeMs;    // Time of peak load (ms from start)
+    float peakDecelG;           // Maximum deceleration (g)
+    uint32_t peakDecelTimeMs;   // Time of peak decel (ms from start)
+    uint64_t totalAdcSamples;   // Total ADC samples logged
+    uint64_t totalImuSamples;   // Total IMU samples logged
+    uint32_t durationMs;        // Session duration
+    uint32_t droppedSamples;    // Samples lost
+    bool valid;                 // True if summary contains valid data
+};
+
 /** @brief Logger status */
 struct Status {
     bool initialized;
@@ -246,6 +259,15 @@ void clearRecoveryData();
  * @return Current write statistics
  */
 WriteStats getWriteStats();
+
+/**
+ * @brief Get session summary with peak values
+ * 
+ * Returns summary from current or last completed session.
+ * 
+ * @return Session summary with peak load (N) and deceleration (g)
+ */
+SessionSummary getSessionSummary();
 
 } // namespace Logger
 

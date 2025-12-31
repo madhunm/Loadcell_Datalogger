@@ -13,7 +13,9 @@
 #include "../drivers/max17048.h"
 #include "../drivers/rx8900ce.h"
 #include "../calibration/calibration_storage.h"
+#include "../calibration/calibration_interp.h"
 #include <esp_log.h>
+#include <cmath>
 #include <esp_task_wdt.h>
 #include <esp_crc.h>
 #include <Preferences.h>
@@ -77,6 +79,13 @@ namespace {
     // Temperature compensation
     float lastTemperature = 25.0f;
     uint32_t lastTempReadMs = 0;
+    
+    // Peak tracking for session summary
+    std::atomic<float> peakLoadN{0.0f};
+    std::atomic<uint32_t> peakLoadTimeMs{0};
+    std::atomic<float> peakDecelG{0.0f};
+    std::atomic<uint32_t> peakDecelTimeMs{0};
+    SessionSummary lastSessionSummary;  // Stored after stop()
     
     // ADC Ring buffer for this logger (128ms at 64ksps for SD latency headroom)
     ADCRingBufferLarge* adcBuffer = nullptr;
@@ -473,6 +482,15 @@ namespace {
             
             // Calculate timestamp offset
             uint32_t offsetUs = (uint32_t)(sample.timestamp_us - (uint32_t)sessionStartUs);
+            uint32_t offsetMs = offsetUs / 1000;
+            
+            // Track peak load (convert raw to kg, then to Newtons)
+            float loadKg = CalibrationInterp::rawToKg(rawValue);
+            float loadN = loadKg * 9.81f;
+            if (loadN > peakLoadN.load()) {
+                peakLoadN.store(loadN);
+                peakLoadTimeMs.store(offsetMs);
+            }
             
             // Write ADC record with sequence number for gap detection
             BinaryFormat::ADCRecord adcRec;
@@ -494,6 +512,7 @@ namespace {
         uint16_t imuSamplesRead = 0;
         if (LSM6DSV::readFIFO(imuFifoBatch, IMU_FIFO_BATCH_SIZE, &imuSamplesRead) && imuSamplesRead > 0) {
             uint32_t nowUs = (uint32_t)(TimestampSync::getEpochMicros() - sessionStartUs);
+            uint32_t nowMs = nowUs / 1000;
             
             for (uint16_t i = 0; i < imuSamplesRead; i++) {
                 BinaryFormat::IMURecord imuRec;
@@ -504,6 +523,20 @@ namespace {
                 imuRec.gyroX = imuFifoBatch[i].gyro[0];
                 imuRec.gyroY = imuFifoBatch[i].gyro[1];
                 imuRec.gyroZ = imuFifoBatch[i].gyro[2];
+                
+                // Track peak deceleration (acceleration magnitude in g)
+                // Raw values are in LSB, convert to g based on scale
+                // LSM6DSV at ±2g: 0.061 mg/LSB
+                constexpr float ACCEL_SCALE = 0.061f / 1000.0f;  // mg/LSB to g/LSB
+                float ax = imuRec.accelX * ACCEL_SCALE;
+                float ay = imuRec.accelY * ACCEL_SCALE;
+                float az = imuRec.accelZ * ACCEL_SCALE;
+                float accelMag = std::sqrt(ax*ax + ay*ay + az*az);
+                
+                if (accelMag > peakDecelG.load()) {
+                    peakDecelG.store(accelMag);
+                    peakDecelTimeMs.store(nowMs);
+                }
                 
                 if (bufferWrite(&imuRec, sizeof(imuRec))) {
                     imuSamplesLogged++;
@@ -529,7 +562,9 @@ void loggerTaskFunc(void* param) {
     esp_task_wdt_add(nullptr);
     
     uint32_t lastBatteryCheckMs = 0;
+    uint32_t lastSDCheckMs = 0;
     constexpr uint32_t BATTERY_CHECK_INTERVAL_MS = 10000;  // Every 10 seconds
+    constexpr uint32_t SD_CHECK_INTERVAL_MS = 1000;        // Every 1 second
     constexpr float LOW_BATTERY_THRESHOLD = 5.0f;  // Stop at 5% SOC
     
     while (taskShouldRun) {
@@ -543,6 +578,24 @@ void loggerTaskFunc(void* param) {
             
             // Track logger task time for diagnostics
             loggerTimeUs.store(micros() - loopStartUs);
+            
+            // Periodic SD card presence check for hot-removal handling
+            if (millis() - lastSDCheckMs > SD_CHECK_INTERVAL_MS) {
+                lastSDCheckMs = millis();
+                
+                if (!SDManager::isMounted() || !SDManager::isCardPresent()) {
+                    ESP_LOGE(TAG, "SD CARD REMOVED - stopping logger");
+                    
+                    // Try to write SD removed event (may fail)
+                    BinaryFormat::EventRecord event;
+                    event.timestampOffsetUs = (uint32_t)(TimestampSync::getEpochMicros() - sessionStartUs);
+                    event.eventCode = BinaryFormat::EventCode::SDRemoved;
+                    event.dataLength = 0;
+                    bufferWrite(&event, sizeof(event));
+                    
+                    running = false;  // Trigger stop (stop() handles unmounted state)
+                }
+            }
             
             // Periodic battery check for low battery protection
             if (millis() - lastBatteryCheckMs > BATTERY_CHECK_INTERVAL_MS) {
@@ -721,6 +774,12 @@ bool start() {
     lastTempReadMs = millis();
     lastTemperature = 25.0f;
     
+    // Reset peak tracking
+    peakLoadN = 0.0f;
+    peakLoadTimeMs = 0;
+    peakDecelG = 0.0f;
+    peakDecelTimeMs = 0;
+    
     // Save session base path for file rotation (without .bin extension)
     strncpy(sessionBasePath, currentFilePath, sizeof(sessionBasePath) - 1);
     char* ext = strrchr(sessionBasePath, '.');
@@ -861,6 +920,21 @@ void stop() {
     if (saturationCount.load() > 0) {
         ESP_LOGW(TAG, "ADC saturation detected %lu times during session", saturationCount.load());
     }
+    
+    // Store session summary
+    lastSessionSummary.peakLoadN = peakLoadN.load();
+    lastSessionSummary.peakLoadTimeMs = peakLoadTimeMs.load();
+    lastSessionSummary.peakDecelG = peakDecelG.load();
+    lastSessionSummary.peakDecelTimeMs = peakDecelTimeMs.load();
+    lastSessionSummary.totalAdcSamples = adcSamplesLogged.load();
+    lastSessionSummary.totalImuSamples = imuSamplesLogged.load();
+    lastSessionSummary.durationMs = durationMs;
+    lastSessionSummary.droppedSamples = droppedSamples.load();
+    lastSessionSummary.valid = true;
+    
+    ESP_LOGI(TAG, "Session Summary: Peak Load=%.2f N @ %.2fs, Peak Decel=%.2f g @ %.2fs",
+             lastSessionSummary.peakLoadN, lastSessionSummary.peakLoadTimeMs / 1000.0f,
+             lastSessionSummary.peakDecelG, lastSessionSummary.peakDecelTimeMs / 1000.0f);
 }
 
 bool isRunning() {
@@ -1080,6 +1154,26 @@ WriteStats getWriteStats() {
     stats.avgUs = (writeLatencyCount > 0) ? (writeLatencySumUs / writeLatencyCount) : 0;
     stats.countOver10ms = writeLatencyOver10ms.load();
     return stats;
+}
+
+SessionSummary getSessionSummary() {
+    // If currently running, return live values
+    if (running) {
+        SessionSummary live;
+        live.peakLoadN = peakLoadN.load();
+        live.peakLoadTimeMs = peakLoadTimeMs.load();
+        live.peakDecelG = peakDecelG.load();
+        live.peakDecelTimeMs = peakDecelTimeMs.load();
+        live.totalAdcSamples = adcSamplesLogged.load();
+        live.totalImuSamples = imuSamplesLogged.load();
+        live.durationMs = millis() - sessionStartMs;
+        live.droppedSamples = droppedSamples.load();
+        live.valid = true;
+        return live;
+    }
+    
+    // Return last completed session summary
+    return lastSessionSummary;
 }
 
 } // namespace Logger

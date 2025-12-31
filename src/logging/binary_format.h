@@ -212,6 +212,7 @@ namespace EventCode {
     constexpr uint16_t Saturation       = 0x00F3;  // ADC saturation detected
     constexpr uint16_t WriteLatency     = 0x00F4;  // High write latency warning
     constexpr uint16_t Recovery         = 0x00F5;  // Session recovered from crash
+    constexpr uint16_t SDRemoved        = 0x00F6;  // SD card removed during logging
 }
 
 // ============================================================================

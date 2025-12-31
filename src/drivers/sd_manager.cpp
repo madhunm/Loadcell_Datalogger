@@ -50,6 +50,13 @@ namespace {
     std::atomic<uint32_t> droppedBuffers{0};
     std::atomic<uint32_t> bufferSwaps{0};
     
+    // Health monitoring
+    std::atomic<uint32_t> totalWriteCount{0};
+    std::atomic<uint64_t> totalWriteLatencyUs{0};
+    std::atomic<uint32_t> writeLatencyCount{0};
+    std::atomic<uint32_t> maxWriteLatencyUs{0};
+    const uint32_t WARNING_LATENCY_MS = 50;  // Warn if avg latency > 50ms
+    
     // ========================================================================
     // Background Write Task
     // ========================================================================
@@ -302,6 +309,70 @@ void resetStats() {
     memset(&stats, 0, sizeof(stats));
     droppedBuffers = 0;
     bufferSwaps = 0;
+    totalWriteCount = 0;
+    totalWriteLatencyUs = 0;
+    writeLatencyCount = 0;
+    maxWriteLatencyUs = 0;
+}
+
+Health getHealth() {
+    Health health;
+    health.mounted = mounted;
+    
+    if (mounted) {
+        health.totalBytes = SD_MMC.totalBytes();
+        health.usedBytes = SD_MMC.usedBytes();
+        health.freeBytes = health.totalBytes - health.usedBytes;
+    } else {
+        health.totalBytes = 0;
+        health.usedBytes = 0;
+        health.freeBytes = 0;
+    }
+    
+    health.writeCount = totalWriteCount.load();
+    
+    uint32_t count = writeLatencyCount.load();
+    if (count > 0) {
+        health.avgWriteLatencyMs = (totalWriteLatencyUs.load() / count) / 1000.0f;
+    } else {
+        health.avgWriteLatencyMs = 0;
+    }
+    
+    health.maxWriteLatencyMs = maxWriteLatencyUs.load() / 1000.0f;
+    
+    // Determine health warning
+    health.healthWarning = false;
+    health.warningMessage = nullptr;
+    
+    if (!mounted) {
+        health.healthWarning = true;
+        health.warningMessage = "SD card not mounted";
+    } else if (health.avgWriteLatencyMs > WARNING_LATENCY_MS) {
+        health.healthWarning = true;
+        health.warningMessage = "High average write latency";
+    } else if (health.freeBytes < 100 * 1024 * 1024) {  // Less than 100MB free
+        health.healthWarning = true;
+        health.warningMessage = "Low storage space";
+    } else if (stats.writeErrors > 0) {
+        health.healthWarning = true;
+        health.warningMessage = "Write errors detected";
+    }
+    
+    return health;
+}
+
+void recordWriteLatency(uint32_t latencyUs) {
+    totalWriteCount++;
+    writeLatencyCount++;
+    totalWriteLatencyUs += latencyUs;
+    
+    // Track maximum
+    uint32_t current = maxWriteLatencyUs.load();
+    while (latencyUs > current) {
+        if (maxWriteLatencyUs.compare_exchange_weak(current, latencyUs)) {
+            break;
+        }
+    }
 }
 
 void sync() {

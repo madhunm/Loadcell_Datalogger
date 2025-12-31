@@ -17,7 +17,9 @@
 #include "../drivers/lsm6dsv.h"
 #include "../drivers/rx8900ce.h"
 #include "../logging/logger_module.h"
+#include "../logging/binary_format.h"
 #include <esp_http_server.h>
+#include <SD_MMC.h>
 #include <esp_ota_ops.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -209,6 +211,53 @@ namespace {
             StatusLED::isTestCycling() ? "true" : "false"
         );
         sendJson(req, jsonBuf);
+        return ESP_OK;
+    }
+    
+    esp_err_t handleGetSessionSummary(httpd_req_t* req) {
+        Logger::SessionSummary summary = Logger::getSessionSummary();
+        
+        snprintf(jsonBuf, sizeof(jsonBuf),
+            "{\"valid\":%s,"
+            "\"peak_load_n\":%.2f,\"peak_load_time_s\":%.3f,"
+            "\"peak_decel_g\":%.2f,\"peak_decel_time_s\":%.3f,"
+            "\"total_adc_samples\":%llu,\"total_imu_samples\":%llu,"
+            "\"duration_s\":%.2f,\"dropped_samples\":%lu,"
+            "\"is_running\":%s}",
+            summary.valid ? "true" : "false",
+            summary.peakLoadN, summary.peakLoadTimeMs / 1000.0f,
+            summary.peakDecelG, summary.peakDecelTimeMs / 1000.0f,
+            summary.totalAdcSamples, summary.totalImuSamples,
+            summary.durationMs / 1000.0f, summary.droppedSamples,
+            Logger::isRunning() ? "true" : "false"
+        );
+        sendJson(req, jsonBuf);
+        return ESP_OK;
+    }
+    
+    esp_err_t handleGetRecoveryStatus(httpd_req_t* req) {
+        bool hasRecovery = Logger::hasRecoveryData();
+        
+        snprintf(jsonBuf, sizeof(jsonBuf),
+            "{\"has_recovery\":%s}",
+            hasRecovery ? "true" : "false"
+        );
+        sendJson(req, jsonBuf);
+        return ESP_OK;
+    }
+    
+    esp_err_t handlePostRecoverSession(httpd_req_t* req) {
+        if (Logger::recoverSession()) {
+            sendSuccess(req, "Session recovered");
+        } else {
+            sendError(req, "No session to recover", 404);
+        }
+        return ESP_OK;
+    }
+    
+    esp_err_t handlePostClearRecovery(httpd_req_t* req) {
+        Logger::clearRecoveryData();
+        sendSuccess(req, "Recovery data cleared");
         return ESP_OK;
     }
     
@@ -509,6 +558,141 @@ namespace {
         return ESP_OK;
     }
     
+    esp_err_t handleGetSDHealth(httpd_req_t* req) {
+        SDManager::Health health = SDManager::getHealth();
+        
+        snprintf(jsonBuf, sizeof(jsonBuf),
+            "{\"mounted\":%s,\"total_mb\":%llu,\"used_mb\":%llu,\"free_mb\":%llu,"
+            "\"write_count\":%lu,\"avg_latency_ms\":%.2f,\"max_latency_ms\":%.2f,"
+            "\"warning\":%s,\"warning_msg\":\"%s\"}",
+            health.mounted ? "true" : "false",
+            health.totalBytes / (1024 * 1024),
+            health.usedBytes / (1024 * 1024),
+            health.freeBytes / (1024 * 1024),
+            health.writeCount,
+            health.avgWriteLatencyMs,
+            health.maxWriteLatencyMs,
+            health.healthWarning ? "true" : "false",
+            health.warningMessage ? health.warningMessage : ""
+        );
+        
+        sendJson(req, jsonBuf);
+        return ESP_OK;
+    }
+    
+    esp_err_t handleValidateFile(httpd_req_t* req) {
+        // Extract filename from URL query string
+        char filepath[128] = "/data/";
+        char query[64] = {0};
+        
+        if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+            char filename[64];
+            if (httpd_query_key_value(query, "file", filename, sizeof(filename)) == ESP_OK) {
+                strncat(filepath, filename, sizeof(filepath) - strlen(filepath) - 1);
+            }
+        }
+        
+        if (strlen(filepath) <= 6) {
+            sendError(req, "Missing 'file' parameter", 400);
+            return ESP_OK;
+        }
+        
+        // Open and validate file
+        File file = SD_MMC.open(filepath, FILE_READ);
+        if (!file) {
+            sendError(req, "File not found", 404);
+            return ESP_OK;
+        }
+        
+        // Read header
+        BinaryFormat::FileHeader header;
+        if (file.read((uint8_t*)&header, sizeof(header)) != sizeof(header)) {
+            file.close();
+            sendError(req, "Failed to read header", 500);
+            return ESP_OK;
+        }
+        
+        bool headerValid = header.isValid();
+        
+        // Try to read footer from end
+        bool footerPresent = false;
+        bool footerValid = false;
+        BinaryFormat::FileFooter footer;
+        
+        size_t fileSize = file.size();
+        if (fileSize >= sizeof(header) + sizeof(footer)) {
+            file.seek(fileSize - sizeof(footer));
+            if (file.read((uint8_t*)&footer, sizeof(footer)) == sizeof(footer)) {
+                footerPresent = true;
+                footerValid = footer.isValid();
+            }
+        }
+        
+        // Count records and check for gaps (simplified - just counts)
+        file.seek(sizeof(header));
+        uint32_t adcCount = 0;
+        uint32_t imuCount = 0;
+        uint32_t expectedSeq = 0;
+        uint32_t gaps = 0;
+        
+        // Calculate expected IMU decimation
+        uint32_t imuDecim = header.imuSampleRateHz > 0 ? 
+                           (header.adcSampleRateHz / header.imuSampleRateHz) : 0;
+        
+        BinaryFormat::ADCRecord adc;
+        while (file.available() >= (int)sizeof(adc)) {
+            // Check for footer magic
+            size_t pos = file.position();
+            if (fileSize - pos <= sizeof(footer) + 10) break;
+            
+            if (file.read((uint8_t*)&adc, sizeof(adc)) != sizeof(adc)) break;
+            
+            // Check for end marker
+            if (*((uint8_t*)&adc) == 0xFF) break;
+            
+            adcCount++;
+            
+            // Check sequence
+            if (adc.sequenceNum != expectedSeq) {
+                gaps++;
+            }
+            expectedSeq = adc.sequenceNum + 1;
+            
+            // Skip IMU record if interleaved
+            if (imuDecim > 0 && adcCount % imuDecim == 0) {
+                BinaryFormat::IMURecord imu;
+                if (file.read((uint8_t*)&imu, sizeof(imu)) == sizeof(imu)) {
+                    imuCount++;
+                }
+            }
+            
+            // Limit to avoid long validation times
+            if (adcCount > 1000000) break;
+        }
+        
+        file.close();
+        
+        // Build response
+        bool isValid = headerValid && (!footerPresent || footerValid) && gaps == 0;
+        
+        snprintf(jsonBuf, sizeof(jsonBuf),
+            "{\"valid\":%s,\"header_valid\":%s,\"footer_present\":%s,\"footer_valid\":%s,"
+            "\"adc_count\":%lu,\"imu_count\":%lu,\"gaps\":%lu,"
+            "\"expected_adc\":%llu,\"expected_imu\":%llu,\"dropped\":%lu}",
+            isValid ? "true" : "false",
+            headerValid ? "true" : "false",
+            footerPresent ? "true" : "false",
+            footerValid ? "true" : "false",
+            adcCount, imuCount, gaps,
+            footerValid ? footer.totalAdcSamples : 0ULL,
+            footerValid ? footer.totalImuSamples : 0ULL,
+            footerValid ? footer.droppedSamples : 0UL
+        );
+        
+        sendJson(req, jsonBuf);
+        return ESP_OK;
+    }
+    
     // Server-Sent Events (SSE) stream for real-time sensor data
     esp_err_t handleStream(httpd_req_t* req) {
         // Set SSE headers
@@ -517,7 +701,7 @@ namespace {
         httpd_resp_set_hdr(req, "Connection", "keep-alive");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
         
-        char sseBuf[256];
+        char sseBuf[384];
         
         Serial.println("[SSE] Client connected to stream");
         
@@ -538,11 +722,26 @@ namespace {
                 gz = imuData.gyro[2];
             }
             
-            // Format SSE message
+            // Get logging integrity data if running
+            bool logging = Logger::isRunning();
+            float bufferFill = 0;
+            uint32_t latencyUs = 0;
+            uint32_t drops = 0;
+            
+            if (logging) {
+                Logger::Status status = Logger::getStatus();
+                bufferFill = status.fillPercent;
+                latencyUs = status.writeStats.avgUs;
+                drops = status.droppedSamples;
+            }
+            
+            // Format SSE message with integrity data
             int len = snprintf(sseBuf, sizeof(sseBuf),
                 "data: {\"adc\":%ld,\"uV\":%.1f,\"ax\":%.3f,\"ay\":%.3f,\"az\":%.3f,"
-                "\"gx\":%.1f,\"gy\":%.1f,\"gz\":%.1f,\"t\":%lu}\n\n",
-                (long)rawAdc, uV, ax, ay, az, gx, gy, gz, millis());
+                "\"gx\":%.1f,\"gy\":%.1f,\"gz\":%.1f,\"t\":%lu,"
+                "\"logging\":%s,\"buf_pct\":%.1f,\"latency_us\":%lu,\"drops\":%lu}\n\n",
+                (long)rawAdc, uV, ax, ay, az, gx, gy, gz, millis(),
+                logging ? "true" : "false", bufferFill, latencyUs, drops);
             
             // Send chunk - if this fails, client disconnected
             if (httpd_resp_send_chunk(req, sseBuf, len) != ESP_OK) {
@@ -893,6 +1092,22 @@ bool beginServer() {
         .handler = handleStream, .user_ctx = nullptr };
     httpd_register_uri_handler(server, &get_stream);
     
+    httpd_uri_t get_session_summary = { .uri = "/api/session/summary", .method = HTTP_GET,
+        .handler = handleGetSessionSummary, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &get_session_summary);
+    
+    httpd_uri_t get_recovery_status = { .uri = "/api/recovery/status", .method = HTTP_GET,
+        .handler = handleGetRecoveryStatus, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &get_recovery_status);
+    
+    httpd_uri_t get_validate = { .uri = "/api/validate", .method = HTTP_GET,
+        .handler = handleValidateFile, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &get_validate);
+    
+    httpd_uri_t get_sd_health = { .uri = "/api/sd/health", .method = HTTP_GET,
+        .handler = handleGetSDHealth, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &get_sd_health);
+    
     // ---- POST Routes ----
     httpd_uri_t post_mode = { .uri = "/api/mode", .method = HTTP_POST,
         .handler = handlePostMode, .user_ctx = nullptr };
@@ -921,6 +1136,14 @@ bool beginServer() {
     httpd_uri_t post_logging_stop = { .uri = "/api/logging/stop", .method = HTTP_POST,
         .handler = handleLoggingStop, .user_ctx = nullptr };
     httpd_register_uri_handler(server, &post_logging_stop);
+    
+    httpd_uri_t post_recover_session = { .uri = "/api/recovery/recover", .method = HTTP_POST,
+        .handler = handlePostRecoverSession, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &post_recover_session);
+    
+    httpd_uri_t post_clear_recovery = { .uri = "/api/recovery/clear", .method = HTTP_POST,
+        .handler = handlePostClearRecovery, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &post_clear_recovery);
     
     httpd_uri_t post_test_adc = { .uri = "/api/test/adc", .method = HTTP_POST,
         .handler = handleTestAdc, .user_ctx = nullptr };

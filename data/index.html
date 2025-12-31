@@ -153,6 +153,55 @@
         </div>
     </div>
 
+    <!-- Recovery Modal -->
+    <div id="recovery-modal" class="modal" style="display: none;">
+        <div class="modal-backdrop" onclick="hideRecoveryModal()"></div>
+        <div class="modal-content" style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border: 2px solid #f59e0b; max-width: 500px;">
+            <div style="text-align: center; padding: 1.5rem;">
+                <div style="font-size: 3rem; margin-bottom: 1rem;">⚠️</div>
+                <h2 style="color: #f59e0b; margin-bottom: 1rem;">Incomplete Session Detected</h2>
+                <p style="color: #94a3b8; margin-bottom: 1.5rem;">
+                    A previous logging session was interrupted. Would you like to resume or start fresh?
+                </p>
+                <div class="flex gap-md" style="justify-content: center;">
+                    <button class="btn btn--success" onclick="recoverSession()">
+                        Resume Logging
+                    </button>
+                    <button class="btn btn--secondary" onclick="clearRecovery()">
+                        Discard & Start Fresh
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <style>
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-backdrop {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+        }
+        .modal-content {
+            position: relative;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+    </style>
+
     <script src="app.js"></script>
     <script>
         let isLogging = false;
@@ -204,6 +253,45 @@
             } else {
                 btn.textContent = '▶ Start Logging';
                 btn.className = 'btn btn--success';
+            }
+        }
+
+        // Recovery modal functions
+        async function checkForRecovery() {
+            try {
+                const response = await fetch('/api/recovery/status');
+                const data = await response.json();
+                if (data.has_recovery) {
+                    document.getElementById('recovery-modal').style.display = 'flex';
+                }
+            } catch (e) {
+                console.error('Failed to check recovery status:', e);
+            }
+        }
+
+        function hideRecoveryModal() {
+            document.getElementById('recovery-modal').style.display = 'none';
+        }
+
+        async function recoverSession() {
+            try {
+                await API.post('/api/recovery/recover', {});
+                UI.showAlert('Session recovered! Resuming logging...', 'success');
+                hideRecoveryModal();
+                // Redirect to user page where logging is happening
+                setTimeout(() => location.href = 'user.html', 1000);
+            } catch (e) {
+                UI.showAlert('Failed to recover session', 'error');
+            }
+        }
+
+        async function clearRecovery() {
+            try {
+                await API.post('/api/recovery/clear', {});
+                UI.showAlert('Recovery data cleared', 'info');
+                hideRecoveryModal();
+            } catch (e) {
+                UI.showAlert('Failed to clear recovery data', 'error');
             }
         }
 
@@ -271,6 +359,8 @@
         // Start polling when page loads
         document.addEventListener('DOMContentLoaded', () => {
             Status.startPolling(3000);
+            // Check for recoverable session
+            checkForRecovery();
         });
     </script>
 </body>

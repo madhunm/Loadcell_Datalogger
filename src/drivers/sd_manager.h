@@ -55,6 +55,19 @@ struct Stats {
     uint32_t droppedBuffers;
 };
 
+/** @brief SD card health status */
+struct Health {
+    bool mounted;
+    uint64_t totalBytes;
+    uint64_t usedBytes;
+    uint64_t freeBytes;
+    uint32_t writeCount;            // Cumulative write count (estimate)
+    float avgWriteLatencyMs;        // Average write latency
+    float maxWriteLatencyMs;        // Maximum observed write latency
+    bool healthWarning;             // True if degraded performance detected
+    const char* warningMessage;     // Warning message if any
+};
+
 /** @brief Write buffer state */
 struct WriteBuffer {
     uint8_t* data;              // Buffer data pointer
@@ -196,6 +209,21 @@ Stats getStats();
  * @brief Reset statistics counters
  */
 void resetStats();
+
+/**
+ * @brief Get SD card health status
+ * 
+ * Returns health information including write latency stats
+ * and warnings for degraded performance.
+ */
+Health getHealth();
+
+/**
+ * @brief Record a write latency sample (called by logger)
+ * 
+ * @param latencyUs Write latency in microseconds
+ */
+void recordWriteLatency(uint32_t latencyUs);
 
 /**
  * @brief Force sync all pending writes

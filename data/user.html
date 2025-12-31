@@ -92,6 +92,20 @@
                 </div>
             </div>
             
+            <!-- Integrity Status (shown when logging) -->
+            <div id="integrity-status" class="integrity-status" style="display: none; margin-bottom: 1rem;">
+                <div class="flex items-center gap-md" style="background: rgba(0,0,0,0.3); padding: 0.5rem 1rem; border-radius: 8px;">
+                    <span class="status-indicator" id="integrity-led" style="width: 12px; height: 12px; border-radius: 50%; background: #22c55e;"></span>
+                    <span style="font-weight: 600;">Data Integrity</span>
+                    <span class="text-muted">|</span>
+                    <span>Buffer: <span id="integrity-buffer" style="font-family: monospace; color: #22c55e;">0%</span></span>
+                    <span class="text-muted">|</span>
+                    <span>Latency: <span id="integrity-latency" style="font-family: monospace;">0ms</span></span>
+                    <span class="text-muted">|</span>
+                    <span>Drops: <span id="integrity-drops" style="font-family: monospace;">0</span></span>
+                </div>
+            </div>
+            
             <div class="grid grid--3">
                 <div class="stat-card" style="text-align: center;">
                     <div class="live-value stat-card__value--green" id="live-load">0.00</div>
@@ -183,6 +197,53 @@
                             <div class="text-muted">°/s</div>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Session Summary (shown after logging stops) -->
+        <div class="card" id="session-summary" style="display: none; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border: 2px solid #0f3460;">
+            <div class="card__header">
+                <h2 class="card__title" style="color: #e94560;">Session Summary</h2>
+                <button class="btn btn--small btn--secondary" onclick="hideSessionSummary()">Dismiss</button>
+            </div>
+            
+            <div class="grid grid--2" style="gap: 2rem;">
+                <div class="stat-card" style="background: rgba(233, 69, 96, 0.1); border-left: 4px solid #e94560;">
+                    <div class="stat-card__label" style="color: #e94560;">Peak Load</div>
+                    <div style="font-size: 2.5rem; font-weight: bold; color: #fff;" id="summary-peak-load">--</div>
+                    <div class="stat-card__value--small">N</div>
+                    <div style="margin-top: 0.5rem; color: #94a3b8;">
+                        at <span id="summary-peak-load-time">--</span>s
+                    </div>
+                </div>
+                
+                <div class="stat-card" style="background: rgba(0, 173, 181, 0.1); border-left: 4px solid #00adb5;">
+                    <div class="stat-card__label" style="color: #00adb5;">Peak Deceleration</div>
+                    <div style="font-size: 2.5rem; font-weight: bold; color: #fff;" id="summary-peak-decel">--</div>
+                    <div class="stat-card__value--small">g</div>
+                    <div style="margin-top: 0.5rem; color: #94a3b8;">
+                        at <span id="summary-peak-decel-time">--</span>s
+                    </div>
+                </div>
+            </div>
+            
+            <div class="grid grid--4" style="margin-top: 1.5rem; text-align: center;">
+                <div>
+                    <div class="text-muted">Duration</div>
+                    <div style="font-size: 1.2rem; font-weight: 600;" id="summary-duration">--</div>
+                </div>
+                <div>
+                    <div class="text-muted">ADC Samples</div>
+                    <div style="font-size: 1.2rem; font-weight: 600;" id="summary-adc-samples">--</div>
+                </div>
+                <div>
+                    <div class="text-muted">IMU Samples</div>
+                    <div style="font-size: 1.2rem; font-weight: 600;" id="summary-imu-samples">--</div>
+                </div>
+                <div>
+                    <div class="text-muted">Dropped</div>
+                    <div style="font-size: 1.2rem; font-weight: 600;" id="summary-dropped">--</div>
                 </div>
             </div>
         </div>
@@ -425,6 +486,12 @@
             try {
                 const endpoint = isLogging ? '/api/logging/stop' : '/api/logging/start';
                 await API.post(endpoint, {});
+                
+                // If we just stopped logging, show session summary
+                if (isLogging) {
+                    setTimeout(showSessionSummary, 500);  // Small delay for final stats
+                }
+                
                 isLogging = !isLogging;
                 updateLoggingButton();
             } catch (error) {
@@ -432,6 +499,48 @@
             } finally {
                 UI.setButtonLoading(btn, false);
             }
+        }
+        
+        // Fetch and display session summary
+        async function showSessionSummary() {
+            try {
+                const response = await fetch('/api/session/summary');
+                const data = await response.json();
+                
+                if (data.valid) {
+                    document.getElementById('summary-peak-load').textContent = data.peak_load_n.toFixed(2);
+                    document.getElementById('summary-peak-load-time').textContent = data.peak_load_time_s.toFixed(3);
+                    document.getElementById('summary-peak-decel').textContent = data.peak_decel_g.toFixed(2);
+                    document.getElementById('summary-peak-decel-time').textContent = data.peak_decel_time_s.toFixed(3);
+                    document.getElementById('summary-duration').textContent = formatDuration(data.duration_s * 1000);
+                    document.getElementById('summary-adc-samples').textContent = formatNumber(data.total_adc_samples);
+                    document.getElementById('summary-imu-samples').textContent = formatNumber(data.total_imu_samples);
+                    document.getElementById('summary-dropped').textContent = data.dropped_samples;
+                    
+                    document.getElementById('session-summary').style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Failed to fetch session summary:', error);
+            }
+        }
+        
+        function hideSessionSummary() {
+            document.getElementById('session-summary').style.display = 'none';
+        }
+        
+        function formatNumber(num) {
+            if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
+            if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+            return num.toString();
+        }
+        
+        function formatDuration(ms) {
+            const s = Math.floor(ms / 1000);
+            const m = Math.floor(s / 60);
+            const h = Math.floor(m / 60);
+            if (h > 0) return `${h}h ${m % 60}m ${s % 60}s`;
+            if (m > 0) return `${m}m ${s % 60}s`;
+            return `${s}s`;
         }
 
         function updateLoggingButton() {
@@ -462,6 +571,42 @@
             document.getElementById('imu-gx').textContent = (data.gx || 0).toFixed(1);
             document.getElementById('imu-gy').textContent = (data.gy || 0).toFixed(1);
             document.getElementById('imu-gz').textContent = (data.gz || 0).toFixed(1);
+            
+            // Update integrity indicator when logging
+            const integrityDiv = document.getElementById('integrity-status');
+            if (data.logging) {
+                integrityDiv.style.display = 'block';
+                
+                // Update buffer fill
+                const bufPct = data.buf_pct || 0;
+                const bufEl = document.getElementById('integrity-buffer');
+                bufEl.textContent = bufPct.toFixed(0) + '%';
+                bufEl.style.color = bufPct < 50 ? '#22c55e' : (bufPct < 80 ? '#f59e0b' : '#ef4444');
+                
+                // Update latency
+                const latencyMs = (data.latency_us || 0) / 1000;
+                const latencyEl = document.getElementById('integrity-latency');
+                latencyEl.textContent = latencyMs.toFixed(1) + 'ms';
+                latencyEl.style.color = latencyMs < 10 ? '#22c55e' : (latencyMs < 50 ? '#f59e0b' : '#ef4444');
+                
+                // Update drops
+                const drops = data.drops || 0;
+                const dropsEl = document.getElementById('integrity-drops');
+                dropsEl.textContent = drops.toLocaleString();
+                dropsEl.style.color = drops === 0 ? '#22c55e' : '#ef4444';
+                
+                // Update overall indicator LED
+                const led = document.getElementById('integrity-led');
+                if (drops > 0 || bufPct > 80 || latencyMs > 50) {
+                    led.style.background = '#ef4444';  // Red
+                } else if (bufPct > 50 || latencyMs > 10) {
+                    led.style.background = '#f59e0b';  // Yellow
+                } else {
+                    led.style.background = '#22c55e';  // Green
+                }
+            } else {
+                integrityDiv.style.display = 'none';
+            }
             
             // Add to chart
             addChartPoint(loadKg);
