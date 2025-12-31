@@ -473,6 +473,56 @@ namespace {
         return ESP_OK;
     }
     
+    // Server-Sent Events (SSE) stream for real-time sensor data
+    esp_err_t handleStream(httpd_req_t* req) {
+        // Set SSE headers
+        httpd_resp_set_type(req, "text/event-stream");
+        httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+        httpd_resp_set_hdr(req, "Connection", "keep-alive");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        
+        char sseBuf[256];
+        
+        Serial.println("[SSE] Client connected to stream");
+        
+        while (true) {
+            // Read ADC
+            int32_t rawAdc = MAX11270::readSingle(10);  // Fast read
+            float uV = (rawAdc != INT32_MIN) ? MAX11270::rawToMicrovolts(rawAdc) : 0;
+            
+            // Read IMU
+            float ax = 0, ay = 0, az = 0, gx = 0, gy = 0, gz = 0;
+            LSM6DSV::ScaledData imuData;
+            if (LSM6DSV::readScaled(&imuData)) {
+                ax = imuData.accel[0];
+                ay = imuData.accel[1];
+                az = imuData.accel[2];
+                gx = imuData.gyro[0];
+                gy = imuData.gyro[1];
+                gz = imuData.gyro[2];
+            }
+            
+            // Format SSE message
+            int len = snprintf(sseBuf, sizeof(sseBuf),
+                "data: {\"adc\":%ld,\"uV\":%.1f,\"ax\":%.3f,\"ay\":%.3f,\"az\":%.3f,"
+                "\"gx\":%.1f,\"gy\":%.1f,\"gz\":%.1f,\"t\":%lu}\n\n",
+                (long)rawAdc, uV, ax, ay, az, gx, gy, gz, millis());
+            
+            // Send chunk - if this fails, client disconnected
+            if (httpd_resp_send_chunk(req, sseBuf, len) != ESP_OK) {
+                Serial.println("[SSE] Client disconnected");
+                break;
+            }
+            
+            // ~20Hz update rate (adjustable)
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        
+        // End chunked response
+        httpd_resp_send_chunk(req, nullptr, 0);
+        return ESP_OK;
+    }
+    
     esp_err_t handlePostMode(httpd_req_t* req) {
         // Read POST body
         char body[256];
@@ -802,6 +852,10 @@ bool beginServer() {
     httpd_uri_t get_sdcard = { .uri = "/api/sdcard", .method = HTTP_GET,
         .handler = handleGetSDCard, .user_ctx = nullptr };
     httpd_register_uri_handler(server, &get_sdcard);
+    
+    httpd_uri_t get_stream = { .uri = "/api/stream", .method = HTTP_GET,
+        .handler = handleStream, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &get_stream);
     
     // ---- POST Routes ----
     httpd_uri_t post_mode = { .uri = "/api/mode", .method = HTTP_POST,
