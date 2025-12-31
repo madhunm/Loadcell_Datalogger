@@ -333,3 +333,4 @@ def detect_events(log: LogFile,
     
     return events
 
+

@@ -18,6 +18,9 @@
  * - Factory:    End-of-line testing
  */
 
+// Set to 0 to disable verbose debug output during normal operation
+#define DEBUG_VERBOSE 0
+
 #include <Arduino.h>
 #include <Wire.h>
 #include <esp_task_wdt.h>
@@ -83,10 +86,11 @@ namespace {
  * @brief Scan I2C bus and report found devices
  */
 void scanI2C() {
-    Serial.println("[I2C] Scanning bus...");
-    
-    // Initialize Wire if not already done
+    // Initialize Wire (always needed)
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, I2C_FREQ_HZ);
+    
+#if DEBUG_VERBOSE
+    Serial.println("[I2C] Scanning bus...");
     
     int found = 0;
     for (uint8_t addr = 1; addr < 127; addr++) {
@@ -130,13 +134,16 @@ void scanI2C() {
     } else {
         Serial.println("[I2C] Failed to read WHO_AM_I from 0x6A");
     }
+#endif
 }
 
 /**
  * @brief Initialize all hardware drivers
  */
 bool initHardware() {
+#if DEBUG_VERBOSE
     Serial.println("[Init] Starting hardware initialization...");
+#endif
     
     // Status LED (first for visual feedback)
     StatusLED::init();
@@ -146,7 +153,6 @@ bool initHardware() {
     scanI2C();
     
     // RTC (needed for timestamps) - uses Arduino Wire
-    Serial.print("[Init] RTC RX8900CE... ");
     if (RX8900CE::init()) {
         rtcOk = true;
         
@@ -154,62 +160,40 @@ bool initHardware() {
         if (RX8900CE::needsTimeSync()) {
             // Sync to compile time as fallback
             RX8900CE::syncToCompileTime();
-        } else {
+        }
+#if DEBUG_VERBOSE
+        else {
             // Show current time
             time_t epoch = RX8900CE::getEpoch();
             char timeBuf[24];
             RX8900CE::formatTime(epoch, timeBuf, sizeof(timeBuf));
-            Serial.printf("OK (%s)\n", timeBuf);
-            
-            // Also show compile time for reference
-            time_t compileEpoch = RX8900CE::getCompileEpoch();
-            RX8900CE::formatTime(compileEpoch, timeBuf, sizeof(timeBuf));
-            Serial.printf("[RTC] Compile time: %s\n", timeBuf);
+            Serial.printf("[Init] RTC OK (%s)\n", timeBuf);
         }
-        
+#endif
         // Enable 1Hz output for timestamp discipline
         RX8900CE::enableFOUT1Hz();
-    } else {
-        Serial.println("FAILED - check I2C @ 0x32");
     }
     
     // Timestamp sync
     if (rtcOk) {
-        Serial.print("[Init] Timestamp sync... ");
-        if (TimestampSync::init()) {
-            Serial.println("OK");
-        } else {
-            Serial.println("FAILED");
-        }
+        TimestampSync::init();
     }
     
     // Fuel Gauge (shares I2C bus)
-    Serial.print("[Init] Fuel Gauge MAX17048... ");
     if (MAX17048::init()) {
         fuelGaugeOk = true;
-        MAX17048::BatteryData batt;
-        if (MAX17048::getBatteryData(&batt)) {
-            Serial.printf("OK (%.2fV, %.1f%%)\n", batt.voltage, batt.socPercent);
-        } else {
-            Serial.println("OK");
-        }
-    } else {
-        Serial.println("NOT FOUND");
     }
     
     // IMU (shares I2C bus with RTC via Arduino Wire)
-    Serial.print("[Init] IMU LSM6DSV... ");
     if (LSM6DSV::init()) {
         imuOk = true;
         
-        // Try Hz120 first to debug - if this works, issue is with high ODR
-        // Later can switch back to Hz1920 for high-rate logging
-        Serial.println();
-        Serial.println("[IMU] Configuring ODR=120Hz, Accel=±2g, Gyro=250dps...");
-        LSM6DSV::configure(LSM6DSV::ODR::Hz120,  // Try lower ODR first
+        // Configure at lower ODR for reliability
+        LSM6DSV::configure(LSM6DSV::ODR::Hz120,
                            LSM6DSV::AccelScale::G2, 
                            LSM6DSV::GyroScale::DPS250);
         
+#if DEBUG_VERBOSE
         // Diagnostic: Read back control registers to verify writes
         Serial.println("[IMU] Register readback diagnostic:");
         uint8_t ctrl1, ctrl2, ctrl3;
@@ -361,12 +345,11 @@ bool initHardware() {
         } else {
             Serial.println("[IMU] Read failed!");
         }
-    } else {
-        Serial.println("FAILED - check I2C @ 0x6A, WHO_AM_I=0x70");
+#endif  // DEBUG_VERBOSE (IMU diagnostics)
     }
     
     // SD Card
-    Serial.print("[Init] SD Card... ");
+    Serial.print("[SD] ");
     if (SDManager::init()) {
         if (SDManager::mount()) {
             sdOk = true;
@@ -411,42 +394,28 @@ bool initHardware() {
  * @brief Initialize software modules
  */
 bool initSoftware() {
+#if DEBUG_VERBOSE
     Serial.println("[Init] Starting software initialization...");
+#endif
     
     // App mode
     AppMode::init();
     
     // Calibration storage
-    Serial.print("[Init] Calibration storage... ");
     if (CalibrationStorage::init()) {
-        uint8_t count = CalibrationStorage::getCount();
-        Serial.printf("OK (%d loadcells)\n", count);
-        
         // Initialize interpolation
         CalibrationInterp::init();
-    } else {
-        Serial.println("FAILED");
     }
     
     // State machine
     StateMachine::init();
     
     // Logger module
-    Serial.print("[Init] Logger... ");
     Logger::Config logConfig = Logger::defaultConfig();
-    if (Logger::init(logConfig)) {
-        Serial.println("OK");
-    } else {
-        Serial.println("FAILED");
-    }
+    Logger::init(logConfig);
     
     // WebUI
-    Serial.print("[Init] WebUI... ");
-    if (AdminWebUI::init()) {
-        Serial.println("OK");
-    } else {
-        Serial.println("FAILED");
-    }
+    AdminWebUI::init();
     
     return true;
 }
@@ -455,8 +424,9 @@ bool initSoftware() {
  * @brief Handle short button press
  */
 void handleShortPress() {
+#if DEBUG_VERBOSE
     Serial.println("[Button] Short press");
-    
+#endif
     if (AppMode::getMode() == AppMode::Mode::Factory) {
         StatusLED::nextTestState();
         Serial.println("[LED] Test: " + String(StatusLED::getTestStateName()));
@@ -470,7 +440,9 @@ void handleShortPress() {
  * @brief Handle long button press
  */
 void handleLongPress() {
+#if DEBUG_VERBOSE
     Serial.println("[Button] Long press");
+#endif
     
     // Cycle mode: User -> FieldAdmin -> Factory -> User
     AppMode::Mode current = AppMode::getMode();
@@ -547,6 +519,9 @@ void handleButton() {
  * @brief Print periodic status
  */
 void printStatus() {
+#if !DEBUG_VERBOSE
+    return;  // Disable periodic status during debugging
+#endif
     uint32_t now = millis();
     if (now - lastStatusMs < STATUS_INTERVAL_MS) return;
     lastStatusMs = now;
@@ -641,24 +616,18 @@ void setup() {
     while (!Serial && millis() < 3000);
     
     Serial.println();
-    Serial.println("=====================================");
-    Serial.println("  Loadcell Data Logger v1.0");
-    Serial.println("  ESP32-S3 Platform");
-    Serial.println("=====================================");
-    Serial.println();
+    Serial.println("=== Loadcell Logger v1.0 ===");
     
     // Button
     pinMode(PIN_LOG_BUTTON, INPUT);
     
     // Configure task watchdog (5 second timeout, panic on timeout)
-    // The logger task will add itself to the watchdog when it starts
     esp_task_wdt_config_t wdt_config = {
-        .timeout_ms = 5000,            // 5 second timeout
-        .idle_core_mask = 0,           // Don't watch idle tasks
-        .trigger_panic = true          // Panic on timeout
+        .timeout_ms = 5000,
+        .idle_core_mask = 0,
+        .trigger_panic = true
     };
     esp_task_wdt_init(&wdt_config);
-    Serial.println("[Init] Watchdog timer configured (5s timeout)");
     
     // Hardware
     bool hwOk = initHardware();
@@ -667,37 +636,21 @@ void setup() {
     initSoftware();
     
     // WiFi
-    Serial.println("[Init] Starting WiFi AP...");
-    if (WiFiAP::start()) {
-        Serial.println("[WiFi] SSID: " + String(WiFiAP::getSSID()));
-        Serial.println("[WiFi] URL: http://" + WiFiAP::getIP());
-    } else {
-        Serial.println("[WiFi] Failed!");
-    }
+    WiFiAP::start();
+    Serial.printf("[WiFi] http://%s\n", WiFiAP::getIP().c_str());
     
-    // Set initial state - be lenient about non-critical failures
-    // Critical: ADC (required for logging)
-    // Important but not critical: RTC, IMU, SD (can operate without)
-    Serial.println();
-    Serial.println("[Init] Hardware Summary:");
-    Serial.printf("  ADC:  %s %s\n", adcOk ? "OK" : "FAIL", adcOk ? "" : "(CRITICAL)");
-    Serial.printf("  RTC:  %s %s\n", rtcOk ? "OK" : "FAIL", rtcOk ? "" : "(timestamps may drift)");
-    Serial.printf("  IMU:  %s %s\n", imuOk ? "OK" : "FAIL", imuOk ? "" : "(no motion data)");
-    Serial.printf("  Batt: %s\n", fuelGaugeOk ? "OK" : "NOT FOUND");
-    Serial.printf("  SD:   %s %s\n", sdOk ? "OK" : "FAIL", sdOk ? "" : "(insert card to log)");
+    // Hardware summary
+    Serial.printf("[Init] ADC:%s RTC:%s IMU:%s SD:%s\n", 
+        adcOk ? "OK" : "FAIL", rtcOk ? "OK" : "FAIL", 
+        imuOk ? "OK" : "FAIL", sdOk ? "OK" : "FAIL");
     
     if (adcOk) {
         // ADC is critical - proceed even if other parts fail
         StatusLED::setState(StatusLED::State::IdleUser);
         StateMachine::processEvent(StateMachine::Event::InitComplete);
-        
-        // Log warnings for non-critical failures
-        if (!rtcOk) Serial.println("[Warning] RTC not available - timestamps will use millis()");
-        if (!imuOk) Serial.println("[Warning] IMU not available - no motion compensation");
-        if (!sdOk) Serial.println("[Warning] SD not mounted - insert card to enable logging");
     } else {
         // ADC failure is critical
-        Serial.println("[ERROR] ADC initialization failed - cannot operate!");
+        Serial.println("[ERROR] ADC init failed!");
         StateMachine::setError(StateMachine::ErrorCode::AdcError);
     }
     

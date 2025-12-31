@@ -562,7 +562,14 @@
             const loadKg = (data.uV || 0) / 10.0;  // Simple conversion
             document.getElementById('live-load').textContent = loadKg.toFixed(2);
             document.getElementById('live-adc').textContent = (data.adc || 0).toLocaleString();
-            document.getElementById('live-rate').textContent = '20';  // SSE rate in Hz
+            
+            // Display ADC sample rate in kSPS (e.g., 64000 → "64.0k")
+            const sampleRateHz = data.sample_rate_hz || 0;
+            if (sampleRateHz >= 1000) {
+                document.getElementById('live-rate').textContent = (sampleRateHz / 1000).toFixed(1) + 'k';
+            } else {
+                document.getElementById('live-rate').textContent = sampleRateHz.toString();
+            }
             
             // Update IMU
             document.getElementById('imu-ax').textContent = (data.ax || 0).toFixed(3);

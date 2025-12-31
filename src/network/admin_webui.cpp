@@ -8,6 +8,9 @@
  * - Minimal memory footprint
  */
 
+// Set to 0 to disable verbose debug output
+#define DEBUG_VERBOSE 0
+
 #include "admin_webui.h"
 #include "../app/app_mode.h"
 #include "../drivers/status_led.h"
@@ -126,16 +129,22 @@ namespace {
             }
         }
         
+        // Get ADC sample rate from logger config
+        uint32_t adcSampleRateHz = Logger::getAdcRateHz();
+        
         snprintf(jsonBuf, sizeof(jsonBuf),
             "{\"mode\":\"%s\",\"wifi\":true,\"uptime_ms\":%lu,\"free_heap\":%u,"
-            "\"adc_present\":%s,\"sd_present\":%s,\"sd_total_mb\":%llu,\"sd_used_mb\":%llu}",
+            "\"adc_present\":%s,\"sd_present\":%s,\"sd_total_mb\":%llu,\"sd_used_mb\":%llu,"
+            "\"adc_sample_rate_hz\":%lu,\"logging\":%s}",
             AppMode::getModeString(),
             millis(),
             ESP.getFreeHeap(),
             MAX11270::isPresent() ? "true" : "false",
             sdPresent ? "true" : "false",
             sdTotalMB,
-            sdUsedMB
+            sdUsedMB,
+            adcSampleRateHz,
+            Logger::isRunning() ? "true" : "false"
         );
         sendJson(req, jsonBuf);
         return ESP_OK;
@@ -289,20 +298,33 @@ namespace {
     }
     
     esp_err_t handleLoggingStart(httpd_req_t* req) {
+        Serial.println("[WebUI] handleLoggingStart() called");
+        Serial.printf("[WebUI] Current mode: %s, canLog: %s\n", 
+                      AppMode::getModeString(), 
+                      AppMode::canLog() ? "YES" : "NO");
+        
         if (!AppMode::canLog()) {
+            Serial.println("[WebUI] ERROR: Logging not allowed in current mode");
             sendError(req, "Logging not allowed", 403);
             return ESP_OK;
         }
         
         if (Logger::isRunning()) {
+            Serial.println("[WebUI] ERROR: Already logging");
             sendError(req, "Already logging", 400);
             return ESP_OK;
         }
         
+        Serial.println("[WebUI] Calling Logger::start()...");
+        uint32_t startMs = millis();
+        
         if (!Logger::start()) {
+            Serial.printf("[WebUI] ERROR: Logger::start() failed after %lu ms\n", millis() - startMs);
             sendError(req, "Failed to start logger - check SD card", 500);
             return ESP_OK;
         }
+        
+        Serial.printf("[WebUI] Logger::start() succeeded in %lu ms\n", millis() - startMs);
         
         StatusLED::setState(StatusLED::State::Logging);
         
@@ -311,6 +333,7 @@ namespace {
             Logger::getCurrentFilePath()
         );
         sendJson(req, jsonBuf);
+        Serial.println("[WebUI] Logging start response sent");
         return ESP_OK;
     }
     
@@ -701,9 +724,14 @@ namespace {
         httpd_resp_set_hdr(req, "Connection", "keep-alive");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
         
-        char sseBuf[384];
+        char sseBuf[448];
         
+#if DEBUG_VERBOSE
         Serial.println("[SSE] Client connected to stream");
+#endif
+        
+        // Get ADC sample rate (doesn't change during session)
+        uint32_t adcSampleRateHz = Logger::getAdcRateHz();
         
         while (true) {
             // Read ADC
@@ -735,17 +763,21 @@ namespace {
                 drops = status.droppedSamples;
             }
             
-            // Format SSE message with integrity data
+            // Format SSE message with integrity data and sample rate
             int len = snprintf(sseBuf, sizeof(sseBuf),
                 "data: {\"adc\":%ld,\"uV\":%.1f,\"ax\":%.3f,\"ay\":%.3f,\"az\":%.3f,"
                 "\"gx\":%.1f,\"gy\":%.1f,\"gz\":%.1f,\"t\":%lu,"
-                "\"logging\":%s,\"buf_pct\":%.1f,\"latency_us\":%lu,\"drops\":%lu}\n\n",
+                "\"logging\":%s,\"buf_pct\":%.1f,\"latency_us\":%lu,\"drops\":%lu,"
+                "\"sample_rate_hz\":%lu}\n\n",
                 (long)rawAdc, uV, ax, ay, az, gx, gy, gz, millis(),
-                logging ? "true" : "false", bufferFill, latencyUs, drops);
+                logging ? "true" : "false", bufferFill, latencyUs, drops,
+                adcSampleRateHz);
             
             // Send chunk - if this fails, client disconnected
             if (httpd_resp_send_chunk(req, sseBuf, len) != ESP_OK) {
+#if DEBUG_VERBOSE
                 Serial.println("[SSE] Client disconnected");
+#endif
                 break;
             }
             
@@ -1045,7 +1077,26 @@ bool init() {
         return false;
     }
     
-    Serial.println("[WebUI] SPIFFS mounted, routes ready");
+#if DEBUG_VERBOSE
+    // List files in SPIFFS for debugging
+    Serial.println("[WebUI] SPIFFS mounted. Files:");
+    File root = SPIFFS.open("/");
+    if (root && root.isDirectory()) {
+        File file = root.openNextFile();
+        while (file) {
+            Serial.printf("  %s (%d bytes)\n", file.name(), file.size());
+            file = root.openNextFile();
+        }
+    }
+    
+    // Check if index.html exists
+    if (SPIFFS.exists("/index.html")) {
+        Serial.println("[WebUI] index.html found");
+    } else {
+        Serial.println("[WebUI] WARNING: index.html NOT found!");
+    }
+#endif
+    
     return true;
 }
 
@@ -1054,7 +1105,7 @@ bool beginServer() {
     
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 25;
+    config.max_uri_handlers = 35;  // Increased for all endpoints
     config.stack_size = 8192;
     
     esp_err_t ret = httpd_start(&server, &config);
@@ -1181,6 +1232,11 @@ bool beginServer() {
     httpd_uri_t options_all = { .uri = "/api/*", .method = HTTP_OPTIONS,
         .handler = handleOptions, .user_ctx = nullptr };
     httpd_register_uri_handler(server, &options_all);
+    
+    // ---- Root handler (explicit for /) ----
+    httpd_uri_t root = { .uri = "/", .method = HTTP_GET,
+        .handler = handleStaticFile, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &root);
     
     // ---- Static file handler (wildcard, must be last) ----
     httpd_uri_t static_files = { .uri = "/*", .method = HTTP_GET,

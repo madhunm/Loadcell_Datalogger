@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Factory Test - Loadcell Datalogger</title>
     <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
     <header class="header">
         <div class="header__title">
@@ -29,7 +31,7 @@
                     </button>
                 </div>
             </div>
-            
+
             <div class="grid grid--5" style="text-align: center;">
                 <div class="stat-card">
                     <div class="stat-card__value" id="summary-total">0</div>
@@ -59,7 +61,7 @@
             <div class="card__header">
                 <h2 class="card__title">Sensor Tests</h2>
             </div>
-            
+
             <!-- ADC Test -->
             <div class="test-result test-result--pending" id="test-adc">
                 <div>
@@ -138,9 +140,10 @@
             <div class="card__header">
                 <h2 class="card__title">NeoPixel LED Test</h2>
             </div>
-            
+
             <!-- Current State Display -->
-            <div style="background: var(--bg-input); padding: 1rem; border-radius: var(--radius-md); margin-bottom: 1rem;">
+            <div
+                style="background: var(--bg-input); padding: 1rem; border-radius: var(--radius-md); margin-bottom: 1rem;">
                 <div class="flex gap-md" style="align-items: center; justify-content: space-between;">
                     <div>
                         <div class="text-muted" style="font-size: 0.8rem;">Current State</div>
@@ -155,7 +158,7 @@
                     </div>
                 </div>
             </div>
-            
+
             <!-- Auto Cycle Controls -->
             <div class="flex gap-md mb-md">
                 <button class="btn btn--primary" id="btn-cycle-toggle" onclick="toggleAutoCycle()">
@@ -165,42 +168,57 @@
                     Next →
                 </button>
             </div>
-            
+
             <!-- Color Selection -->
             <div class="mb-md">
                 <div class="text-muted mb-sm" style="font-size: 0.85rem;">Colors (click to set)</div>
                 <div class="flex gap-sm" style="flex-wrap: wrap;">
                     <button class="btn led-color-btn" style="background: #ff0000;" onclick="setLed('red')">Red</button>
-                    <button class="btn led-color-btn" style="background: #00ff00; color: #000;" onclick="setLed('green')">Green</button>
-                    <button class="btn led-color-btn" style="background: #0000ff;" onclick="setLed('blue')">Blue</button>
-                    <button class="btn led-color-btn" style="background: #00ffff; color: #000;" onclick="setLed('cyan')">Cyan</button>
-                    <button class="btn led-color-btn" style="background: #ff6400; color: #000;" onclick="setLed('orange')">Orange</button>
-                    <button class="btn led-color-btn" style="background: #ff00ff;" onclick="setLed('magenta')">Magenta</button>
+                    <button class="btn led-color-btn" style="background: #00ff00; color: #000;"
+                        onclick="setLed('green')">Green</button>
+                    <button class="btn led-color-btn" style="background: #0000ff;"
+                        onclick="setLed('blue')">Blue</button>
+                    <button class="btn led-color-btn" style="background: #00ffff; color: #000;"
+                        onclick="setLed('cyan')">Cyan</button>
+                    <button class="btn led-color-btn" style="background: #ff6400; color: #000;"
+                        onclick="setLed('orange')">Orange</button>
+                    <button class="btn led-color-btn" style="background: #ff00ff;"
+                        onclick="setLed('magenta')">Magenta</button>
                     <button class="btn btn--secondary" onclick="setLed('off')">Off</button>
                 </div>
             </div>
-            
+
             <!-- Pattern Selection -->
             <div class="mb-md">
                 <div class="text-muted mb-sm" style="font-size: 0.85rem;">Patterns</div>
                 <div class="flex gap-sm" style="flex-wrap: wrap;">
-                    <button class="btn btn--secondary pattern-btn" data-pattern="steady" onclick="setPattern('steady')">Steady</button>
-                    <button class="btn btn--secondary pattern-btn" data-pattern="pulse" onclick="setPattern('pulse')">Pulse</button>
-                    <button class="btn btn--secondary pattern-btn" data-pattern="fast_blink" onclick="setPattern('fast_blink')">Fast Blink</button>
-                    <button class="btn btn--secondary pattern-btn" data-pattern="very_fast_blink" onclick="setPattern('very_fast_blink')">Very Fast</button>
+                    <button class="btn btn--secondary pattern-btn" data-pattern="steady"
+                        onclick="setPattern('steady')">Steady</button>
+                    <button class="btn btn--secondary pattern-btn" data-pattern="pulse"
+                        onclick="setPattern('pulse')">Pulse</button>
+                    <button class="btn btn--secondary pattern-btn" data-pattern="fast_blink"
+                        onclick="setPattern('fast_blink')">Fast Blink</button>
+                    <button class="btn btn--secondary pattern-btn" data-pattern="very_fast_blink"
+                        onclick="setPattern('very_fast_blink')">Very Fast</button>
                 </div>
             </div>
-            
+
             <!-- Error Blink Codes -->
             <div>
                 <div class="text-muted mb-sm" style="font-size: 0.85rem;">Error Blink Codes (Red)</div>
                 <div class="flex gap-sm" style="flex-wrap: wrap;">
-                    <button class="btn btn--secondary" style="border-color: #ff0000;" onclick="setBlinkCode(1)">1 (SD Missing)</button>
-                    <button class="btn btn--secondary" style="border-color: #ff0000;" onclick="setBlinkCode(2)">2 (SD Full)</button>
-                    <button class="btn btn--secondary" style="border-color: #ff0000;" onclick="setBlinkCode(3)">3 (SD Write)</button>
-                    <button class="btn btn--secondary" style="border-color: #ff0000;" onclick="setBlinkCode(4)">4 (ADC)</button>
-                    <button class="btn btn--secondary" style="border-color: #ff0000;" onclick="setBlinkCode(5)">5 (IMU)</button>
-                    <button class="btn btn--secondary" style="border-color: #ff0000;" onclick="setBlinkCode(6)">6 (RTC)</button>
+                    <button class="btn btn--secondary" style="border-color: #ff0000;" onclick="setBlinkCode(1)">1 (SD
+                        Missing)</button>
+                    <button class="btn btn--secondary" style="border-color: #ff0000;" onclick="setBlinkCode(2)">2 (SD
+                        Full)</button>
+                    <button class="btn btn--secondary" style="border-color: #ff0000;" onclick="setBlinkCode(3)">3 (SD
+                        Write)</button>
+                    <button class="btn btn--secondary" style="border-color: #ff0000;" onclick="setBlinkCode(4)">4
+                        (ADC)</button>
+                    <button class="btn btn--secondary" style="border-color: #ff0000;" onclick="setBlinkCode(5)">5
+                        (IMU)</button>
+                    <button class="btn btn--secondary" style="border-color: #ff0000;" onclick="setBlinkCode(6)">6
+                        (RTC)</button>
                 </div>
             </div>
         </div>
@@ -211,7 +229,8 @@
                 <h2 class="card__title">Test Log</h2>
                 <button class="btn btn--small btn--secondary" onclick="clearLog()">Clear</button>
             </div>
-            <div id="test-log" style="font-family: monospace; font-size: 0.85rem; max-height: 300px; overflow-y: auto; background: var(--bg-input); padding: 1rem; border-radius: var(--radius-md);">
+            <div id="test-log"
+                style="font-family: monospace; font-size: 0.85rem; max-height: 300px; overflow-y: auto; background: var(--bg-input); padding: 1rem; border-radius: var(--radius-md);">
                 <div class="text-muted">Test log will appear here...</div>
             </div>
         </div>
@@ -247,39 +266,39 @@
                 error: 'var(--accent-red)',
                 warning: 'var(--accent-orange)'
             };
-            
+
             const entry = document.createElement('div');
             entry.style.color = colors[type] || colors.info;
             entry.textContent = `[${timestamp}] ${message}`;
-            
+
             // Remove placeholder if present
             const placeholder = logDiv.querySelector('.text-muted');
             if (placeholder) placeholder.remove();
-            
+
             logDiv.appendChild(entry);
             logDiv.scrollTop = logDiv.scrollHeight;
         }
 
         function clearLog() {
-            document.getElementById('test-log').innerHTML = 
+            document.getElementById('test-log').innerHTML =
                 '<div class="text-muted">Test log cleared...</div>';
         }
 
         // Run individual test
         async function runTest(sensor) {
             log(`Starting ${sensor.toUpperCase()} test...`);
-            
+
             const testDiv = document.getElementById(`test-${sensor}`);
             const statusSpan = document.getElementById(`test-${sensor}-status`);
             const detailsDiv = document.getElementById(`test-${sensor}-details`);
-            
+
             statusSpan.textContent = 'Testing...';
             testDiv.className = 'test-result test-result--pending';
-            
+
             try {
                 const result = await API.post(`/api/test/${sensor}`, {});
                 testResults[sensor] = result;
-                
+
                 if (result.passed) {
                     log(`${sensor.toUpperCase()} test PASSED: ${result.message}`, 'success');
                     statusSpan.textContent = '✓ Pass';
@@ -289,7 +308,7 @@
                     statusSpan.textContent = '✗ Fail';
                     testDiv.className = 'test-result test-result--fail';
                 }
-                
+
                 // Show details
                 if (result.details) {
                     const detailStr = Object.entries(result.details)
@@ -297,14 +316,14 @@
                         .join(', ');
                     detailsDiv.textContent = detailStr;
                 }
-                
+
             } catch (error) {
                 log(`${sensor.toUpperCase()} test ERROR: ${error.message}`, 'error');
                 statusSpan.textContent = '✗ Error';
                 testDiv.className = 'test-result test-result--fail';
                 testResults[sensor] = { passed: false, message: error.message };
             }
-            
+
             updateSummary();
         }
 
@@ -312,16 +331,16 @@
         async function runAllTests() {
             log('=== Starting All Tests ===', 'info');
             resetTests();
-            
+
             const sensors = ['adc', 'imu', 'rtc', 'sd', 'neopixel', 'battery'];
-            
+
             for (const sensor of sensors) {
                 await runTest(sensor);
                 await new Promise(r => setTimeout(r, 500)); // Brief pause between tests
             }
-            
+
             log('=== All Tests Complete ===', 'info');
-            
+
             const summary = calculateSummary();
             if (summary.fail === 0 && summary.pass === summary.total) {
                 log('OVERALL RESULT: ALL TESTS PASSED', 'success');
@@ -333,16 +352,16 @@
         // Reset all tests
         function resetTests() {
             const sensors = ['adc', 'imu', 'rtc', 'sd', 'neopixel', 'battery'];
-            
+
             sensors.forEach(sensor => {
                 testResults[sensor] = null;
                 const testDiv = document.getElementById(`test-${sensor}`);
                 const statusSpan = document.getElementById(`test-${sensor}-status`);
-                
+
                 testDiv.className = 'test-result test-result--pending';
                 statusSpan.textContent = 'Pending';
             });
-            
+
             updateSummary();
             log('Tests reset', 'info');
         }
@@ -351,7 +370,7 @@
         function calculateSummary() {
             const sensors = Object.keys(testResults);
             let pass = 0, fail = 0, pending = 0;
-            
+
             sensors.forEach(sensor => {
                 if (testResults[sensor] === null) {
                     pending++;
@@ -361,19 +380,19 @@
                     fail++;
                 }
             });
-            
+
             return { total: sensors.length, pass, fail, pending };
         }
 
         // Update summary display
         function updateSummary() {
             const summary = calculateSummary();
-            
+
             document.getElementById('summary-total').textContent = summary.total;
             document.getElementById('summary-pass').textContent = summary.pass;
             document.getElementById('summary-fail').textContent = summary.fail;
             document.getElementById('summary-pending').textContent = summary.pending;
-            
+
             const resultEl = document.getElementById('summary-result');
             if (summary.pending === summary.total) {
                 resultEl.textContent = '--';
@@ -393,31 +412,31 @@
         // ========================================================================
         // LED Test Functions
         // ========================================================================
-        
+
         let ledCycling = false;
         let selectedColor = 'red';
         let selectedPattern = 'steady';
-        
+
         // Fetch and update LED state display
         async function refreshLedState() {
             try {
                 const state = await API.get('/api/led');
                 document.getElementById('led-state-name').textContent = state.state_name || '--';
-                document.getElementById('led-state-progress').textContent = 
+                document.getElementById('led-state-progress').textContent =
                     `${(state.state_index || 0) + 1} / ${state.state_count || 0}`;
-                
+
                 ledCycling = state.cycling || false;
                 updateCycleButton();
             } catch (error) {
                 console.error('Failed to fetch LED state:', error);
             }
         }
-        
+
         // Update cycle button appearance
         function updateCycleButton() {
             const btn = document.getElementById('btn-cycle-toggle');
             const indicator = document.getElementById('led-cycle-indicator');
-            
+
             if (ledCycling) {
                 btn.textContent = '⏹ Stop Auto Cycle';
                 btn.className = 'btn btn--secondary';
@@ -428,7 +447,7 @@
                 indicator.style.display = 'none';
             }
         }
-        
+
         // Toggle auto-cycle
         async function toggleAutoCycle() {
             try {
@@ -444,7 +463,7 @@
                 log(`Failed to toggle cycle: ${error.message}`, 'error');
             }
         }
-        
+
         // Advance to next LED state
         async function ledNext() {
             try {
@@ -455,26 +474,26 @@
                 log(`Failed to advance LED: ${error.message}`, 'error');
             }
         }
-        
+
         // Set LED color with current pattern
         async function setLed(color) {
             selectedColor = color;
             log(`Setting LED: ${color} (${selectedPattern})`);
             try {
-                await API.post('/api/led', { 
-                    color: color, 
-                    pattern: selectedPattern 
+                await API.post('/api/led', {
+                    color: color,
+                    pattern: selectedPattern
                 });
                 await refreshLedState();
             } catch (error) {
                 log(`Failed to set LED: ${error.message}`, 'error');
             }
         }
-        
+
         // Set pattern and apply to current color
         async function setPattern(pattern) {
             selectedPattern = pattern;
-            
+
             // Update button styles
             document.querySelectorAll('.pattern-btn').forEach(btn => {
                 btn.classList.remove('btn--primary');
@@ -485,25 +504,25 @@
                 activeBtn.classList.remove('btn--secondary');
                 activeBtn.classList.add('btn--primary');
             }
-            
+
             log(`Pattern: ${pattern}`);
             try {
-                await API.post('/api/led', { 
-                    color: selectedColor, 
-                    pattern: pattern 
+                await API.post('/api/led', {
+                    color: selectedColor,
+                    pattern: pattern
                 });
                 await refreshLedState();
             } catch (error) {
                 log(`Failed to set pattern: ${error.message}`, 'error');
             }
         }
-        
+
         // Set error blink code
         async function setBlinkCode(count) {
             log(`Setting error blink code: ${count} blinks`);
             try {
-                await API.post('/api/led', { 
-                    color: 'red', 
+                await API.post('/api/led', {
+                    color: 'red',
                     pattern: 'blink_code',
                     blink_count: count
                 });
@@ -519,7 +538,7 @@
             if (ledCycling) {
                 await API.post('/api/led/cycle/stop', {});
             }
-            
+
             const success = await Mode.switchTo('user');
             if (success) {
                 location.href = 'index.html';
@@ -530,17 +549,17 @@
         document.addEventListener('DOMContentLoaded', () => {
             log('Factory Test Mode initialized');
             updateSummary();
-            
+
             // Verify we're in factory mode
             Mode.fetch().then(mode => {
                 if (mode !== 'factory') {
                     UI.showAlert('Not in Factory mode. Please switch modes from the main page.', 'warning');
                 }
             });
-            
+
             // Fetch initial LED state
             refreshLedState();
-            
+
             // Periodically refresh LED state when cycling
             setInterval(() => {
                 if (ledCycling) {
@@ -550,5 +569,5 @@
         });
     </script>
 </body>
-</html>
 
+</html>

@@ -1,0 +1,45 @@
+Processing esp32s3 (platform: espressif32; board: esp32-s3-devkitc-1; framework: arduino)
+--------------------------------------------------------------------------------
+Verbose mode can be enabled via `-v, --verbose` option
+CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/esp32-s3-devkitc-1.html
+PLATFORM: Espressif 32 (55.3.34) > Espressif ESP32-S3-DevKitC-1-N8 (8 MB QD, No PSRAM)
+HARDWARE: ESP32S3 240MHz, 320KB RAM, 8MB Flash
+DEBUG: Current (esp-builtin) On-board (esp-builtin) External (cmsis-dap, esp-bridge, esp-prog, iot-bus-jtag, jlink, minimodule, olimex-arm-usb-ocd, olimex-arm-usb-ocd-h, olimex-arm-usb-tiny-h, olimex-jtag-tiny, tumpa)
+PACKAGES: 
+ - contrib-piohome @ 3.4.4 
+ - framework-arduinoespressif32 @ 3.3.4 
+ - framework-arduinoespressif32-libs @ 5.5.0+sha.8410210c9a 
+ - tool-dfuutil-arduino @ 1.11.0 
+ - tool-esp-rom-elfs @ 2024.10.11 
+ - tool-esptoolpy @ 5.1.0 
+ - tool-mkfatfs @ 2.0.1 
+ - tool-mklittlefs @ 3.2.0 
+ - tool-mklittlefs4 @ 4.0.2 
+ - tool-mkspiffs @ 2.230.0 (2.30) 
+ - toolchain-xtensa-esp-elf @ 14.2.0+20250730
+*** Applied include path shortening for 330 framework paths ***
+*** Path length reduced from 39029 to ~13712 characters ***
+*** Estimated savings: 24750 characters ***
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 44 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- Adafruit NeoPixel @ 1.15.2
+|-- Preferences @ 3.3.4
+|-- Wire @ 3.3.4
+|-- SD_MMC @ 3.3.4
+|-- SPIFFS @ 3.3.4
+|-- WiFi @ 3.3.4
+|-- FS @ 3.3.4
+Building in release mode
+Compiling .pio\build\esp32s3\src\network\admin_webui.cpp.o
+Linking .pio\build\esp32s3\firmware.elf
+Firmware metrics can not be shown. Set the terminal codepage to "utf-8" or "cp65001" on Windows.
+Retrieving maximum program size .pio\build\esp32s3\firmware.elf
+Checking size .pio\build\esp32s3\firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [===       ]  25.1% (used 82084 bytes from 327680 bytes)
+Flash: [========= ]  85.0% (used 1114439 bytes from 1310720 bytes)
+*** [.pio\build\esp32s3\firmware.bin] C:\Users\Madhu\Documents\PlatformIO\Projects\Loadcell_Datalogger_V1\.pio\build\esp32s3\firmware.bin: The process cannot access the file because it is being used by another process
+========================= [FAILED] Took 29.60 seconds =========================

@@ -274,3 +274,4 @@ def verify_crc32(filepath: str) -> Tuple[bool, int, int]:
     report = validate_file(filepath, check_crc=True, check_gaps=False)
     return (report.crc_valid, report.crc_expected, report.crc_computed)
 
+

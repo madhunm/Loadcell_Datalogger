@@ -402,3 +402,4 @@ class LogFile:
                 f"adc={self.adc_count}, imu={self.imu_count}, "
                 f"duration={self.duration_seconds:.2f}s)")
 
+

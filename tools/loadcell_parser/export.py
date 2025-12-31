@@ -313,3 +313,4 @@ def to_numpy(log: LogFile,
     else:
         raise ValueError(f"Unknown data_type: {data_type}")
 
+

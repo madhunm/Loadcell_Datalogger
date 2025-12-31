@@ -180,6 +180,13 @@ void update();
  */
 void setLoadcellId(const char* id);
 
+/**
+ * @brief Get configured ADC sample rate
+ * 
+ * @return Sample rate in Hz
+ */
+uint32_t getAdcRateHz();
+
 // ============================================================================
 // Advanced API
 // ============================================================================

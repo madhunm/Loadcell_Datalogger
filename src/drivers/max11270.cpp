@@ -63,6 +63,7 @@ namespace {
     std::atomic<uint32_t> drdyTimeouts{0};
     std::atomic<uint32_t> spiErrors{0};
     std::atomic<uint32_t> dmaQueueFull{0};
+    std::atomic<uint32_t> isrFiredCount{0};  // Debug: count ISR invocations
     volatile uint32_t maxLatencyUs = 0;
     volatile uint32_t lastTimestampUs = 0;
     volatile uint32_t lastDrdyTimeUs = 0;
@@ -169,6 +170,8 @@ namespace {
      * ISR duration: ~1-2µs (just queue the transaction)
      */
     void IRAM_ATTR drdyISR() {
+        isrFiredCount.fetch_add(1, std::memory_order_relaxed);  // Debug: count every ISR entry
+        
         if (!continuousRunning || overflowFlag) {
             return;
         }
@@ -356,7 +359,7 @@ bool init() {
     digitalWrite(PIN_ADC_RSTB, HIGH);  // Not in reset
     
     pinMode(PIN_ADC_SYNC, OUTPUT);
-    digitalWrite(PIN_ADC_SYNC, LOW);
+    digitalWrite(PIN_ADC_SYNC, HIGH);  // Must be HIGH to allow conversions
     
     pinMode(PIN_ADC_RDYB, INPUT);  // Data ready input
     
@@ -440,10 +443,26 @@ void reset() {
         dmaTransPool[i].inUse = false;
     }
     
-    Serial.println("[MAX11270] Reset complete");
+    // Run self-calibration for accurate readings
+    // Self-cal offset (command 0x10)
+    Serial.println("[MAX11270] Running self-calibration...");
+    sendCommandInternal(0x10);
+    delay(200);  // Wait for calibration (~100ms typical)
+    
+    // Self-cal gain (command 0x20)
+    sendCommandInternal(0x20);
+    delay(200);
+    
+    Serial.println("[MAX11270] Reset and self-cal complete");
 }
 
 bool isPresent() {
+    // If continuous mode is running, ADC is obviously present
+    // (and we can't do blocking SPI calls without causing a crash)
+    if (continuousRunning) {
+        return true;
+    }
+    
     // Read STAT1 register - should return valid data
     uint32_t stat = readRegisterInternal(Register::STAT1, 1);
     
@@ -494,6 +513,12 @@ void configure(const Config& config) {
 }
 
 int32_t readSingle(uint32_t timeout_ms) {
+    // Cannot do single reads while continuous DMA mode is running
+    // (would cause SPI bus contention and crash)
+    if (continuousRunning) {
+        return INT32_MIN;  // Return error value
+    }
+    
     // Build conversion command
     uint8_t rateVal = static_cast<uint8_t>(currentConfig.rate);
     uint8_t cmd = 0x80 | (rateVal & 0x0F);  // Single conversion
@@ -524,6 +549,9 @@ bool startContinuous(ADCRingBufferLarge* buffer) {
     overflowFlag = false;
     overflowCount.store(0, std::memory_order_relaxed);
     dmaQueueFull.store(0, std::memory_order_relaxed);
+    samplesAcquired.store(0, std::memory_order_relaxed);  // Reset sample counter!
+    spiErrors.store(0, std::memory_order_relaxed);         // Reset error counter
+    isrFiredCount.store(0, std::memory_order_relaxed);     // Reset ISR counter
     lastDrdyTimeUs = 0;
     maxLatencyUs = 0;
     dmaInProgress = false;
@@ -533,17 +561,37 @@ bool startContinuous(ADCRingBufferLarge* buffer) {
         dmaTransPool[i].inUse = false;
     }
     
-    // Attach DRDY interrupt (falling edge = data ready)
-    attachInterrupt(digitalPinToInterrupt(PIN_ADC_RDYB), drdyISR, FALLING);
+    // Check DRDY pin state before starting
+    int drdyState = digitalRead(PIN_ADC_RDYB);
+    Serial.printf("[MAX11270] DRDY pin state before start: %s\n", drdyState ? "HIGH" : "LOW");
     
-    // Start continuous conversion
+    // Start continuous conversion FIRST (blocking SPI, no ISR yet)
     // Command byte: [7]=1 (convert), [6:5]=01 (continuous), [4:0]=rate
     uint8_t rateVal = static_cast<uint8_t>(currentConfig.rate);
     uint8_t cmd = 0xA0 | (rateVal & 0x0F);  // Continuous mode
     
-    continuousRunning = true;  // Set before sending command
+    Serial.printf("[MAX11270] Sending continuous mode command: 0x%02X (rate=%d)\n", cmd, rateVal);
+    sendCommandInternal(cmd);  // Safe - no interrupt attached yet
     
-    sendCommandInternal(cmd);
+    // Wait for first DRDY (verify ADC is actually converting)
+    uint32_t startWait = millis();
+    while (digitalRead(PIN_ADC_RDYB) == HIGH) {
+        if (millis() - startWait > 100) {  // 100ms timeout
+            Serial.println("[MAX11270] ERROR: DRDY never went LOW - ADC not converting!");
+            return false;
+        }
+        delayMicroseconds(10);
+    }
+    Serial.println("[MAX11270] First DRDY received - ADC is converting");
+    
+    // Enable ISR processing flag BEFORE attaching interrupt
+    // This prevents the race condition where ISR fires but flag is still false
+    continuousRunning = true;
+    
+    // NOW attach DRDY interrupt (falling edge = data ready)
+    // Must be after sendCommandInternal to avoid SPI bus contention
+    // Must be after continuousRunning=true so ISR doesn't return early
+    attachInterrupt(digitalPinToInterrupt(PIN_ADC_RDYB), drdyISR, FALLING);
     
     Serial.printf("[MAX11270] DMA continuous mode started at %lu sps\n",
                   rateToHz(currentConfig.rate));
@@ -556,20 +604,41 @@ void stopContinuous() {
         return;
     }
     
-    // Disable interrupt first
+    // Disable interrupt first - stops new DMA transactions from being queued
     detachInterrupt(digitalPinToInterrupt(PIN_ADC_RDYB));
     continuousRunning = false;
     
-    // Wait for any pending DMA transactions to complete
-    delay(10);
+    // Small delay to let any in-flight ISR complete
+    delay(5);
     
-    // Send power down command
-    sendCommandInternal(Command::POWERDOWN);
+    // Drain ALL pending DMA transactions from the SPI queue
+    // This is critical - without this, any subsequent blocking SPI call will crash
+    spi_transaction_t* completedTrans;
+    int drainCount = 0;
+    while (spi_device_get_trans_result(spiDevice, &completedTrans, pdMS_TO_TICKS(10)) == ESP_OK) {
+        // Transaction completed, release it back to the pool
+        DmaTransaction* dmaTrans = (DmaTransaction*)completedTrans->user;
+        if (dmaTrans) {
+            dmaTrans->inUse = false;
+        }
+        drainCount++;
+        if (drainCount > DMA_TRANS_POOL_SIZE * 2) {
+            // Safety limit to prevent infinite loop
+            break;
+        }
+    }
     
-    Serial.printf("[MAX11270] DMA continuous mode stopped. Samples: %lu, Dropped: %lu, DMA Queue Full: %lu\n",
+    // Reset all transaction pool entries to be safe
+    for (int i = 0; i < DMA_TRANS_POOL_SIZE; i++) {
+        dmaTransPool[i].inUse = false;
+    }
+    
+    Serial.printf("[MAX11270] STOP: ISR=%lu, Samples=%lu, Dropped=%lu, SPIErr=%lu, Drained=%d\n",
+                  isrFiredCount.load(std::memory_order_relaxed),
                   samplesAcquired.load(std::memory_order_relaxed),
                   overflowCount.load(std::memory_order_relaxed),
-                  dmaQueueFull.load(std::memory_order_relaxed));
+                  spiErrors.load(std::memory_order_relaxed),
+                  drainCount);
 }
 
 bool isRunning() {

@@ -129,11 +129,24 @@ namespace {
         return (size_t)(total * 1.1);  // 10% safety margin
     }
     
+    // Maximum pre-allocation size (100 MB) - larger files grow dynamically
+    static constexpr size_t MAX_PREALLOC_BYTES = 100 * 1024 * 1024;
+    
     // Pre-allocate file space to avoid fragmentation
     bool preAllocateFile(File& file, size_t bytes) {
+        // Limit pre-allocation to avoid hanging on huge files
+        if (bytes > MAX_PREALLOC_BYTES) {
+            ESP_LOGW(TAG, "Requested %.1f MB exceeds max, limiting to %.1f MB",
+                     bytes / (1024.0 * 1024.0), MAX_PREALLOC_BYTES / (1024.0 * 1024.0));
+            bytes = MAX_PREALLOC_BYTES;
+        }
+        
         ESP_LOGI(TAG, "Pre-allocating %.1f MB for log file", bytes / (1024.0 * 1024.0));
         
         // Use fallocate-style approach: seek to end and write a marker
+        // Add timeout protection - if this takes more than 5 seconds, skip it
+        uint32_t startMs = millis();
+        
         if (!file.seek(bytes - 1)) {
             ESP_LOGW(TAG, "Pre-allocation seek failed");
             return false;
@@ -148,7 +161,9 @@ namespace {
         
         // Return to start for actual writing
         file.seek(0);
-        ESP_LOGI(TAG, "Pre-allocation successful");
+        
+        uint32_t elapsedMs = millis() - startMs;
+        ESP_LOGI(TAG, "Pre-allocation successful (took %lu ms)", elapsedMs);
         return true;
     }
     
@@ -704,6 +719,9 @@ bool isInitialized() {
 }
 
 bool start() {
+    ESP_LOGI(TAG, "start() called");
+    uint32_t startTimeMs = millis();
+    
     if (!initialized) {
         ESP_LOGE(TAG, "Not initialized");
         return false;
@@ -715,12 +733,14 @@ bool start() {
     }
     
     // Check SD card
+    ESP_LOGI(TAG, "Checking SD card...");
     if (!SDManager::isMounted()) {
         if (!SDManager::mount()) {
             ESP_LOGE(TAG, "SD card not available");
             return false;
         }
     }
+    ESP_LOGI(TAG, "SD card OK (%lu ms)", millis() - startTimeMs);
     
     // Generate or use filename
     if (currentConfig.autoFilename) {
@@ -731,14 +751,17 @@ bool start() {
     }
     
     // Open file
+    ESP_LOGI(TAG, "Opening file: %s", currentFilePath);
     logFile = SDManager::open(currentFilePath, FILE_WRITE);
     if (!logFile) {
         ESP_LOGE(TAG, "Failed to open: %s", currentFilePath);
         return false;
     }
+    ESP_LOGI(TAG, "File opened (%lu ms)", millis() - startTimeMs);
     
     // Pre-allocate file space to reduce fragmentation-induced write spikes
-    if (currentConfig.maxDurationSec > 0) {
+    // Skip pre-allocation if maxDurationSec is 0 or very large (would block too long)
+    if (currentConfig.maxDurationSec > 0 && currentConfig.maxDurationSec <= 600) {
         size_t estimatedSize = estimateFileSize(
             currentConfig.adcRateHz,
             currentConfig.imuDecimation,
@@ -747,6 +770,8 @@ bool start() {
         if (!preAllocateFile(logFile, estimatedSize)) {
             ESP_LOGW(TAG, "File pre-allocation failed - may have write latency spikes");
         }
+    } else {
+        ESP_LOGI(TAG, "Skipping pre-allocation (duration=%lu)", currentConfig.maxDurationSec);
     }
     
     // Reset state
@@ -790,10 +815,12 @@ bool start() {
     sessionStartMs = millis();
     
     // Write header
+    ESP_LOGI(TAG, "Writing header...");
     if (!writeHeader()) {
         logFile.close();
         return false;
     }
+    ESP_LOGI(TAG, "Header written (%lu ms)", millis() - startTimeMs);
     
     // Clear ring buffer
     if (adcBuffer) {
@@ -801,6 +828,7 @@ bool start() {
     }
     
     // Configure IMU FIFO for batch reading (zero-loss)
+    ESP_LOGI(TAG, "Configuring IMU FIFO...");
     LSM6DSV::FIFOConfig fifoConfig;
     fifoConfig.watermark = 16;  // Interrupt at 16 samples
     fifoConfig.mode = LSM6DSV::FIFOMode::Continuous;
@@ -811,22 +839,25 @@ bool start() {
     if (LSM6DSV::configureFIFO(fifoConfig)) {
         LSM6DSV::enableFIFO();
         LSM6DSV::flushFIFO();  // Start fresh
-        ESP_LOGI(TAG, "IMU FIFO enabled for batch reads");
+        ESP_LOGI(TAG, "IMU FIFO enabled (%lu ms)", millis() - startTimeMs);
     } else {
         ESP_LOGW(TAG, "IMU FIFO config failed, using single reads");
     }
     
     // Start ADC continuous mode
+    ESP_LOGI(TAG, "Starting ADC continuous mode...");
     if (!MAX11270::startContinuous(adcBuffer)) {
         ESP_LOGE(TAG, "Failed to start ADC");
         logFile.close();
         return false;
     }
+    ESP_LOGI(TAG, "ADC started (%lu ms)", millis() - startTimeMs);
     
     running = true;
     paused = false;
     
     // Create logger task pinned to Core 0 (ADC ISR runs on Core 1)
+    ESP_LOGI(TAG, "Creating logger task...");
     taskShouldRun = true;
     BaseType_t taskCreated = xTaskCreatePinnedToCore(
         loggerTaskFunc,             // Task function
@@ -847,7 +878,7 @@ bool start() {
         return false;
     }
     
-    ESP_LOGI(TAG, "Started: %s (task on Core 0)", currentFilePath);
+    ESP_LOGI(TAG, "Started successfully: %s (total time: %lu ms)", currentFilePath, millis() - startTimeMs);
     return true;
 }
 
@@ -996,6 +1027,10 @@ void setLoadcellId(const char* id) {
     } else {
         loadcellId[0] = '\0';
     }
+}
+
+uint32_t getAdcRateHz() {
+    return currentConfig.adcRateHz;
 }
 
 void pause() {
