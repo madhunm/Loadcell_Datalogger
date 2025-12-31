@@ -47,9 +47,6 @@
 #include "network/wifi_ap.h"
 #include "network/admin_webui.h"
 
-// SparkFun library for A-B testing IMU
-#include <SparkFun_LSM6DSV16X.h>
-
 // Button state for debouncing and long press detection
 namespace {
     bool lastButtonState = false;
@@ -129,63 +126,6 @@ void scanI2C() {
     } else {
         Serial.println("[I2C] Failed to read WHO_AM_I from 0x6A");
     }
-}
-
-/**
- * @brief A-B Test: Compare our LSM6DSV driver with SparkFun library
- * This helps identify if accelerometer issue is in our code or hardware
- */
-void testSparkFunIMU() {
-    Serial.println("\n========================================");
-    Serial.println("[A-B TEST] SparkFun LSM6DSV16X Library:");
-    Serial.println("========================================");
-    
-    SparkFun_LSM6DSV16X sfIMU;
-    
-    // SparkFun library uses Wire by default, which is already initialized
-    if (sfIMU.begin()) {
-        Serial.println("[SparkFun] Init OK");
-        
-        // Configure similar to our driver
-        sfIMU.setAccelDataRate(LSM6DSV16X_ODR_AT_120Hz);
-        sfIMU.setAccelFullScale(LSM6DSV16X_2g);
-        sfIMU.setGyroDataRate(LSM6DSV16X_ODR_AT_120Hz);
-        sfIMU.setGyroFullScale(LSM6DSV16X_250dps);
-        
-        delay(50);
-        
-        // Read raw values
-        sfe_lsm_raw_data_t rawAccel, rawGyro;
-        
-        if (sfIMU.getRawAccel(&rawAccel) == 0) {
-            Serial.printf("[SparkFun] Accel raw: X=%d, Y=%d, Z=%d\n", 
-                rawAccel.xData, rawAccel.yData, rawAccel.zData);
-        } else {
-            Serial.println("[SparkFun] Accel read FAILED!");
-        }
-        
-        if (sfIMU.getRawGyro(&rawGyro) == 0) {
-            Serial.printf("[SparkFun] Gyro raw: X=%d, Y=%d, Z=%d\n",
-                rawGyro.xData, rawGyro.yData, rawGyro.zData);
-        } else {
-            Serial.println("[SparkFun] Gyro read FAILED!");
-        }
-        
-        // Also try scaled values
-        sfe_lsm_data_t accelG, gyroDPS;
-        if (sfIMU.getAccel(&accelG) == 0) {
-            Serial.printf("[SparkFun] Accel (g): X=%.3f, Y=%.3f, Z=%.3f\n",
-                accelG.xData, accelG.yData, accelG.zData);
-        }
-        if (sfIMU.getGyro(&gyroDPS) == 0) {
-            Serial.printf("[SparkFun] Gyro (dps): X=%.2f, Y=%.2f, Z=%.2f\n",
-                gyroDPS.xData, gyroDPS.yData, gyroDPS.zData);
-        }
-    } else {
-        Serial.println("[SparkFun] Init FAILED!");
-    }
-    
-    Serial.println("========================================\n");
 }
 
 /**
@@ -406,9 +346,6 @@ bool initHardware() {
     } else {
         Serial.println("FAILED - check I2C @ 0x6A, WHO_AM_I=0x70");
     }
-    
-    // A-B Test: Compare our driver with SparkFun library
-    testSparkFunIMU();
     
     // SD Card
     Serial.print("[Init] SD Card... ");

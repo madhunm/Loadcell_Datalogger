@@ -172,12 +172,11 @@ bool isPresent() {
 bool configureAccel(ODR odr, AccelScale scale) {
     if (!initialized) return false;
     
-    // CTRL1_XL register format (LSM6DSV):
-    // Bits 7:4 = ODR_XL[3:0] - Output data rate
-    // Bits 3:2 = FS_XL[1:0] - Full scale selection (00=±2g, 01=±4g, 10=±8g, 11=±16g)
-    // Bit 1 = LPF2_XL_EN - Low-pass filter 2 enable
-    // Bit 0 = (reserved, write 0)
-    uint8_t ctrl1 = (static_cast<uint8_t>(odr) << 4) | (static_cast<uint8_t>(scale) << 2);
+    // LSM6DSV16X CTRL1 register format:
+    // Bits 3:0 = ODR_XL[3:0] - Output data rate
+    // Bits 6:4 = OP_MODE_XL[2:0] - Operating mode (0=high-performance)
+    // Bit 7 = (reserved)
+    uint8_t ctrl1 = static_cast<uint8_t>(odr) & 0x0F;  // ODR in low nibble
     
     ESP_LOGI(TAG, "Accel config: ODR=0x%X, Scale=0x%X, CTRL1=0x%02X", 
              static_cast<uint8_t>(odr), static_cast<uint8_t>(scale), ctrl1);
@@ -187,17 +186,22 @@ bool configureAccel(ODR odr, AccelScale scale) {
         return false;
     }
     
+    // LSM6DSV16X: Full scale is in CTRL8 bits[1:0]
+    uint8_t ctrl8 = static_cast<uint8_t>(scale) & 0x03;
+    if (!writeRegister(Reg::CTRL8, ctrl8)) {
+        ESP_LOGE(TAG, "Failed to write CTRL8!");
+        return false;
+    }
+    
     // Small delay for configuration to take effect
     delay(5);
     
-    // Verify the write
-    uint8_t readBack = 0;
-    if (readRegister(Reg::CTRL1, &readBack)) {
-        ESP_LOGI(TAG, "CTRL1 readback: 0x%02X (expected 0x%02X)", readBack, ctrl1);
-        if (readBack != ctrl1) {
-            ESP_LOGW(TAG, "CTRL1 write mismatch!");
-        }
-    }
+    // Verify the writes
+    uint8_t readBack1 = 0, readBack8 = 0;
+    readRegister(Reg::CTRL1, &readBack1);
+    readRegister(Reg::CTRL8, &readBack8);
+    ESP_LOGI(TAG, "Accel verify: CTRL1=0x%02X (ODR=%d), CTRL8=0x%02X (FS=%d)", 
+             readBack1, readBack1 & 0x0F, readBack8, readBack8 & 0x03);
     
     currentConfig.accelODR = odr;
     currentConfig.accelScale = scale;
@@ -207,11 +211,26 @@ bool configureAccel(ODR odr, AccelScale scale) {
 bool configureGyro(ODR odr, GyroScale scale) {
     if (!initialized) return false;
     
-    uint8_t ctrl2 = (static_cast<uint8_t>(odr) << 4) | static_cast<uint8_t>(scale);
+    // LSM6DSV16X CTRL2 register format:
+    // Bits 3:0 = ODR_G[3:0] - Output data rate
+    // Bits 6:4 = OP_MODE_G[2:0] - Operating mode (0=high-performance)
+    // Bit 7 = (reserved)
+    uint8_t ctrl2 = static_cast<uint8_t>(odr) & 0x0F;  // ODR in low nibble
     
     if (!writeRegister(Reg::CTRL2, ctrl2)) {
+        ESP_LOGE(TAG, "Failed to write CTRL2!");
         return false;
     }
+    
+    // LSM6DSV16X: Gyro full scale is in CTRL6 bits[3:0]
+    uint8_t ctrl6 = static_cast<uint8_t>(scale) & 0x0F;
+    if (!writeRegister(Reg::CTRL6, ctrl6)) {
+        ESP_LOGE(TAG, "Failed to write CTRL6!");
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "Gyro config: CTRL2=0x%02X (ODR=%d), CTRL6=0x%02X (FS=%d)",
+             ctrl2, ctrl2 & 0x0F, ctrl6, ctrl6 & 0x0F);
     
     currentConfig.gyroODR = odr;
     currentConfig.gyroScale = scale;
@@ -223,18 +242,24 @@ bool configure(ODR odr, AccelScale accelScale, GyroScale gyroScale) {
     ok &= configureGyro(odr, gyroScale);
     
     // Verify registers were written correctly
-    uint8_t ctrl1 = 0, ctrl2 = 0, ctrl3 = 0;
+    uint8_t ctrl1 = 0, ctrl2 = 0, ctrl3 = 0, ctrl6 = 0, ctrl8 = 0;
     readRegister(Reg::CTRL1, &ctrl1);
     readRegister(Reg::CTRL2, &ctrl2);
     readRegister(Reg::CTRL3, &ctrl3);
+    readRegister(Reg::CTRL6, &ctrl6);
+    readRegister(Reg::CTRL8, &ctrl8);
     
-    ESP_LOGI(TAG, "Config verify: CTRL1=0x%02X, CTRL2=0x%02X, CTRL3=0x%02X", 
-             ctrl1, ctrl2, ctrl3);
+    ESP_LOGI(TAG, "Config verify: CTRL1=0x%02X, CTRL2=0x%02X, CTRL3=0x%02X, CTRL6=0x%02X, CTRL8=0x%02X", 
+             ctrl1, ctrl2, ctrl3, ctrl6, ctrl8);
     
-    // Check if accel ODR is enabled (bits 7:4 of CTRL1 should be non-zero)
-    uint8_t accelOdrBits = (ctrl1 >> 4) & 0x0F;
+    // LSM6DSV16X: ODR is in bits[3:0] of CTRL1/CTRL2
+    uint8_t accelOdrBits = ctrl1 & 0x0F;
+    uint8_t gyroOdrBits = ctrl2 & 0x0F;
     if (accelOdrBits == 0) {
         ESP_LOGW(TAG, "WARNING: Accel ODR=0 (power down) - check CTRL1 write!");
+    }
+    if (gyroOdrBits == 0) {
+        ESP_LOGW(TAG, "WARNING: Gyro ODR=0 (power down) - check CTRL2 write!");
     }
     
     if (ok) {
