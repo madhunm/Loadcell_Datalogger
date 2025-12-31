@@ -11,8 +11,13 @@
 
 #include <Arduino.h>
 #include "pin_config.h"
+#include "app/state_machine.h"
+
+// Global state machine instance
+StateMachine state_machine;
 
 void setup() {
+    // Initialize serial
     Serial.begin(115200);
     while (!Serial && millis() < 3000); // Wait for USB CDC
     
@@ -20,20 +25,29 @@ void setup() {
     Serial.println("=====================================");
     Serial.println("  Loadcell Data Logger v1.0");
     Serial.println("  ESP32-S3 Platform");
+    Serial.println("  Build: " __DATE__ " " __TIME__);
     Serial.println("=====================================");
     Serial.println();
     
-    // TODO: Initialize hardware drivers
-    // TODO: Initialize calibration system
-    // TODO: Initialize state machine
-    // TODO: Start WiFi AP for admin WebUI
+    // Initialize state machine (handles all subsystems)
+    if (!state_machine.begin()) {
+        Serial.println();
+        Serial.println("FATAL ERROR: Initialization failed!");
+        Serial.println("System halted.");
+        while (1) {
+            delay(1000);
+        }
+    }
+    
+    Serial.println();
+    Serial.println("=== System Ready ===");
+    Serial.println();
 }
 
 void loop() {
-    // TODO: State machine update
-    // TODO: Handle button input
-    // TODO: Update NeoPixel status
+    // Update state machine (handles everything)
+    state_machine.update();
     
-    delay(10); // Placeholder - will be removed when state machine is implemented
+    // Small delay to prevent tight loop
+    delay(10);
 }
-
