@@ -12,6 +12,7 @@
 #include "../app/app_mode.h"
 #include "../drivers/status_led.h"
 #include "../drivers/max11270.h"
+#include "../drivers/max17048.h"
 #include <esp_http_server.h>
 #include <SPIFFS.h>
 
@@ -133,6 +134,25 @@ namespace {
                 "\"adc_samples\":%lu,\"adc_dropped\":%lu}",
                 millis(),
                 (unsigned long)stats.samplesAcquired, (unsigned long)stats.samplesDropped
+            );
+        }
+        sendJson(req, jsonBuf);
+        return ESP_OK;
+    }
+    
+    esp_err_t handleGetBattery(httpd_req_t* req) {
+        MAX17048::BatteryData batt;
+        bool present = MAX17048::isPresent();
+        
+        if (present && MAX17048::getBatteryData(&batt)) {
+            snprintf(jsonBuf, sizeof(jsonBuf),
+                "{\"voltage_V\":%.3f,\"soc_percent\":%.1f,\"charge_rate_pct_hr\":%.2f,\"present\":true}",
+                batt.voltage, batt.socPercent, batt.chargeRate
+            );
+        } else {
+            snprintf(jsonBuf, sizeof(jsonBuf),
+                "{\"voltage_V\":0,\"soc_percent\":0,\"charge_rate_pct_hr\":0,\"present\":%s}",
+                present ? "true" : "false"
             );
         }
         sendJson(req, jsonBuf);
@@ -456,6 +476,10 @@ bool beginServer() {
     httpd_uri_t get_live = { .uri = "/api/live", .method = HTTP_GET,
         .handler = handleGetLive, .user_ctx = nullptr };
     httpd_register_uri_handler(server, &get_live);
+    
+    httpd_uri_t get_battery = { .uri = "/api/battery", .method = HTTP_GET,
+        .handler = handleGetBattery, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &get_battery);
     
     httpd_uri_t get_led = { .uri = "/api/led", .method = HTTP_GET,
         .handler = handleGetLed, .user_ctx = nullptr };

@@ -27,6 +27,7 @@
 #include "drivers/max11270.h"
 #include "drivers/rx8900ce.h"
 #include "drivers/lsm6dsv.h"
+#include "drivers/max17048.h"
 #include "drivers/sd_manager.h"
 
 // Logging
@@ -69,6 +70,7 @@ namespace {
     bool adcOk = false;
     bool rtcOk = false;
     bool imuOk = false;
+    bool fuelGaugeOk = false;
     bool sdOk = false;
     
     // Status print interval
@@ -93,6 +95,7 @@ void scanI2C() {
             if (addr == I2C_ADDR_RX8900CE) Serial.print(" (RX8900CE RTC)");
             else if (addr == I2C_ADDR_LSM6DSV) Serial.print(" (LSM6DSV IMU)");
             else if (addr == I2C_ADDR_LSM6DSV_ALT) Serial.print(" (LSM6DSV IMU alt)");
+            else if (addr == MAX17048::I2C_ADDRESS) Serial.print(" (MAX17048 Fuel Gauge)");
             Serial.println();
             found++;
         }
@@ -177,6 +180,20 @@ bool initHardware() {
         } else {
             Serial.println("FAILED");
         }
+    }
+    
+    // Fuel Gauge (shares I2C bus)
+    Serial.print("[Init] Fuel Gauge MAX17048... ");
+    if (MAX17048::init()) {
+        fuelGaugeOk = true;
+        MAX17048::BatteryData batt;
+        if (MAX17048::getBatteryData(&batt)) {
+            Serial.printf("OK (%.2fV, %.1f%%)\n", batt.voltage, batt.socPercent);
+        } else {
+            Serial.println("OK");
+        }
+    } else {
+        Serial.println("NOT FOUND");
     }
     
     // IMU (shares I2C bus with RTC via Arduino Wire)
@@ -601,6 +618,15 @@ void printStatus() {
         }
     }
     
+    // Battery status
+    if (fuelGaugeOk) {
+        MAX17048::BatteryData batt;
+        if (MAX17048::getBatteryData(&batt)) {
+            Serial.printf("Battery: %.2fV, %.1f%%, rate: %.1f%%/hr\n",
+                batt.voltage, batt.socPercent, batt.chargeRate);
+        }
+    }
+    
     Serial.println("--------------");
     Serial.println();
 }
@@ -646,6 +672,7 @@ void setup() {
     Serial.printf("  ADC:  %s %s\n", adcOk ? "OK" : "FAIL", adcOk ? "" : "(CRITICAL)");
     Serial.printf("  RTC:  %s %s\n", rtcOk ? "OK" : "FAIL", rtcOk ? "" : "(timestamps may drift)");
     Serial.printf("  IMU:  %s %s\n", imuOk ? "OK" : "FAIL", imuOk ? "" : "(no motion data)");
+    Serial.printf("  Batt: %s\n", fuelGaugeOk ? "OK" : "NOT FOUND");
     Serial.printf("  SD:   %s %s\n", sdOk ? "OK" : "FAIL", sdOk ? "" : "(insert card to log)");
     
     if (adcOk) {
