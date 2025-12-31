@@ -96,6 +96,16 @@ bool canConfigure();
  */
 bool canFactoryTest();
 
+/**
+ * @brief Force mode change without password (hardware button override)
+ * 
+ * Used when physical button is pressed - bypasses password protection
+ * since physical access implies authorized access.
+ * 
+ * @param newMode Target mode to switch to
+ */
+void forceMode(Mode newMode);
+
 } // namespace AppMode
 
 #endif // APP_MODE_H

@@ -113,5 +113,18 @@ bool canFactoryTest() {
     return currentMode == Mode::Factory;
 }
 
+void forceMode(Mode newMode) {
+    currentMode = newMode;
+    
+    const char* modeName;
+    switch (newMode) {
+        case Mode::User:       modeName = "User"; break;
+        case Mode::FieldAdmin: modeName = "FieldAdmin"; break;
+        case Mode::Factory:    modeName = "Factory"; break;
+        default:               modeName = "Unknown"; break;
+    }
+    Serial.printf("[AppMode] Forced to %s mode (hardware button)\n", modeName);
+}
+
 } // namespace AppMode
 

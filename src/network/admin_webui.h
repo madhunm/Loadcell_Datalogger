@@ -26,14 +26,25 @@
 namespace AdminWebUI {
 
 /**
- * @brief Initialize the web server
+ * @brief Initialize the web server routes
  * 
- * Sets up routes and starts the async HTTP server.
- * Call after WiFi AP is started.
+ * Sets up SPIFFS and configures HTTP routes.
+ * Call BEFORE WiFi AP is started.
+ * Does NOT start the server - call beginServer() after WiFi is ready.
+ * 
+ * @return true if routes configured successfully
+ */
+bool init();
+
+/**
+ * @brief Start the HTTP server
+ * 
+ * Actually starts listening for connections.
+ * Call from WiFi event handler when AP is fully ready.
  * 
  * @return true if server started successfully
  */
-bool init();
+bool beginServer();
 
 /**
  * @brief Stop the web server

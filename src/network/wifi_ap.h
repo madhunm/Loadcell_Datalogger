@@ -46,6 +46,16 @@ void stop();
 bool isActive();
 
 /**
+ * @brief Check if WiFi AP is ready for server start
+ * 
+ * Returns true once the ARDUINO_EVENT_WIFI_AP_START event has fired,
+ * indicating the TCP/IP stack is ready for connections.
+ * 
+ * @return true if AP is fully ready
+ */
+bool isReady();
+
+/**
  * @brief Get the AP SSID
  * 
  * @return SSID string (includes MAC suffix)

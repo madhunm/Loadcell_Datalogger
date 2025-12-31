@@ -552,7 +552,22 @@ bool init() {
     // 404 handler
     server->onNotFound(handleNotFound);
     
-    // Start server
+    Serial.println("[WebUI] Routes configured (server not started yet)");
+    return true;
+}
+
+bool beginServer() {
+    if (!server) {
+        Serial.println("[WebUI] Error: init() must be called before beginServer()");
+        return false;
+    }
+    
+    if (serverRunning) {
+        Serial.println("[WebUI] Server already running");
+        return true;
+    }
+    
+    // AsyncTCP 3.x handles TCPIP locking internally - no wrapper needed
     server->begin();
     serverRunning = true;
     
