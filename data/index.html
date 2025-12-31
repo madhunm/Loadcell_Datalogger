@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Loadcell Datalogger</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header class="header">
+        <div class="header__title">
+            <svg class="header__logo" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="4" y="8" width="24" height="16" rx="2" stroke="currentColor" stroke-width="2"/>
+                <path d="M8 16h16M16 12v8" stroke="var(--accent-green)" stroke-width="2" stroke-linecap="round"/>
+                <circle cx="16" cy="16" r="3" fill="var(--accent-blue)"/>
+            </svg>
+            Loadcell Datalogger
+        </div>
+        <span class="mode-badge mode-badge--user" id="current-mode">USER</span>
+    </header>
+
+    <div class="container">
+        <!-- Status Overview -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">System Status</h2>
+                <div class="status-bar">
+                    <span class="status-dot status-dot--success status-dot--pulse" id="status-dot"></span>
+                    <span id="status-text">Online</span>
+                </div>
+            </div>
+            
+            <div class="grid grid--4">
+                <div class="stat-card card">
+                    <div class="stat-card__value stat-card__value--green" id="stat-mode">USER</div>
+                    <div class="stat-card__label">Current Mode</div>
+                </div>
+                <div class="stat-card card">
+                    <div class="stat-card__value stat-card__value--blue" id="stat-wifi">ON</div>
+                    <div class="stat-card__label">WiFi</div>
+                </div>
+                <div class="stat-card card">
+                    <div class="stat-card__value" id="stat-logging">IDLE</div>
+                    <div class="stat-card__label">Logging</div>
+                </div>
+                <div class="stat-card card">
+                    <div class="stat-card__value stat-card__value--green" id="stat-sd">OK</div>
+                    <div class="stat-card__label">SD Card</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mode Selection -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">Select Mode</h2>
+            </div>
+            
+            <div class="grid grid--3">
+                <!-- User Mode -->
+                <div class="card" style="border-color: var(--mode-user);">
+                    <h3 style="color: var(--mode-user);">
+                        <span class="status-dot" style="background: var(--mode-user);"></span>
+                        User Mode
+                    </h3>
+                    <p>Normal operation mode for viewing logged data and monitoring.</p>
+                    <ul style="color: var(--text-secondary); margin: 1rem 0; padding-left: 1.5rem;">
+                        <li>View live data charts</li>
+                        <li>Browse log files</li>
+                        <li>Check SD card storage</li>
+                        <li>Monitor battery level</li>
+                    </ul>
+                    <button class="btn btn--primary btn--block" onclick="switchMode('user')">
+                        Enter User Mode
+                    </button>
+                </div>
+
+                <!-- Field Admin Mode -->
+                <div class="card" style="border-color: var(--mode-admin);">
+                    <h3 style="color: var(--mode-admin);">
+                        <span class="status-dot" style="background: var(--mode-admin);"></span>
+                        Field Admin Mode
+                    </h3>
+                    <p>Configuration and calibration for field technicians.</p>
+                    <ul style="color: var(--text-secondary); margin: 1rem 0; padding-left: 1.5rem;">
+                        <li>Load cell calibration</li>
+                        <li>ADC PGA gain settings</li>
+                        <li>IMU G-range / Gyro DPS</li>
+                        <li>Save to device memory</li>
+                    </ul>
+                    <button class="btn btn--secondary btn--block" onclick="switchMode('admin')" style="border-color: var(--mode-admin); color: var(--mode-admin);">
+                        🔒 Enter Admin Mode
+                    </button>
+                </div>
+
+                <!-- Factory Mode -->
+                <div class="card" style="border-color: var(--mode-factory);">
+                    <h3 style="color: var(--mode-factory);">
+                        <span class="status-dot" style="background: var(--mode-factory);"></span>
+                        Factory Mode
+                    </h3>
+                    <p>End-of-line testing after board assembly.</p>
+                    <ul style="color: var(--text-secondary); margin: 1rem 0; padding-left: 1.5rem;">
+                        <li>Test ADC (MAX11270)</li>
+                        <li>Test IMU (LSM6DSV)</li>
+                        <li>Test RTC (RX8900CE)</li>
+                        <li>Test SD Card & NeoPixel</li>
+                    </ul>
+                    <button class="btn btn--secondary btn--block" onclick="switchMode('factory')" style="border-color: var(--mode-factory); color: var(--mode-factory);">
+                        🔒 Enter Factory Mode
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">Quick Actions</h2>
+            </div>
+            
+            <div class="flex gap-md">
+                <button class="btn btn--success" id="btn-start-log" onclick="toggleLogging()">
+                    ▶ Start Logging
+                </button>
+                <button class="btn btn--secondary" onclick="location.href='user.html'">
+                    📊 View Dashboard
+                </button>
+                <button class="btn btn--secondary" onclick="refreshStatus()">
+                    🔄 Refresh Status
+                </button>
+            </div>
+        </div>
+
+        <!-- Device Info -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">Device Information</h2>
+            </div>
+            
+            <div class="grid grid--2">
+                <div>
+                    <p><strong>Model:</strong> <span id="info-model">Loadcell Datalogger v1.0</span></p>
+                    <p><strong>MCU:</strong> <span id="info-mcu">ESP32-S3</span></p>
+                    <p><strong>Firmware:</strong> <span id="info-firmware">1.0.0</span></p>
+                </div>
+                <div>
+                    <p><strong>Uptime:</strong> <span id="info-uptime">--</span></p>
+                    <p><strong>Free Heap:</strong> <span id="info-heap">--</span></p>
+                    <p><strong>IP Address:</strong> <span id="info-ip">192.168.4.1</span></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+    <script>
+        let isLogging = false;
+
+        // Switch mode with password prompt if needed
+        async function switchMode(mode) {
+            if (mode === 'user') {
+                // User mode doesn't need password
+                const success = await Mode.switchTo(mode);
+                if (success) {
+                    location.href = 'user.html';
+                }
+            } else {
+                // Admin and Factory modes need password
+                UI.showPasswordPrompt(
+                    `Enter ${mode === 'admin' ? 'Admin' : 'Factory'} Password`,
+                    async (password) => {
+                        const success = await Mode.switchTo(mode, password);
+                        if (success) {
+                            location.href = mode === 'admin' ? 'admin.html' : 'factory.html';
+                        }
+                    }
+                );
+            }
+        }
+
+        // Toggle logging state
+        async function toggleLogging() {
+            const btn = document.getElementById('btn-start-log');
+            UI.setButtonLoading(btn, true);
+            
+            try {
+                const endpoint = isLogging ? '/api/logging/stop' : '/api/logging/start';
+                await API.post(endpoint, {});
+                isLogging = !isLogging;
+                updateLoggingButton();
+            } catch (error) {
+                UI.showAlert('Failed to toggle logging', 'error');
+            } finally {
+                UI.setButtonLoading(btn, false);
+            }
+        }
+
+        function updateLoggingButton() {
+            const btn = document.getElementById('btn-start-log');
+            if (isLogging) {
+                btn.textContent = '⏹ Stop Logging';
+                btn.className = 'btn btn--danger';
+            } else {
+                btn.textContent = '▶ Start Logging';
+                btn.className = 'btn btn--success';
+            }
+        }
+
+        // Refresh status
+        async function refreshStatus() {
+            const status = await Status.update();
+            if (status) {
+                updateStatusDisplay(status);
+            }
+        }
+
+        // Update status display
+        function updateStatusDisplay(status) {
+            // Mode
+            document.getElementById('stat-mode').textContent = status.mode?.toUpperCase() || 'USER';
+            document.getElementById('current-mode').textContent = status.mode?.toUpperCase() || 'USER';
+            document.getElementById('current-mode').className = `mode-badge mode-badge--${status.mode || 'user'}`;
+            
+            // WiFi
+            document.getElementById('stat-wifi').textContent = status.wifi ? 'ON' : 'OFF';
+            
+            // Logging
+            isLogging = status.logging;
+            document.getElementById('stat-logging').textContent = status.logging ? 'ACTIVE' : 'IDLE';
+            document.getElementById('stat-logging').style.color = status.logging ? 'var(--accent-orange)' : 'var(--text-primary)';
+            updateLoggingButton();
+            
+            // SD Card
+            document.getElementById('stat-sd').textContent = status.sd_present ? 'OK' : 'MISSING';
+            document.getElementById('stat-sd').style.color = status.sd_present ? 'var(--accent-green)' : 'var(--accent-red)';
+            
+            // Device info
+            if (status.uptime_ms) {
+                const seconds = Math.floor(status.uptime_ms / 1000);
+                const minutes = Math.floor(seconds / 60);
+                const hours = Math.floor(minutes / 60);
+                document.getElementById('info-uptime').textContent = 
+                    `${hours}h ${minutes % 60}m ${seconds % 60}s`;
+            }
+            
+            if (status.free_heap) {
+                document.getElementById('info-heap').textContent = 
+                    `${(status.free_heap / 1024).toFixed(1)} KB`;
+            }
+            
+            // Demo mode indicator
+            if (status.demo_mode) {
+                document.getElementById('status-text').textContent = 'Demo Mode';
+                document.getElementById('status-dot').style.background = 'var(--accent-orange)';
+            }
+        }
+
+        // Listen for status updates
+        document.addEventListener('statusUpdate', (e) => {
+            updateStatusDisplay(e.detail);
+        });
+
+        // Start polling when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            Status.startPolling(3000);
+        });
+    </script>
+</body>
+</html>
+

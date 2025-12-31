@@ -46,7 +46,7 @@ todos:
     status: pending
   - id: status-led
     content: Implement NeoPixel status LED driver with state patterns
-    status: pending
+    status: in_progress
   - id: state-machine
     content: Implement main state machine (idle/logging/converting/ready/admin)
     status: pending
@@ -189,6 +189,8 @@ struct LoadcellCalibration {
 };
 ```
 
+
+
 ### Storage Layout (NVS)
 
 - Namespace: `loadcell_cal`
@@ -254,25 +256,11 @@ stateDiagram-v2
     note right of Ready: SD safe to remove, GREEN steady
 ```
 
+
+
 ### State Descriptions
 
-| State | WiFi | Cores | NeoPixel | Description |
-
-|-------|------|-------|----------|-------------|
-
-| **Admin** | ON | C0: WiFi/WebUI, C1: Idle | Cyan pulse | Default state, WebUI accessible |
-
-| **PreLog** | Turning OFF | Transitioning | Yellow fast | Shutting down WiFi stack |
-
-| **Logging** | OFF | C0: SD writes, C1: ADC+IMU | Green pulse | Active data acquisition |
-
-| **Stopping** | OFF | Flushing | Yellow pulse | Draining buffers, closing file |
-
-| **Converting** | OFF | C0: CSV gen | Orange pulse | Binary to CSV conversion |
-
-| **Ready** | OFF | Idle | Green steady | SD safe to remove |
-
----
+| State | WiFi | Cores | NeoPixel | Description ||-------|------|-------|----------|-------------|| **Admin** | ON | C0: WiFi/WebUI, C1: Idle | Cyan pulse | Default state, WebUI accessible || **PreLog** | Turning OFF | Transitioning | Yellow fast | Shutting down WiFi stack || **Logging** | OFF | C0: SD writes, C1: ADC+IMU | Green pulse | Active data acquisition || **Stopping** | OFF | Flushing | Yellow pulse | Draining buffers, closing file || **Converting** | OFF | C0: CSV gen | Orange pulse | Binary to CSV conversion || **Ready** | OFF | Idle | Green steady | SD safe to remove |---
 
 ## Binary Log Format
 
@@ -290,6 +278,8 @@ struct LogFileHeader {
     uint8_t reserved[12];
 };
 ```
+
+
 
 ### Data Records
 
@@ -335,15 +325,7 @@ flowchart LR
     logging -->|Button Press| admin
 ```
 
-| Mode | Core 0 | Core 1 |
-
-|------|--------|--------|
-
-| **Admin** | WiFi + WebUI + System | Idle / optional live ADC preview |
-
-| **Logging** | SD writes, RTC sync, State machine | ADC ISR, IMU sync, Ring buffer |
-
-| **Converting** | CSV generation | Idle |
+| Mode | Core 0 | Core 1 ||------|--------|--------|| **Admin** | WiFi + WebUI + System | Idle / optional live ADC preview || **Logging** | SD writes, RTC sync, State machine | ADC ISR, IMU sync, Ring buffer || **Converting** | CSV generation | Idle |
 
 ### Timing Budget at 64ksps
 
@@ -380,6 +362,8 @@ void IRAM_ATTR adc_drdy_isr() {
 ```
 
 
+
+
 ### Ring Buffer Architecture
 
 ```mermaid
@@ -396,6 +380,8 @@ flowchart LR
         BUF2 --> SD
     end
 ```
+
+
 
 - **Ring buffer**: 32KB lock-free SPSC (single-producer single-consumer)
 - **Write buffers**: Double-buffered 8KB each
@@ -415,7 +401,3 @@ flowchart LR
 ---
 
 ## Implementation Order
-
-1. **Foundation**: Project scaffold, pin config, basic drivers (SPI, I2C)
-2. **Hardware Validation**: MAX11270 reads, LSM6DSV reads, RTC time
-3. **Calibration System**: Storage, interpolation, active loadcell selection

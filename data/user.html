@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Loadcell Datalogger</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        /* Chart container styles */
+        .chart-container {
+            position: relative;
+            height: 250px;
+            background: var(--bg-input);
+            border-radius: var(--radius-md);
+            overflow: hidden;
+        }
+        
+        .chart-canvas {
+            width: 100%;
+            height: 100%;
+        }
+        
+        .chart-placeholder {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-muted);
+        }
+        
+        /* Live value display */
+        .live-value {
+            font-size: 3rem;
+            font-weight: 700;
+            font-family: 'SF Mono', monospace;
+            line-height: 1;
+        }
+        
+        .live-unit {
+            font-size: 1.5rem;
+            font-weight: 400;
+            color: var(--text-secondary);
+            margin-left: 0.25rem;
+        }
+        
+        /* File list */
+        .file-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: var(--spacing-sm) var(--spacing-md);
+            background: var(--bg-input);
+            border-radius: var(--radius-md);
+            margin-bottom: var(--spacing-sm);
+        }
+        
+        .file-item:hover {
+            background: var(--bg-hover);
+        }
+        
+        .file-item__name {
+            font-family: monospace;
+            color: var(--accent-cyan);
+        }
+        
+        .file-item__meta {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header__title">
+            <a href="index.html" style="color: inherit; text-decoration: none;">← Back</a>
+            &nbsp;|&nbsp; User Dashboard
+        </div>
+        <div class="flex gap-md">
+            <span class="mode-badge mode-badge--user">USER</span>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Live Data Display -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">Live Data</h2>
+                <div class="flex gap-sm">
+                    <button class="btn btn--success" id="btn-start-log" onclick="toggleLogging()">
+                        ▶ Start Logging
+                    </button>
+                </div>
+            </div>
+            
+            <div class="grid grid--3">
+                <div class="stat-card" style="text-align: center;">
+                    <div class="live-value stat-card__value--green" id="live-load">0.00</div>
+                    <div class="live-unit">kg</div>
+                    <div class="stat-card__label mt-sm">Load</div>
+                </div>
+                
+                <div class="stat-card" style="text-align: center;">
+                    <div class="live-value stat-card__value--blue" id="live-adc">0</div>
+                    <div class="live-unit">raw</div>
+                    <div class="stat-card__label mt-sm">ADC Reading</div>
+                </div>
+                
+                <div class="stat-card" style="text-align: center;">
+                    <div class="live-value" id="live-rate">0</div>
+                    <div class="live-unit">sps</div>
+                    <div class="stat-card__label mt-sm">Sample Rate</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Load Chart -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">Load History</h2>
+                <div class="flex gap-sm">
+                    <button class="btn btn--small btn--secondary" onclick="clearChart()">Clear</button>
+                    <select class="form-select" style="width: auto;" id="chart-timespan" onchange="setChartTimespan(this.value)">
+                        <option value="10">10 seconds</option>
+                        <option value="30" selected>30 seconds</option>
+                        <option value="60">1 minute</option>
+                        <option value="300">5 minutes</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="chart-container">
+                <canvas id="load-chart" class="chart-canvas"></canvas>
+                <div class="chart-placeholder" id="chart-placeholder">
+                    Live chart will appear here when data is available
+                </div>
+            </div>
+        </div>
+
+        <!-- IMU Data -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">IMU Data</h2>
+            </div>
+            
+            <div class="grid grid--2">
+                <div>
+                    <h4>Accelerometer</h4>
+                    <div class="grid grid--3" style="text-align: center;">
+                        <div>
+                            <div class="text-muted">X</div>
+                            <div style="font-family: monospace; font-size: 1.2rem;" id="imu-ax">0.00</div>
+                            <div class="text-muted">g</div>
+                        </div>
+                        <div>
+                            <div class="text-muted">Y</div>
+                            <div style="font-family: monospace; font-size: 1.2rem;" id="imu-ay">0.00</div>
+                            <div class="text-muted">g</div>
+                        </div>
+                        <div>
+                            <div class="text-muted">Z</div>
+                            <div style="font-family: monospace; font-size: 1.2rem;" id="imu-az">1.00</div>
+                            <div class="text-muted">g</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div>
+                    <h4>Gyroscope</h4>
+                    <div class="grid grid--3" style="text-align: center;">
+                        <div>
+                            <div class="text-muted">X</div>
+                            <div style="font-family: monospace; font-size: 1.2rem;" id="imu-gx">0.0</div>
+                            <div class="text-muted">°/s</div>
+                        </div>
+                        <div>
+                            <div class="text-muted">Y</div>
+                            <div style="font-family: monospace; font-size: 1.2rem;" id="imu-gy">0.0</div>
+                            <div class="text-muted">°/s</div>
+                        </div>
+                        <div>
+                            <div class="text-muted">Z</div>
+                            <div style="font-family: monospace; font-size: 1.2rem;" id="imu-gz">0.0</div>
+                            <div class="text-muted">°/s</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SD Card & Battery -->
+        <div class="grid grid--2">
+            <!-- SD Card Stats -->
+            <div class="card">
+                <div class="card__header">
+                    <h2 class="card__title">SD Card Storage</h2>
+                    <span class="status-dot status-dot--success" id="sd-status-dot"></span>
+                </div>
+                
+                <div class="stat-card" style="text-align: center;">
+                    <div class="stat-card__value stat-card__value--blue" id="sd-used">--</div>
+                    <div class="stat-card__label">Used</div>
+                </div>
+                
+                <div class="progress-bar mt-md">
+                    <div class="progress-bar__fill" id="sd-progress" style="width: 0%;"></div>
+                </div>
+                
+                <div class="flex mt-sm" style="justify-content: space-between;">
+                    <span class="text-muted" id="sd-free">-- free</span>
+                    <span class="text-muted" id="sd-total">of -- total</span>
+                </div>
+                
+                <div class="mt-md">
+                    <span class="text-muted">Files: </span>
+                    <span id="sd-file-count">--</span>
+                </div>
+            </div>
+
+            <!-- Battery Status -->
+            <div class="card">
+                <div class="card__header">
+                    <h2 class="card__title">Battery</h2>
+                    <span id="battery-charging" class="text-muted hidden">⚡ Charging</span>
+                </div>
+                
+                <div class="stat-card" style="text-align: center;">
+                    <div class="stat-card__value stat-card__value--green" id="battery-percent">--</div>
+                    <div class="stat-card__label">%</div>
+                </div>
+                
+                <div class="progress-bar mt-md">
+                    <div class="progress-bar__fill progress-bar__fill--success" id="battery-progress" style="width: 75%;"></div>
+                </div>
+                
+                <div class="mt-md text-center">
+                    <span class="text-muted">Voltage: </span>
+                    <span id="battery-voltage">--</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Log Files -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">Log Files</h2>
+                <button class="btn btn--small btn--secondary" onclick="refreshFiles()">↻ Refresh</button>
+            </div>
+            
+            <div id="file-list">
+                <div class="text-muted text-center">Loading files...</div>
+            </div>
+        </div>
+
+        <!-- System Info -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">System Information</h2>
+            </div>
+            
+            <div class="grid grid--4">
+                <div>
+                    <div class="text-muted">Uptime</div>
+                    <div id="sys-uptime">--</div>
+                </div>
+                <div>
+                    <div class="text-muted">Free Heap</div>
+                    <div id="sys-heap">--</div>
+                </div>
+                <div>
+                    <div class="text-muted">WiFi Signal</div>
+                    <div id="sys-rssi">--</div>
+                </div>
+                <div>
+                    <div class="text-muted">Temperature</div>
+                    <div id="sys-temp">--</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+    <script>
+        // Chart data
+        const chartData = {
+            timestamps: [],
+            values: [],
+            maxPoints: 300,  // 30 seconds at 10Hz
+            timespan: 30
+        };
+        
+        let isLogging = false;
+        let liveUpdateInterval = null;
+        let chartCtx = null;
+
+        // Simple canvas-based chart (no external libraries)
+        function initChart() {
+            const canvas = document.getElementById('load-chart');
+            chartCtx = canvas.getContext('2d');
+            
+            // Set canvas resolution
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width * window.devicePixelRatio;
+            canvas.height = rect.height * window.devicePixelRatio;
+            chartCtx.scale(window.devicePixelRatio, window.devicePixelRatio);
+            
+            drawChart();
+        }
+
+        function drawChart() {
+            if (!chartCtx) return;
+            
+            const canvas = chartCtx.canvas;
+            const width = canvas.width / window.devicePixelRatio;
+            const height = canvas.height / window.devicePixelRatio;
+            
+            // Clear
+            chartCtx.fillStyle = '#0f0f1a';
+            chartCtx.fillRect(0, 0, width, height);
+            
+            if (chartData.values.length < 2) {
+                document.getElementById('chart-placeholder').style.display = 'flex';
+                return;
+            }
+            
+            document.getElementById('chart-placeholder').style.display = 'none';
+            
+            // Calculate bounds
+            const padding = { top: 20, right: 20, bottom: 30, left: 60 };
+            const chartWidth = width - padding.left - padding.right;
+            const chartHeight = height - padding.top - padding.bottom;
+            
+            const minVal = Math.min(...chartData.values) - 10;
+            const maxVal = Math.max(...chartData.values) + 10;
+            const valRange = maxVal - minVal || 1;
+            
+            // Draw grid
+            chartCtx.strokeStyle = '#2a2a40';
+            chartCtx.lineWidth = 1;
+            
+            // Horizontal grid lines
+            for (let i = 0; i <= 4; i++) {
+                const y = padding.top + (chartHeight * i / 4);
+                chartCtx.beginPath();
+                chartCtx.moveTo(padding.left, y);
+                chartCtx.lineTo(width - padding.right, y);
+                chartCtx.stroke();
+                
+                // Y-axis labels
+                const val = maxVal - (valRange * i / 4);
+                chartCtx.fillStyle = '#606070';
+                chartCtx.font = '11px sans-serif';
+                chartCtx.textAlign = 'right';
+                chartCtx.fillText(val.toFixed(1), padding.left - 5, y + 4);
+            }
+            
+            // Draw line
+            chartCtx.beginPath();
+            chartCtx.strokeStyle = '#00ff6a';
+            chartCtx.lineWidth = 2;
+            
+            chartData.values.forEach((val, i) => {
+                const x = padding.left + (chartWidth * i / (chartData.values.length - 1));
+                const y = padding.top + chartHeight - ((val - minVal) / valRange * chartHeight);
+                
+                if (i === 0) {
+                    chartCtx.moveTo(x, y);
+                } else {
+                    chartCtx.lineTo(x, y);
+                }
+            });
+            
+            chartCtx.stroke();
+            
+            // Draw gradient fill under line
+            const gradient = chartCtx.createLinearGradient(0, padding.top, 0, height - padding.bottom);
+            gradient.addColorStop(0, 'rgba(0, 255, 106, 0.3)');
+            gradient.addColorStop(1, 'rgba(0, 255, 106, 0)');
+            
+            chartCtx.lineTo(width - padding.right, height - padding.bottom);
+            chartCtx.lineTo(padding.left, height - padding.bottom);
+            chartCtx.closePath();
+            chartCtx.fillStyle = gradient;
+            chartCtx.fill();
+            
+            // Y-axis label
+            chartCtx.save();
+            chartCtx.translate(15, height / 2);
+            chartCtx.rotate(-Math.PI / 2);
+            chartCtx.fillStyle = '#9090a0';
+            chartCtx.textAlign = 'center';
+            chartCtx.fillText('Load (kg)', 0, 0);
+            chartCtx.restore();
+        }
+
+        function addChartPoint(value) {
+            chartData.values.push(value);
+            chartData.timestamps.push(Date.now());
+            
+            // Trim old data
+            const maxPoints = chartData.timespan * 10;  // Assuming 10Hz update rate
+            while (chartData.values.length > maxPoints) {
+                chartData.values.shift();
+                chartData.timestamps.shift();
+            }
+            
+            drawChart();
+        }
+
+        function clearChart() {
+            chartData.values = [];
+            chartData.timestamps = [];
+            drawChart();
+        }
+
+        function setChartTimespan(seconds) {
+            chartData.timespan = parseInt(seconds);
+            clearChart();
+        }
+
+        // Toggle logging
+        async function toggleLogging() {
+            const btn = document.getElementById('btn-start-log');
+            UI.setButtonLoading(btn, true);
+            
+            try {
+                const endpoint = isLogging ? '/api/logging/stop' : '/api/logging/start';
+                await API.post(endpoint, {});
+                isLogging = !isLogging;
+                updateLoggingButton();
+            } catch (error) {
+                UI.showAlert('Failed to toggle logging', 'error');
+            } finally {
+                UI.setButtonLoading(btn, false);
+            }
+        }
+
+        function updateLoggingButton() {
+            const btn = document.getElementById('btn-start-log');
+            if (isLogging) {
+                btn.textContent = '⏹ Stop Logging';
+                btn.className = 'btn btn--danger';
+            } else {
+                btn.textContent = '▶ Start Logging';
+                btn.className = 'btn btn--success';
+            }
+        }
+
+        // Live data updates
+        async function updateLiveData() {
+            try {
+                const data = await API.get('/api/live');
+                
+                // Update live values
+                document.getElementById('live-load').textContent = (data.load_kg || 0).toFixed(2);
+                document.getElementById('live-adc').textContent = (data.raw_adc || 0).toLocaleString();
+                document.getElementById('live-rate').textContent = '64000';  // Fixed rate
+                
+                // Update IMU
+                document.getElementById('imu-ax').textContent = (data.accel_x || 0).toFixed(3);
+                document.getElementById('imu-ay').textContent = (data.accel_y || 0).toFixed(3);
+                document.getElementById('imu-az').textContent = (data.accel_z || 1).toFixed(3);
+                document.getElementById('imu-gx').textContent = (data.gyro_x || 0).toFixed(1);
+                document.getElementById('imu-gy').textContent = (data.gyro_y || 0).toFixed(1);
+                document.getElementById('imu-gz').textContent = (data.gyro_z || 0).toFixed(1);
+                
+                // Add to chart
+                addChartPoint(data.load_kg || 0);
+                
+            } catch (error) {
+                // Silently fail for live updates
+            }
+        }
+
+        // SD Card stats
+        async function updateSDCard() {
+            try {
+                const data = await API.get('/api/sdcard');
+                
+                const usedPercent = (data.used_mb / data.total_mb * 100) || 0;
+                
+                document.getElementById('sd-used').textContent = UI.formatSize(data.used_mb * 1024 * 1024);
+                document.getElementById('sd-free').textContent = UI.formatSize(data.free_mb * 1024 * 1024) + ' free';
+                document.getElementById('sd-total').textContent = 'of ' + UI.formatSize(data.total_mb * 1024 * 1024);
+                document.getElementById('sd-file-count').textContent = data.files?.length || 0;
+                
+                UI.setProgress('#sd-progress', usedPercent, usedPercent > 90 ? 'danger' : usedPercent > 70 ? 'warning' : '');
+                
+                const statusDot = document.getElementById('sd-status-dot');
+                statusDot.className = `status-dot status-dot--${data.present ? 'success' : 'error'}`;
+                
+                // Update file list
+                renderFileList(data.files || []);
+                
+            } catch (error) {
+                document.getElementById('sd-used').textContent = 'Error';
+            }
+        }
+
+        // Battery stats
+        async function updateBattery() {
+            try {
+                const data = await API.get('/api/battery');
+                
+                document.getElementById('battery-percent').textContent = data.percent || '--';
+                document.getElementById('battery-voltage').textContent = ((data.voltage_mV || 0) / 1000).toFixed(2) + ' V';
+                
+                const variant = data.percent > 50 ? 'success' : data.percent > 20 ? 'warning' : 'danger';
+                UI.setProgress('#battery-progress', data.percent || 0, variant);
+                
+                document.getElementById('battery-charging').classList.toggle('hidden', !data.charging);
+                
+            } catch (error) {
+                document.getElementById('battery-percent').textContent = '--';
+            }
+        }
+
+        // Render file list
+        function renderFileList(files) {
+            const container = document.getElementById('file-list');
+            
+            if (!files || files.length === 0) {
+                container.innerHTML = '<div class="text-muted text-center">No log files found</div>';
+                return;
+            }
+            
+            container.innerHTML = files.map(file => `
+                <div class="file-item">
+                    <div>
+                        <div class="file-item__name">${file.name}</div>
+                        <div class="file-item__meta">${file.date} • ${UI.formatSize(file.size_kb * 1024)}</div>
+                    </div>
+                    <div class="flex gap-sm">
+                        <button class="btn btn--small btn--secondary" onclick="downloadFile('${file.name}')">⬇ Download</button>
+                        <button class="btn btn--small btn--danger" onclick="deleteFile('${file.name}')">✕</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function refreshFiles() {
+            updateSDCard();
+        }
+
+        async function downloadFile(filename) {
+            window.open(`/files/${filename}`, '_blank');
+        }
+
+        async function deleteFile(filename) {
+            UI.showModal('Delete File', 
+                `<p>Are you sure you want to delete <code>${filename}</code>?</p>`,
+                async () => {
+                    try {
+                        await API.post('/api/files/delete', { filename });
+                        UI.showAlert('File deleted', 'success');
+                        refreshFiles();
+                    } catch (error) {
+                        UI.showAlert('Failed to delete file', 'error');
+                    }
+                }
+            );
+        }
+
+        // System status
+        async function updateSystem() {
+            try {
+                const status = await API.get('/api/status');
+                
+                // Uptime
+                if (status.uptime_ms) {
+                    const sec = Math.floor(status.uptime_ms / 1000);
+                    const min = Math.floor(sec / 60);
+                    const hr = Math.floor(min / 60);
+                    document.getElementById('sys-uptime').textContent = `${hr}h ${min % 60}m ${sec % 60}s`;
+                }
+                
+                // Heap
+                if (status.free_heap) {
+                    document.getElementById('sys-heap').textContent = UI.formatSize(status.free_heap);
+                }
+                
+                // Logging state
+                isLogging = status.logging || false;
+                updateLoggingButton();
+                
+            } catch (error) {
+                // Silently fail
+            }
+        }
+
+        // Start all updates
+        function startUpdates() {
+            // Live data at 10Hz
+            liveUpdateInterval = setInterval(updateLiveData, 100);
+            
+            // Slower updates
+            setInterval(updateSDCard, 5000);
+            setInterval(updateBattery, 10000);
+            setInterval(updateSystem, 2000);
+        }
+
+        function stopUpdates() {
+            if (liveUpdateInterval) {
+                clearInterval(liveUpdateInterval);
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            initChart();
+            startUpdates();
+            
+            // Initial data fetch
+            updateSDCard();
+            updateBattery();
+            updateSystem();
+            
+            // Handle window resize
+            window.addEventListener('resize', () => {
+                initChart();
+            });
+        });
+
+        window.addEventListener('beforeunload', stopUpdates);
+    </script>
+</body>
+</html>
+
