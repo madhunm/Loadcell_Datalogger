@@ -115,18 +115,20 @@ static_assert(sizeof(FileHeader) == 64, "FileHeader must be 64 bytes");
 /**
  * @brief ADC sample record
  * 
- * Stores one 24-bit ADC reading with timestamp offset.
+ * Stores one 24-bit ADC reading with timestamp offset and sequence number.
  * Timestamp is offset from file header startTimestampUs.
+ * Sequence number enables gap detection in post-processing.
  */
 struct __attribute__((packed)) ADCRecord {
     uint32_t timestampOffsetUs; // Microseconds since file start
     int32_t rawAdc;             // 24-bit ADC value (sign-extended to 32)
+    uint32_t sequenceNum;       // Monotonic counter for gap detection
     
     // Size constant
-    static constexpr size_t SIZE = 8;
+    static constexpr size_t SIZE = 12;
 };
 
-static_assert(sizeof(ADCRecord) == 8, "ADCRecord must be 8 bytes");
+static_assert(sizeof(ADCRecord) == 12, "ADCRecord must be 12 bytes");
 
 // ============================================================================
 // IMU Sample Record (16 bytes)
@@ -218,6 +220,48 @@ struct __attribute__((packed)) EndRecord {
     
     static constexpr size_t SIZE = 9;
 };
+
+// ============================================================================
+// File Footer (32 bytes) - Written on clean stop for integrity verification
+// ============================================================================
+
+/** @brief Footer magic number */
+constexpr uint32_t FOOTER_MAGIC = 0xF007F007;
+
+/**
+ * @brief File footer for integrity verification
+ * 
+ * Written at end of file on clean stop. Absence indicates unclean shutdown.
+ * Provides sample counts for data validation.
+ */
+struct __attribute__((packed)) FileFooter {
+    uint32_t magic;             // FOOTER_MAGIC (0xF007F007)
+    uint64_t totalAdcSamples;   // Total ADC samples written
+    uint64_t totalImuSamples;   // Total IMU samples written
+    uint32_t droppedSamples;    // Samples lost due to overflow
+    uint32_t endTimestampUs;    // Final timestamp offset
+    uint32_t crc32;             // CRC32 of all data (0 if not computed)
+    
+    // Size constant
+    static constexpr size_t SIZE = 32;
+    
+    // Initialize with defaults
+    void init() {
+        magic = FOOTER_MAGIC;
+        totalAdcSamples = 0;
+        totalImuSamples = 0;
+        droppedSamples = 0;
+        endTimestampUs = 0;
+        crc32 = 0;
+    }
+    
+    // Validate footer
+    bool isValid() const {
+        return magic == FOOTER_MAGIC;
+    }
+};
+
+static_assert(sizeof(FileFooter) == 32, "FileFooter must be 32 bytes");
 
 // ============================================================================
 // Utility Functions

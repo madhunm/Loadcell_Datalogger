@@ -43,11 +43,19 @@ namespace {
     std::atomic<uint32_t> droppedSamples{0};
     std::atomic<uint32_t> droppedBuffers{0};
     
-    // ADC Ring buffer for this logger
-    ADCRingBuffer* adcBuffer = nullptr;
+    // Sequence counter for gap detection
+    std::atomic<uint32_t> adcSequenceNum{0};
     
-    // IMU decimation counter
-    uint32_t imuDecimationCounter = 0;
+    // ADC Ring buffer for this logger (128ms at 64ksps for SD latency headroom)
+    ADCRingBufferLarge* adcBuffer = nullptr;
+    
+    // IMU FIFO batch reading
+    static constexpr size_t IMU_FIFO_BATCH_SIZE = 32;  // Read up to 32 samples per batch
+    LSM6DSV::RawData imuFifoBatch[IMU_FIFO_BATCH_SIZE];
+    
+    // Logger task handle (pinned to Core 0)
+    TaskHandle_t loggerTaskHandle = nullptr;
+    volatile bool taskShouldRun = false;
     
     // Write buffer
     uint8_t* writeBuffer = nullptr;
@@ -132,10 +140,11 @@ namespace {
             // Calculate timestamp offset
             uint32_t offsetUs = (uint32_t)(sample.timestamp_us - (uint32_t)sessionStartUs);
             
-            // Write ADC record
+            // Write ADC record with sequence number for gap detection
             BinaryFormat::ADCRecord adcRec;
             adcRec.timestampOffsetUs = offsetUs;
             adcRec.rawAdc = sample.raw;
+            adcRec.sequenceNum = adcSequenceNum.fetch_add(1, std::memory_order_relaxed);
             
             if (!bufferWrite(&adcRec, sizeof(adcRec))) {
                 droppedSamples++;
@@ -145,26 +154,25 @@ namespace {
             adcSamplesLogged++;
             processed++;
             
-            // Check for IMU decimation
-            imuDecimationCounter++;
-            if (imuDecimationCounter >= currentConfig.imuDecimation) {
-                imuDecimationCounter = 0;
+        }
+        
+        // Drain IMU FIFO in batches (more efficient than single reads)
+        uint16_t imuSamplesRead = 0;
+        if (LSM6DSV::readFIFO(imuFifoBatch, IMU_FIFO_BATCH_SIZE, &imuSamplesRead) && imuSamplesRead > 0) {
+            uint32_t nowUs = (uint32_t)(TimestampSync::getEpochMicros() - sessionStartUs);
+            
+            for (uint16_t i = 0; i < imuSamplesRead; i++) {
+                BinaryFormat::IMURecord imuRec;
+                imuRec.timestampOffsetUs = nowUs;  // Approximate timestamp
+                imuRec.accelX = imuFifoBatch[i].accel[0];
+                imuRec.accelY = imuFifoBatch[i].accel[1];
+                imuRec.accelZ = imuFifoBatch[i].accel[2];
+                imuRec.gyroX = imuFifoBatch[i].gyro[0];
+                imuRec.gyroY = imuFifoBatch[i].gyro[1];
+                imuRec.gyroZ = imuFifoBatch[i].gyro[2];
                 
-                // Read IMU data
-                LSM6DSV::RawData imuData;
-                if (LSM6DSV::readRaw(&imuData)) {
-                    BinaryFormat::IMURecord imuRec;
-                    imuRec.timestampOffsetUs = offsetUs;
-                    imuRec.accelX = imuData.accel[0];
-                    imuRec.accelY = imuData.accel[1];
-                    imuRec.accelZ = imuData.accel[2];
-                    imuRec.gyroX = imuData.gyro[0];
-                    imuRec.gyroY = imuData.gyro[1];
-                    imuRec.gyroZ = imuData.gyro[2];
-                    
-                    if (bufferWrite(&imuRec, sizeof(imuRec))) {
-                        imuSamplesLogged++;
-                    }
+                if (bufferWrite(&imuRec, sizeof(imuRec))) {
+                    imuSamplesLogged++;
                 }
             }
         }
@@ -179,6 +187,22 @@ namespace {
     }
 }
 
+// Logger task function (runs on Core 0)
+void loggerTaskFunc(void* param) {
+    ESP_LOGI(TAG, "Logger task started on Core %d", xPortGetCoreID());
+    
+    while (taskShouldRun) {
+        if (running && !paused) {
+            processSamples();
+        }
+        // Small delay to prevent tight loop, allows other tasks to run
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    
+    ESP_LOGI(TAG, "Logger task stopping");
+    vTaskDelete(nullptr);
+}
+
 // ============================================================================
 // Public API
 // ============================================================================
@@ -191,9 +215,9 @@ bool init(const Config& config) {
     
     currentConfig = config;
     
-    // Allocate ADC ring buffer
+    // Allocate ADC ring buffer (large version for 128ms headroom)
     if (!adcBuffer) {
-        adcBuffer = new ADCRingBuffer();
+        adcBuffer = new ADCRingBufferLarge();
     }
     
     // Allocate write buffer
@@ -272,7 +296,7 @@ bool start() {
     bytesWritten = 0;
     droppedSamples = 0;
     droppedBuffers = 0;
-    imuDecimationCounter = 0;
+    adcSequenceNum = 0;  // Reset sequence counter
     
     // Record start time
     sessionStartUs = TimestampSync::getEpochMicros();
@@ -289,6 +313,22 @@ bool start() {
         adcBuffer->reset();
     }
     
+    // Configure IMU FIFO for batch reading (zero-loss)
+    LSM6DSV::FIFOConfig fifoConfig;
+    fifoConfig.watermark = 16;  // Interrupt at 16 samples
+    fifoConfig.mode = LSM6DSV::FIFOMode::Continuous;
+    fifoConfig.accelBatchRate = LSM6DSV::FIFOBatchRate::Hz120;  // Match logger rate
+    fifoConfig.gyroBatchRate = LSM6DSV::FIFOBatchRate::Hz120;
+    fifoConfig.enableTimestamp = false;
+    
+    if (LSM6DSV::configureFIFO(fifoConfig)) {
+        LSM6DSV::enableFIFO();
+        LSM6DSV::flushFIFO();  // Start fresh
+        ESP_LOGI(TAG, "IMU FIFO enabled for batch reads");
+    } else {
+        ESP_LOGW(TAG, "IMU FIFO config failed, using single reads");
+    }
+    
     // Start ADC continuous mode
     if (!MAX11270::startContinuous(adcBuffer)) {
         ESP_LOGE(TAG, "Failed to start ADC");
@@ -299,7 +339,28 @@ bool start() {
     running = true;
     paused = false;
     
-    ESP_LOGI(TAG, "Started: %s", currentFilePath);
+    // Create logger task pinned to Core 0 (ADC ISR runs on Core 1)
+    taskShouldRun = true;
+    BaseType_t taskCreated = xTaskCreatePinnedToCore(
+        loggerTaskFunc,             // Task function
+        "Logger",                   // Task name
+        8192,                       // Stack size (bytes)
+        nullptr,                    // Parameters
+        configMAX_PRIORITIES - 2,   // High priority (but below ADC ISR)
+        &loggerTaskHandle,          // Task handle
+        0                           // Core 0 (separate from ADC on Core 1)
+    );
+    
+    if (taskCreated != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create logger task");
+        MAX11270::stopContinuous();
+        LSM6DSV::disableFIFO();
+        logFile.close();
+        running = false;
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "Started: %s (task on Core 0)", currentFilePath);
     return true;
 }
 
@@ -308,10 +369,21 @@ void stop() {
     
     running = false;
     
+    // Stop the logger task
+    taskShouldRun = false;
+    if (loggerTaskHandle) {
+        // Give task time to finish
+        vTaskDelay(pdMS_TO_TICKS(50));
+        loggerTaskHandle = nullptr;
+    }
+    
     // Stop ADC
     MAX11270::stopContinuous();
     
-    // Process remaining samples
+    // Disable IMU FIFO
+    LSM6DSV::disableFIFO();
+    
+    // Process any remaining samples
     processSamples();
     
     // Flush write buffer
@@ -323,6 +395,19 @@ void stop() {
     endRec.totalRecords = adcSamplesLogged + imuSamplesLogged;
     endRec.checksum = 0;  // Reserved
     logFile.write((uint8_t*)&endRec, sizeof(endRec));
+    
+    // Write file footer for integrity verification
+    BinaryFormat::FileFooter footer;
+    footer.init();
+    footer.totalAdcSamples = adcSamplesLogged.load();
+    footer.totalImuSamples = imuSamplesLogged.load();
+    footer.droppedSamples = droppedSamples.load();
+    footer.endTimestampUs = (uint32_t)(TimestampSync::getEpochMicros() - sessionStartUs);
+    footer.crc32 = 0;  // TODO: Compute CRC if needed
+    logFile.write((uint8_t*)&footer, sizeof(footer));
+    
+    ESP_LOGI(TAG, "Footer written: %llu ADC, %llu IMU, %lu dropped",
+             footer.totalAdcSamples, footer.totalImuSamples, footer.droppedSamples);
     
     // Close file
     logFile.flush();

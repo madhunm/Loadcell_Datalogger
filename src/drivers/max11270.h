@@ -256,10 +256,10 @@ int32_t readSingle(uint32_t timeout_ms = 100);
  * ZERO LOSS POLICY: If buffer becomes full, acquisition stops
  * and overflow flag is set rather than losing samples.
  * 
- * @param buffer Pointer to ring buffer for sample storage
+ * @param buffer Pointer to ring buffer for sample storage (128ms buffer)
  * @return true if continuous mode started successfully
  */
-bool startContinuous(ADCRingBuffer* buffer);
+bool startContinuous(ADCRingBufferLarge* buffer);
 
 /**
  * @brief Stop continuous conversion mode

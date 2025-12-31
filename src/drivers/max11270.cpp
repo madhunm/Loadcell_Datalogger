@@ -52,7 +52,7 @@ namespace {
     // Continuous mode state
     volatile bool continuousRunning = false;
     volatile bool dmaInProgress = false;
-    ADCRingBuffer* ringBuffer = nullptr;
+    ADCRingBufferLarge* ringBuffer = nullptr;
     
     // Overflow detection (ZERO LOSS POLICY)
     volatile bool overflowFlag = false;
@@ -509,7 +509,7 @@ int32_t readSingle(uint32_t timeout_ms) {
     return readDataBlocking();
 }
 
-bool startContinuous(ADCRingBuffer* buffer) {
+bool startContinuous(ADCRingBufferLarge* buffer) {
     if (buffer == nullptr) {
         Serial.println("[MAX11270] ERROR: Null buffer provided!");
         return false;
