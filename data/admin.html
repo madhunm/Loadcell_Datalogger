@@ -213,6 +213,32 @@
             </div>
         </div>
 
+        <!-- Firmware Update -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">Firmware Update (OTA)</h2>
+            </div>
+            
+            <div class="alert alert--warning">
+                <span>⚠ Do not disconnect power during update. Device will restart automatically.</span>
+            </div>
+            
+            <div class="form-group mt-md">
+                <label class="form-label">Firmware File (.bin)</label>
+                <input type="file" class="form-input" id="ota-file" accept=".bin">
+                <div class="form-hint">Select compiled firmware.bin file</div>
+            </div>
+            
+            <div class="progress-bar mt-md" style="display: none;" id="ota-progress-container">
+                <div class="progress-bar__fill progress-bar__fill--success" id="ota-progress" style="width: 0%;"></div>
+            </div>
+            <div class="text-center mt-sm" id="ota-status"></div>
+            
+            <button class="btn btn--primary btn--block mt-md" onclick="uploadFirmware()" id="btn-ota-upload">
+                📤 Upload & Install Firmware
+            </button>
+        </div>
+
         <!-- Exit Mode -->
         <div class="card">
             <button class="btn btn--secondary btn--block" onclick="exitAdminMode()">
@@ -446,6 +472,79 @@
             if (liveUpdateInterval) {
                 clearInterval(liveUpdateInterval);
                 liveUpdateInterval = null;
+            }
+        }
+
+        // OTA Firmware upload
+        async function uploadFirmware() {
+            const fileInput = document.getElementById('ota-file');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                UI.showAlert('Please select a firmware file', 'warning');
+                return;
+            }
+            
+            if (!file.name.endsWith('.bin')) {
+                UI.showAlert('Invalid file type. Please select a .bin file', 'error');
+                return;
+            }
+            
+            const btn = document.getElementById('btn-ota-upload');
+            const progressContainer = document.getElementById('ota-progress-container');
+            const progressBar = document.getElementById('ota-progress');
+            const statusDiv = document.getElementById('ota-status');
+            
+            btn.disabled = true;
+            btn.textContent = 'Uploading...';
+            progressContainer.style.display = 'block';
+            statusDiv.textContent = 'Starting upload...';
+            
+            try {
+                const xhr = new XMLHttpRequest();
+                
+                xhr.upload.addEventListener('progress', (e) => {
+                    if (e.lengthComputable) {
+                        const percent = Math.round((e.loaded / e.total) * 100);
+                        progressBar.style.width = percent + '%';
+                        statusDiv.textContent = `Uploading: ${percent}%`;
+                    }
+                });
+                
+                xhr.onload = function() {
+                    if (xhr.status === 200) {
+                        const result = JSON.parse(xhr.responseText);
+                        if (result.success) {
+                            statusDiv.textContent = 'Update complete! Restarting device...';
+                            statusDiv.style.color = 'var(--accent-green)';
+                            UI.showAlert('Firmware update successful! Device is restarting...', 'success');
+                            
+                            // Redirect after device restarts
+                            setTimeout(() => {
+                                location.href = 'index.html';
+                            }, 5000);
+                        } else {
+                            throw new Error(result.error || 'Update failed');
+                        }
+                    } else {
+                        throw new Error('Upload failed: ' + xhr.statusText);
+                    }
+                };
+                
+                xhr.onerror = function() {
+                    throw new Error('Network error during upload');
+                };
+                
+                xhr.open('POST', '/api/ota', true);
+                xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+                xhr.send(file);
+                
+            } catch (error) {
+                statusDiv.textContent = 'Error: ' + error.message;
+                statusDiv.style.color = 'var(--accent-red)';
+                UI.showAlert('Firmware update failed: ' + error.message, 'error');
+                btn.disabled = false;
+                btn.textContent = '📤 Upload & Install Firmware';
             }
         }
 

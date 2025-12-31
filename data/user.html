@@ -501,13 +501,16 @@
             try {
                 const data = await API.get('/api/battery');
                 
-                document.getElementById('battery-percent').textContent = data.percent || '--';
-                document.getElementById('battery-voltage').textContent = ((data.voltage_mV || 0) / 1000).toFixed(2) + ' V';
+                const percent = data.soc_percent || 0;
+                document.getElementById('battery-percent').textContent = percent.toFixed(0) || '--';
+                document.getElementById('battery-voltage').textContent = (data.voltage_V || 0).toFixed(2) + ' V';
                 
-                const variant = data.percent > 50 ? 'success' : data.percent > 20 ? 'warning' : 'danger';
-                UI.setProgress('#battery-progress', data.percent || 0, variant);
+                const variant = percent > 50 ? 'success' : percent > 20 ? 'warning' : 'danger';
+                UI.setProgress('#battery-progress', percent, variant);
                 
-                document.getElementById('battery-charging').classList.toggle('hidden', !data.charging);
+                // Charging if charge rate is positive
+                const charging = (data.charge_rate_pct_hr || 0) > 0;
+                document.getElementById('battery-charging').classList.toggle('hidden', !charging);
                 
             } catch (error) {
                 document.getElementById('battery-percent').textContent = '--';
