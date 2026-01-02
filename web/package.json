@@ -1,0 +1,22 @@
+{
+  "name": "loadcell-datalogger-webui",
+  "version": "1.0.0",
+  "description": "Loadcell Datalogger Web UI",
+  "license": "ISC",
+  "author": "",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.20",
+    "cssnano": "^7.0.6",
+    "postcss": "^8.4.47",
+    "terser": "^5.36.0",
+    "vite": "^5.4.0",
+    "vite-plugin-compression": "^0.5.1",
+    "vite-plugin-singlefile": "^2.3.0"
+  }
+}

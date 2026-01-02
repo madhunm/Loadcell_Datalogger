@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Factory Test - Loadcell Datalogger</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <header class="header">
+        <div class="header__title">
+            <a href="index.html" style="color: inherit; text-decoration: none;">← Back</a>
+            &nbsp;|&nbsp; Factory Test Mode
+        </div>
+        <span class="mode-badge mode-badge--factory">FACTORY</span>
+    </header>
+
+    <div class="container">
+        <!-- Test Summary -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">Test Summary</h2>
+                <div class="flex gap-md">
+                    <button class="btn btn--primary" onclick="runAllTests()">
+                        ▶ Run All Tests
+                    </button>
+                    <button class="btn btn--secondary" onclick="resetTests()">
+                        ↺ Reset
+                    </button>
+                </div>
+            </div>
+
+            <div class="grid grid--5" style="text-align: center;">
+                <div class="stat-card">
+                    <div class="stat-card__value" id="summary-total">0</div>
+                    <div class="stat-card__label">Total</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card__value stat-card__value--green" id="summary-pass">0</div>
+                    <div class="stat-card__label">Pass</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card__value" style="color: var(--accent-red);" id="summary-fail">0</div>
+                    <div class="stat-card__label">Fail</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card__value" style="color: var(--text-muted);" id="summary-pending">6</div>
+                    <div class="stat-card__label">Pending</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card__value" id="summary-result">--</div>
+                    <div class="stat-card__label">Result</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Individual Tests -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">Sensor Tests</h2>
+            </div>
+
+            <!-- ADC Test -->
+            <div class="test-result test-result--pending" id="test-adc">
+                <div>
+                    <div class="test-result__name">MAX11270 ADC</div>
+                    <div class="text-muted" id="test-adc-details">24-bit precision ADC for load cell</div>
+                </div>
+                <div class="test-result__status">
+                    <span id="test-adc-status">Pending</span>
+                    <button class="btn btn--small btn--secondary" onclick="runTest('adc')">Test</button>
+                </div>
+            </div>
+
+            <!-- IMU Test -->
+            <div class="test-result test-result--pending" id="test-imu">
+                <div>
+                    <div class="test-result__name">LSM6DSV IMU</div>
+                    <div class="text-muted" id="test-imu-details">6-axis accelerometer + gyroscope</div>
+                </div>
+                <div class="test-result__status">
+                    <span id="test-imu-status">Pending</span>
+                    <button class="btn btn--small btn--secondary" onclick="runTest('imu')">Test</button>
+                </div>
+            </div>
+
+            <!-- RTC Test -->
+            <div class="test-result test-result--pending" id="test-rtc">
+                <div>
+                    <div class="test-result__name">RX8900CE RTC</div>
+                    <div class="text-muted" id="test-rtc-details">Real-time clock with 1Hz output</div>
+                </div>
+                <div class="test-result__status">
+                    <span id="test-rtc-status">Pending</span>
+                    <button class="btn btn--small btn--secondary" onclick="runTest('rtc')">Test</button>
+                </div>
+            </div>
+
+            <!-- SD Card Test -->
+            <div class="test-result test-result--pending" id="test-sd">
+                <div>
+                    <div class="test-result__name">SD Card</div>
+                    <div class="text-muted" id="test-sd-details">SDMMC 4-bit interface</div>
+                </div>
+                <div class="test-result__status">
+                    <span id="test-sd-status">Pending</span>
+                    <button class="btn btn--small btn--secondary" onclick="runTest('sd')">Test</button>
+                </div>
+            </div>
+
+            <!-- NeoPixel Test -->
+            <div class="test-result test-result--pending" id="test-neopixel">
+                <div>
+                    <div class="test-result__name">NeoPixel LED</div>
+                    <div class="text-muted" id="test-neopixel-details">WS2812B status indicator</div>
+                </div>
+                <div class="test-result__status">
+                    <span id="test-neopixel-status">Pending</span>
+                    <button class="btn btn--small btn--secondary" onclick="runTest('neopixel')">Test</button>
+                </div>
+            </div>
+
+            <!-- Battery/Fuel Gauge Test -->
+            <div class="test-result test-result--pending" id="test-battery">
+                <div>
+                    <div class="test-result__name">MAX17048 Fuel Gauge</div>
+                    <div class="text-muted" id="test-battery-details">Battery voltage and SOC</div>
+                </div>
+                <div class="test-result__status">
+                    <span id="test-battery-status">Pending</span>
+                    <button class="btn btn--small btn--secondary" onclick="runTest('battery')">Test</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- NeoPixel Manual Test -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">NeoPixel LED Test</h2>
+            </div>
+
+            <!-- Current State Display -->
+            <div
+                style="background: var(--bg-input); padding: 1rem; border-radius: var(--radius-md); margin-bottom: 1rem;">
+                <div class="flex gap-md" style="align-items: center; justify-content: space-between;">
+                    <div>
+                        <div class="text-muted" style="font-size: 0.8rem;">Current State</div>
+                        <div id="led-state-name" style="font-weight: 600; font-size: 1.1rem;">--</div>
+                    </div>
+                    <div>
+                        <div class="text-muted" style="font-size: 0.8rem;">Progress</div>
+                        <div id="led-state-progress" style="font-weight: 600;">0 / 0</div>
+                    </div>
+                    <div id="led-cycle-indicator" style="display: none; color: var(--accent-green);">
+                        ◉ Auto-cycling
+                    </div>
+                </div>
+            </div>
+
+            <!-- Auto Cycle Controls -->
+            <div class="flex gap-md mb-md">
+                <button class="btn btn--primary" id="btn-cycle-toggle" onclick="toggleAutoCycle()">
+                    ▶ Start Auto Cycle
+                </button>
+                <button class="btn btn--secondary" onclick="ledNext()">
+                    Next →
+                </button>
+            </div>
+
+            <!-- Color Selection -->
+            <div class="mb-md">
+                <div class="text-muted mb-sm" style="font-size: 0.85rem;">Colors (click to set)</div>
+                <div class="flex gap-sm" style="flex-wrap: wrap;">
+                    <button class="btn led-color-btn" style="background: #ff0000;" onclick="setLed('red')">Red</button>
+                    <button class="btn led-color-btn" style="background: #00ff00; color: #000;"
+                        onclick="setLed('green')">Green</button>
+                    <button class="btn led-color-btn" style="background: #0000ff;"
+                        onclick="setLed('blue')">Blue</button>
+                    <button class="btn led-color-btn" style="background: #00ffff; color: #000;"
+                        onclick="setLed('cyan')">Cyan</button>
+                    <button class="btn led-color-btn" style="background: #ff6400; color: #000;"
+                        onclick="setLed('orange')">Orange</button>
+                    <button class="btn led-color-btn" style="background: #ff00ff;"
+                        onclick="setLed('magenta')">Magenta</button>
+                    <button class="btn btn--secondary" onclick="setLed('off')">Off</button>
+                </div>
+            </div>
+
+            <!-- Pattern Selection -->
+            <div class="mb-md">
+                <div class="text-muted mb-sm" style="font-size: 0.85rem;">Patterns</div>
+                <div class="flex gap-sm" style="flex-wrap: wrap;">
+                    <button class="btn btn--secondary pattern-btn" data-pattern="steady"
+                        onclick="setPattern('steady')">Steady</button>
+                    <button class="btn btn--secondary pattern-btn" data-pattern="pulse"
+                        onclick="setPattern('pulse')">Pulse</button>
+                    <button class="btn btn--secondary pattern-btn" data-pattern="fast_blink"
+                        onclick="setPattern('fast_blink')">Fast Blink</button>
+                    <button class="btn btn--secondary pattern-btn" data-pattern="very_fast_blink"
+                        onclick="setPattern('very_fast_blink')">Very Fast</button>
+                </div>
+            </div>
+
+            <!-- Error Blink Codes -->
+            <div>
+                <div class="text-muted mb-sm" style="font-size: 0.85rem;">Error Blink Codes (Red)</div>
+                <div class="flex gap-sm" style="flex-wrap: wrap;">
+                    <button class="btn btn--secondary" style="border-color: #ff0000;" onclick="setBlinkCode(1)">1 (SD
+                        Missing)</button>
+                    <button class="btn btn--secondary" style="border-color: #ff0000;" onclick="setBlinkCode(2)">2 (SD
+                        Full)</button>
+                    <button class="btn btn--secondary" style="border-color: #ff0000;" onclick="setBlinkCode(3)">3 (SD
+                        Write)</button>
+                    <button class="btn btn--secondary" style="border-color: #ff0000;" onclick="setBlinkCode(4)">4
+                        (ADC)</button>
+                    <button class="btn btn--secondary" style="border-color: #ff0000;" onclick="setBlinkCode(5)">5
+                        (IMU)</button>
+                    <button class="btn btn--secondary" style="border-color: #ff0000;" onclick="setBlinkCode(6)">6
+                        (RTC)</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Test Log -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">Test Log</h2>
+                <button class="btn btn--small btn--secondary" onclick="clearLog()">Clear</button>
+            </div>
+            <div id="test-log"
+                style="font-family: monospace; font-size: 0.85rem; max-height: 300px; overflow-y: auto; background: var(--bg-input); padding: 1rem; border-radius: var(--radius-md);">
+                <div class="text-muted">Test log will appear here...</div>
+            </div>
+        </div>
+
+        <!-- Exit Mode -->
+        <div class="card">
+            <div class="flex gap-md">
+                <button class="btn btn--secondary btn--block" onclick="exitFactoryMode()">
+                    Exit Factory Mode
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="app.js"></script>
+    <script type="module" src="js/factory-page.js"></script>
+</body>
+
+</html>

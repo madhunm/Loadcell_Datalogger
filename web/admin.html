@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Field Admin - Loadcell Datalogger</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <header class="header">
+        <div class="header__title">
+            <a href="index.html" style="color: inherit; text-decoration: none;">← Back</a>
+            &nbsp;|&nbsp; Field Admin Mode
+        </div>
+        <span class="mode-badge mode-badge--admin">ADMIN</span>
+    </header>
+
+    <div class="container">
+        <!-- Loadcell Configuration -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">Loadcell Configuration</h2>
+            </div>
+
+            <div class="grid grid--2">
+                <div class="form-group">
+                    <label class="form-label">Loadcell ID</label>
+                    <input type="text" class="form-input" id="cfg-loadcell-id" placeholder="TC023L0-000025">
+                    <div class="form-hint">Unique identifier for this loadcell</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Model</label>
+                    <input type="text" class="form-input" id="cfg-loadcell-model" placeholder="TC023L0">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Serial Number</label>
+                    <input type="text" class="form-input" id="cfg-loadcell-serial" placeholder="000025">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Capacity (kg)</label>
+                    <input type="number" class="form-input" id="cfg-capacity" placeholder="2000" step="0.1">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Excitation Voltage (V)</label>
+                    <input type="number" class="form-input" id="cfg-excitation" placeholder="10.0" step="0.1">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Sensitivity (mV/V)</label>
+                    <input type="number" class="form-input" id="cfg-sensitivity" placeholder="2.0" step="0.001">
+                    <div class="form-hint">Optional - from loadcell datasheet</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Calibration Points -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">Calibration Points</h2>
+                <button class="btn btn--small btn--secondary" onclick="addCalibrationPoint()">+ Add Point</button>
+            </div>
+
+            <p class="text-muted">Enter known loads and their corresponding ADC output in µV.</p>
+
+            <table class="table mt-md">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Load (kg)</th>
+                        <th>Output (µV)</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="calibration-table">
+                    <!-- Populated by JavaScript -->
+                </tbody>
+            </table>
+
+            <div class="mt-md flex gap-md">
+                <button class="btn btn--secondary" onclick="readCurrentAdc()">
+                    📊 Read Current ADC
+                </button>
+                <button class="btn btn--secondary" onclick="autoZero()">
+                    ⚖ Auto Zero
+                </button>
+            </div>
+        </div>
+
+        <!-- ADC Configuration -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">ADC Configuration (MAX11270)</h2>
+            </div>
+
+            <div class="grid grid--2">
+                <div class="form-group">
+                    <label class="form-label">PGA Gain</label>
+                    <select class="form-select" id="cfg-pga-gain">
+                        <option value="1">1x</option>
+                        <option value="2">2x</option>
+                        <option value="4">4x</option>
+                        <option value="8">8x</option>
+                        <option value="16">16x</option>
+                        <option value="32">32x</option>
+                        <option value="64">64x</option>
+                        <option value="128" selected>128x</option>
+                    </select>
+                    <div class="form-hint">Higher gain = more sensitivity, less range</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Sample Rate</label>
+                    <select class="form-select" id="cfg-sample-rate">
+                        <option value="1920">1.92 kSPS</option>
+                        <option value="3840">3.84 kSPS</option>
+                        <option value="7680">7.68 kSPS</option>
+                        <option value="15360">15.36 kSPS</option>
+                        <option value="30720">30.72 kSPS</option>
+                        <option value="61440" selected>61.44 kSPS</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Live ADC Reading -->
+            <div class="mt-md" style="background: var(--bg-input); padding: 1rem; border-radius: var(--radius-md);">
+                <div class="flex" style="justify-content: space-between; align-items: center;">
+                    <span class="text-muted">Current ADC Reading:</span>
+                    <span style="font-family: monospace; font-size: 1.5rem;" id="live-adc">--</span>
+                </div>
+                <div class="flex mt-sm" style="justify-content: space-between; align-items: center;">
+                    <span class="text-muted">Converted (µV):</span>
+                    <span style="font-family: monospace; font-size: 1.2rem;" id="live-uv">--</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- IMU Configuration -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">IMU Configuration (LSM6DSV)</h2>
+            </div>
+
+            <div class="grid grid--2">
+                <div class="form-group">
+                    <label class="form-label">Accelerometer Range</label>
+                    <select class="form-select" id="cfg-imu-g-range">
+                        <option value="2">±2g</option>
+                        <option value="4">±4g</option>
+                        <option value="8">±8g</option>
+                        <option value="16" selected>±16g</option>
+                    </select>
+                    <div class="form-hint">Higher range = more dynamic range, less precision</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Gyroscope Range</label>
+                    <select class="form-select" id="cfg-imu-gyro-dps">
+                        <option value="125">±125 dps</option>
+                        <option value="250">±250 dps</option>
+                        <option value="500">±500 dps</option>
+                        <option value="1000">±1000 dps</option>
+                        <option value="2000" selected>±2000 dps</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Live IMU Reading -->
+            <div class="mt-md" style="background: var(--bg-input); padding: 1rem; border-radius: var(--radius-md);">
+                <div class="grid grid--3" style="text-align: center;">
+                    <div>
+                        <div class="text-muted">Accel X</div>
+                        <div style="font-family: monospace;" id="live-ax">--</div>
+                    </div>
+                    <div>
+                        <div class="text-muted">Accel Y</div>
+                        <div style="font-family: monospace;" id="live-ay">--</div>
+                    </div>
+                    <div>
+                        <div class="text-muted">Accel Z</div>
+                        <div style="font-family: monospace;" id="live-az">--</div>
+                    </div>
+                </div>
+                <div class="grid grid--3 mt-md" style="text-align: center;">
+                    <div>
+                        <div class="text-muted">Gyro X</div>
+                        <div style="font-family: monospace;" id="live-gx">--</div>
+                    </div>
+                    <div>
+                        <div class="text-muted">Gyro Y</div>
+                        <div style="font-family: monospace;" id="live-gy">--</div>
+                    </div>
+                    <div>
+                        <div class="text-muted">Gyro Z</div>
+                        <div style="font-family: monospace;" id="live-gz">--</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Save Actions -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">Save Configuration</h2>
+            </div>
+
+            <div class="alert alert--info">
+                <span>⚠ Configuration will be saved to device NVS (non-volatile storage). Changes persist across power
+                    cycles.</span>
+            </div>
+
+            <div class="flex gap-md mt-md">
+                <button class="btn btn--success btn--large" onclick="saveConfig()">
+                    💾 Save to Device
+                </button>
+                <button class="btn btn--secondary" onclick="loadConfig()">
+                    ↻ Reload from Device
+                </button>
+                <button class="btn btn--secondary" onclick="exportConfig()">
+                    📤 Export JSON
+                </button>
+                <button class="btn btn--secondary" onclick="importConfig()">
+                    📥 Import JSON
+                </button>
+            </div>
+        </div>
+
+        <!-- Firmware Update -->
+        <div class="card">
+            <div class="card__header">
+                <h2 class="card__title">Firmware Update (OTA)</h2>
+            </div>
+
+            <div class="alert alert--warning">
+                <span>⚠ Do not disconnect power during update. Device will restart automatically.</span>
+            </div>
+
+            <div class="form-group mt-md">
+                <label class="form-label">Firmware File (.bin)</label>
+                <input type="file" class="form-input" id="ota-file" accept=".bin">
+                <div class="form-hint">Select compiled firmware.bin file</div>
+            </div>
+
+            <div class="progress-bar mt-md" style="display: none;" id="ota-progress-container">
+                <div class="progress-bar__fill progress-bar__fill--success" id="ota-progress" style="width: 0%;"></div>
+            </div>
+            <div class="text-center mt-sm" id="ota-status"></div>
+
+            <button class="btn btn--primary btn--block mt-md" onclick="uploadFirmware()" id="btn-ota-upload">
+                📤 Upload & Install Firmware
+            </button>
+        </div>
+
+        <!-- Exit Mode -->
+        <div class="card">
+            <button class="btn btn--secondary btn--block" onclick="exitAdminMode()">
+                Exit Admin Mode
+            </button>
+        </div>
+    </div>
+
+    <script type="module" src="app.js"></script>
+    <script type="module" src="js/admin-page.js"></script>
+</body>
+
+</html>
