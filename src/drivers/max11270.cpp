@@ -428,8 +428,8 @@ void reset() {
     delayMicroseconds(10);
     digitalWrite(PIN_ADC_RSTB, HIGH);
     
-    // Wait for ADC to initialize (tPOR = 200µs typical)
-    delay(1);
+    // Wait for ADC to initialize (tPOR = 200µs typical, use 10ms for safety)
+    delay(10);
     
     // Clear internal state
     overflowFlag = false;
@@ -443,17 +443,36 @@ void reset() {
         dmaTransPool[i].inUse = false;
     }
     
-    // Run self-calibration for accurate readings
+    // ===== DIAGNOSTIC: Verify SPI communication after reset =====
+    uint32_t stat1 = readRegisterInternal(Register::STAT1, 1);
+    Serial.printf("[MAX11270] Post-reset STAT1: 0x%02X (SPI %s)\n", 
+                  stat1, (stat1 != 0xFF && stat1 != 0x00) ? "OK" : "FAIL");
+    
+    if (stat1 == 0xFF || stat1 == 0x00) {
+        Serial.println("[MAX11270] ERROR: SPI communication failed after reset!");
+        return;  // Don't attempt self-cal if SPI is broken
+    }
+    
+    // Self-calibration (non-fatal - continue even if timeout)
     // Self-cal offset (command 0x10)
-    Serial.println("[MAX11270] Running self-calibration...");
+    Serial.println("[MAX11270] Running self-calibration offset...");
     sendCommandInternal(0x10);
-    delay(200);  // Wait for calibration (~100ms typical)
+    if (!waitForReady(500)) {
+        Serial.println("[MAX11270] WARNING: Self-cal offset timeout (continuing anyway)");
+    } else {
+        Serial.println("[MAX11270] Self-cal offset complete");
+    }
     
     // Self-cal gain (command 0x20)
+    Serial.println("[MAX11270] Running self-calibration gain...");
     sendCommandInternal(0x20);
-    delay(200);
+    if (!waitForReady(500)) {
+        Serial.println("[MAX11270] WARNING: Self-cal gain timeout (continuing anyway)");
+    } else {
+        Serial.println("[MAX11270] Self-cal gain complete");
+    }
     
-    Serial.println("[MAX11270] Reset and self-cal complete");
+    Serial.println("[MAX11270] Reset complete");
 }
 
 bool isPresent() {
@@ -561,23 +580,88 @@ bool startContinuous(ADCRingBufferLarge* buffer) {
         dmaTransPool[i].inUse = false;
     }
     
+    // ===== DIAGNOSTIC: Read STAT1 register before command =====
+    uint32_t stat1_before = readRegisterInternal(Register::STAT1, 1);
+    Serial.printf("[MAX11270] STAT1 before command: 0x%02X\n", stat1_before);
+    
+    // ===== DIAGNOSTIC: Verify CTRL registers are configured correctly =====
+    uint32_t ctrl1 = readRegisterInternal(Register::CTRL1, 1);
+    uint32_t ctrl2 = readRegisterInternal(Register::CTRL2, 1);
+    uint32_t ctrl3 = readRegisterInternal(Register::CTRL3, 1);
+    Serial.printf("[MAX11270] CTRL1=0x%02X, CTRL2=0x%02X, CTRL3=0x%02X\n", ctrl1, ctrl2, ctrl3);
+    
     // Check DRDY pin state before starting
     int drdyState = digitalRead(PIN_ADC_RDYB);
     Serial.printf("[MAX11270] DRDY pin state before start: %s\n", drdyState ? "HIGH" : "LOW");
     
-    // Start continuous conversion FIRST (blocking SPI, no ISR yet)
-    // Command byte: [7]=1 (convert), [6:5]=01 (continuous), [4:0]=rate
+    // ===== FIX: Force-stop any ongoing conversion =====
+    Serial.println("[MAX11270] Sending POWERDOWN to stop any ongoing conversion...");
+    sendCommandInternal(0x08);  // POWERDOWN command
+    delay(1);
+    
+    // ===== FIX: Flush ALL stale data until DRDY goes HIGH =====
+    int flushCount = 0;
+    while (digitalRead(PIN_ADC_RDYB) == LOW && flushCount < 10) {
+        int32_t stale = readDataBlocking();
+        Serial.printf("[MAX11270] Flushed sample %d: %ld\n", flushCount + 1, stale);
+        flushCount++;
+        delayMicroseconds(100);
+    }
+    
+    if (flushCount > 0) {
+        Serial.printf("[MAX11270] Flushed %d stale samples\n", flushCount);
+    }
+    
+    // ===== FIX: Hardware reset fallback if DRDY still stuck =====
+    if (digitalRead(PIN_ADC_RDYB) == LOW) {
+        Serial.println("[MAX11270] DRDY still LOW - performing hardware reset...");
+        reset();
+        configure(currentConfig);  // Re-apply configuration after reset
+        Serial.printf("[MAX11270] DRDY after reset: %s\n", digitalRead(PIN_ADC_RDYB) ? "HIGH" : "LOW");
+    }
+    
+    // Warm-up: Perform a single conversion to ensure ADC is in known good state
+    // This clears any stale data and ensures DRDY pin is responsive
+    uint8_t warmupCmd = 0x80 | 0x09;  // Single conversion at 1ksps (rate=9)
+    sendCommandInternal(warmupCmd);
+    uint32_t warmupStart = millis();
+    while (digitalRead(PIN_ADC_RDYB) == HIGH && (millis() - warmupStart < 50)) {
+        delayMicroseconds(100);
+    }
+    if (digitalRead(PIN_ADC_RDYB) == LOW) {
+        readDataBlocking();  // Discard warm-up sample
+    }
+    
+    // Start continuous conversion
+    // Command byte: [7]=1 (start), [6:5]=10 (continuous mode), [4:0]=rate
     uint8_t rateVal = static_cast<uint8_t>(currentConfig.rate);
-    uint8_t cmd = 0xA0 | (rateVal & 0x0F);  // Continuous mode
+    uint8_t cmd = 0xC0 | (rateVal & 0x0F);  // Continuous mode (MODE=10)
     
     Serial.printf("[MAX11270] Sending continuous mode command: 0x%02X (rate=%d)\n", cmd, rateVal);
     sendCommandInternal(cmd);  // Safe - no interrupt attached yet
     
+    // ===== DIAGNOSTIC: Check DRDY immediately after command =====
+    int drdyAfterCmd = digitalRead(PIN_ADC_RDYB);
+    Serial.printf("[MAX11270] DRDY immediately after command: %s\n", drdyAfterCmd ? "HIGH" : "LOW");
+    
+    // ===== DIAGNOSTIC: Read STAT1 after command =====
+    uint32_t stat1_after = readRegisterInternal(Register::STAT1, 1);
+    Serial.printf("[MAX11270] STAT1 after command: 0x%02X\n", stat1_after);
+    
     // Wait for first DRDY (verify ADC is actually converting)
     uint32_t startWait = millis();
+    uint32_t lastPrint = 0;
     while (digitalRead(PIN_ADC_RDYB) == HIGH) {
+        // ===== DIAGNOSTIC: Progress logging during wait =====
+        if (millis() - lastPrint > 20) {
+            Serial.printf("[MAX11270] Waiting for DRDY... (%lu ms)\n", millis() - startWait);
+            lastPrint = millis();
+        }
         if (millis() - startWait > 100) {  // 100ms timeout
             Serial.println("[MAX11270] ERROR: DRDY never went LOW - ADC not converting!");
+            // ===== DIAGNOSTIC: Final state dump on failure =====
+            uint32_t stat1_fail = readRegisterInternal(Register::STAT1, 1);
+            Serial.printf("[MAX11270] STAT1 at failure: 0x%02X\n", stat1_fail);
             return false;
         }
         delayMicroseconds(10);

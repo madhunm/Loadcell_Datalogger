@@ -399,5 +399,3 @@ flowchart LR
 8. **Core Pinning**: Use `xTaskCreatePinnedToCore()` to lock tasks to specific cores.
 
 ---
-
-## Implementation Order

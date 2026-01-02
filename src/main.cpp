@@ -50,7 +50,9 @@
 
 // Network
 #include "network/wifi_ap.h"
+#ifndef DISABLE_WEBUI
 #include "network/admin_webui.h"
+#endif
 
 // Button state for debouncing and long press detection
 namespace {
@@ -414,8 +416,10 @@ bool initSoftware() {
     Logger::Config logConfig = Logger::defaultConfig();
     Logger::init(logConfig);
     
+#ifndef DISABLE_WEBUI
     // WebUI
     AdminWebUI::init();
+#endif
     
     return true;
 }
@@ -662,6 +666,7 @@ void setup() {
 }
 
 void loop() {
+#ifndef DISABLE_WEBUI
     // Start web server when WiFi ready
     if (!webServerStarted && WiFiAP::isReady()) {
         if (AdminWebUI::beginServer()) {
@@ -669,6 +674,7 @@ void loop() {
             webServerStarted = true;
         }
     }
+#endif
     
     // Core updates
         StatusLED::update();

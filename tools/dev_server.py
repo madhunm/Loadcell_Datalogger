@@ -22,7 +22,13 @@ from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
 PORT = 8080
-DATA_DIR = Path(__file__).parent.parent / "data"
+# Use web/ for development (source files), data/ for production (built files)
+PROJECT_ROOT = Path(__file__).parent.parent
+WEB_DIR = PROJECT_ROOT / "web"
+DATA_DIR = PROJECT_ROOT / "data"
+
+# Serve from web/ if it exists (development), otherwise data/ (production)
+SERVE_DIR = WEB_DIR if WEB_DIR.exists() and (WEB_DIR / "index.html").exists() else DATA_DIR
 
 # LED Test States (same as ESP32 implementation)
 LED_TEST_STATES = [
@@ -59,9 +65,12 @@ MOCK_DATA = {
         "mode": "user",
         "wifi": True,
         "sd_present": True,
+        "sd_total_mb": 32768,
+        "sd_used_mb": 1234,
         "logging": False,
         "uptime_ms": 123456,
-        "free_heap": 245000
+        "free_heap": 245000,
+        "adc_sample_rate_hz": 64000
     },
     "config": {
         "loadcell_id": "TC023L0-000025",
@@ -92,9 +101,10 @@ MOCK_DATA = {
         ]
     },
     "battery": {
-        "voltage_mV": 3850,
-        "percent": 75,
-        "charging": False
+        "present": True,
+        "voltage_V": 3.85,
+        "soc_percent": 75,
+        "charge_rate_pct_hr": 0
     },
     "test_results": {
         "adc": None,
@@ -123,7 +133,7 @@ class WebUIHandler(http.server.SimpleHTTPRequestHandler):
     """Custom HTTP handler for WebUI development server"""
     
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=str(DATA_DIR), **kwargs)
+        super().__init__(*args, directory=str(SERVE_DIR), **kwargs)
     
     def end_headers(self):
         # Add CORS headers for local development
@@ -181,7 +191,12 @@ class WebUIHandler(http.server.SimpleHTTPRequestHandler):
             response = MOCK_DATA["config"]
         
         elif path == '/api/sdcard':
-            response = MOCK_DATA["sdcard"]
+            response = {
+                "present": MOCK_DATA["sdcard"]["present"],
+                "total_mb": MOCK_DATA["sdcard"]["total_mb"],
+                "used_mb": MOCK_DATA["sdcard"]["used_mb"],
+                "free_mb": MOCK_DATA["sdcard"]["free_mb"]
+            }
         
         elif path == '/api/battery':
             response = MOCK_DATA["battery"]
@@ -201,6 +216,17 @@ class WebUIHandler(http.server.SimpleHTTPRequestHandler):
                 "accel_z": 1.0 + random.uniform(-0.05, 0.05)
             }
         
+        elif path == '/api/recovery/status':
+            response = {"has_recovery": False}
+        
+        elif path == '/api/files':
+            # Return files with proper structure
+            files = [
+                {"name": f["name"], "size": f["size_kb"] * 1024} 
+                for f in MOCK_DATA["sdcard"]["files"]
+            ]
+            response = {"files": files}
+        
         elif path == '/api/led':
             # Get current LED state
             idx = MOCK_DATA["led"]["state_index"]
@@ -211,6 +237,11 @@ class WebUIHandler(http.server.SimpleHTTPRequestHandler):
                 "state_name": state["name"],
                 "cycling": MOCK_DATA["led"]["cycling"]
             }
+        
+        elif path == '/api/stream':
+            # Server-Sent Events stream for live data
+            self.handle_sse_stream()
+            return
         
         else:
             self.send_error(404, f"API endpoint not found: {path}")
@@ -359,6 +390,12 @@ class WebUIHandler(http.server.SimpleHTTPRequestHandler):
                 "cycling": False
             }
         
+        elif path == '/api/recovery/recover':
+            response = {"success": True, "message": "Session recovered (demo)"}
+        
+        elif path == '/api/recovery/clear':
+            response = {"success": True, "message": "Recovery cleared (demo)"}
+        
         else:
             self.send_error(404, f"API endpoint not found: {path}")
             return
@@ -372,49 +409,71 @@ class WebUIHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(data, indent=2).encode('utf-8'))
     
+    def handle_sse_stream(self):
+        """Handle Server-Sent Events stream for live data"""
+        import random
+        import time
+        
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('Connection', 'keep-alive')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        
+        try:
+            while True:
+                # Generate mock live data
+                data = {
+                    "adc": 5000000 + random.randint(-50000, 50000),
+                    "uV": 500.0 + random.uniform(-5, 5),
+                    "ax": random.uniform(-0.05, 0.05),
+                    "ay": random.uniform(-0.05, 0.05),
+                    "az": 1.0 + random.uniform(-0.02, 0.02),
+                    "gx": random.uniform(-1, 1),
+                    "gy": random.uniform(-1, 1),
+                    "gz": random.uniform(-1, 1),
+                    "sample_rate_hz": 64000,
+                    "logging": MOCK_DATA["status"]["logging"],
+                    "buf_pct": random.uniform(5, 25) if MOCK_DATA["status"]["logging"] else 0,
+                    "latency_us": random.randint(500, 2000),
+                    "drops": 0
+                }
+                
+                # Send SSE event
+                msg = f"data: {json.dumps(data)}\n\n"
+                self.wfile.write(msg.encode('utf-8'))
+                self.wfile.flush()
+                
+                time.sleep(0.1)  # 10 Hz update rate
+        except (BrokenPipeError, ConnectionResetError):
+            # Client disconnected
+            pass
+    
     def log_message(self, format, *args):
         """Custom log format"""
         print(f"[DevServer] {args[0]}")
 
 
 def main():
-    # Check if data directory exists
-    if not DATA_DIR.exists():
-        print(f"Error: data/ directory not found at {DATA_DIR}")
+    # Check if serve directory exists
+    if not SERVE_DIR.exists():
+        print(f"Error: Neither web/ nor data/ directory found")
         print("Please run this script from the project root directory.")
         sys.exit(1)
     
     # Check if index.html exists
-    if not (DATA_DIR / "index.html").exists():
-        print(f"Warning: index.html not found in {DATA_DIR}")
-        print("Creating placeholder...")
-        (DATA_DIR / "index.html").write_text("""<!DOCTYPE html>
-<html>
-<head>
-    <title>Loadcell Logger - Development</title>
-    <meta charset="UTF-8">
-    <style>
-        body { font-family: sans-serif; background: #1a1a2e; color: #eee; 
-               display: flex; justify-content: center; align-items: center; 
-               min-height: 100vh; margin: 0; }
-        .container { text-align: center; }
-        h1 { color: #00d9ff; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Loadcell Datalogger WebUI</h1>
-        <p>Development server is running!</p>
-        <p>Create your WebUI files in the <code>data/</code> directory.</p>
-    </div>
-</body>
-</html>
-""")
+    if not (SERVE_DIR / "index.html").exists():
+        print(f"Warning: index.html not found in {SERVE_DIR}")
+        print("Run 'cd web && npm run dev' for development with hot reload,")
+        print("or 'cd web && npm run build' to generate production files.")
+        sys.exit(1)
+    
     
     print("=" * 50)
     print("  Loadcell Datalogger - WebUI Development Server")
     print("=" * 50)
-    print(f"  Serving files from: {DATA_DIR}")
+    print(f"  Serving files from: {SERVE_DIR}")
     print(f"  Server URL: http://localhost:{PORT}")
     print()
     print("  API endpoints available:")

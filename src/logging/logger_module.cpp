@@ -7,6 +7,7 @@
 #include "timestamp_sync.h"
 #include "binary_format.h"
 #include "ring_buffer.h"
+#include "csv_converter.h"
 #include "../drivers/max11270.h"
 #include "../drivers/lsm6dsv.h"
 #include "../drivers/sd_manager.h"
@@ -752,6 +753,7 @@ bool start() {
     
     // Open file
     ESP_LOGI(TAG, "Opening file: %s", currentFilePath);
+    
     logFile = SDManager::open(currentFilePath, FILE_WRITE);
     if (!logFile) {
         ESP_LOGE(TAG, "Failed to open: %s", currentFilePath);
@@ -930,6 +932,19 @@ void stop() {
     // Close file
     logFile.flush();
     logFile.close();
+    
+    ESP_LOGI(TAG, "Binary file closed: %s (%lu bytes)", currentFilePath, bytesWritten.load());
+    
+    // Convert binary to CSV
+    ESP_LOGI(TAG, "Starting CSV conversion...");
+    if (CSVConverter::convert(currentFilePath)) {
+        CSVConverter::Result result = CSVConverter::getLastResult();
+        ESP_LOGI(TAG, "CSV conversion complete: %s (%lu ms)", 
+                 result.outputPath, result.durationMs);
+    } else {
+        ESP_LOGW(TAG, "CSV conversion failed: %s", 
+                 CSVConverter::statusToString(CSVConverter::getLastResult().status));
+    }
     
     // Clear session state (clean shutdown)
     clearSessionState();

@@ -21,6 +21,7 @@
 #include "../drivers/rx8900ce.h"
 #include "../logging/logger_module.h"
 #include "../logging/binary_format.h"
+#include "../logging/csv_converter.h"
 #include <esp_http_server.h>
 #include <SD_MMC.h>
 #include <esp_ota_ops.h>
@@ -603,6 +604,182 @@ namespace {
         return ESP_OK;
     }
     
+    // ========================================================================
+    // File List and Download Handlers
+    // ========================================================================
+    
+    esp_err_t handleGetFiles(httpd_req_t* req) {
+        if (!SDManager::isMounted()) {
+            sendError(req, "SD card not mounted", 503);
+            return ESP_OK;
+        }
+        
+        File root = SD_MMC.open("/data");
+        if (!root || !root.isDirectory()) {
+            sendError(req, "Data directory not found", 404);
+            return ESP_OK;
+        }
+        
+        // Build JSON array of files
+        // Use chunked response for potentially large file lists
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_sendstr_chunk(req, "{\"files\":[");
+        
+        bool first = true;
+        File file = root.openNextFile();
+        while (file) {
+            if (!file.isDirectory()) {
+                const char* name = file.name();
+                size_t size = file.size();
+                
+                // Only include .bin and .csv files
+                if (strstr(name, ".bin") || strstr(name, ".csv")) {
+                    char fileBuf[128];
+                    snprintf(fileBuf, sizeof(fileBuf),
+                             "%s{\"name\":\"%s\",\"size\":%zu}",
+                             first ? "" : ",", name, size);
+                    httpd_resp_sendstr_chunk(req, fileBuf);
+                    first = false;
+                }
+            }
+            file = root.openNextFile();
+        }
+        root.close();
+        
+        httpd_resp_sendstr_chunk(req, "]}");
+        httpd_resp_sendstr_chunk(req, nullptr);  // End chunked response
+        return ESP_OK;
+    }
+    
+    esp_err_t handleDownloadFile(httpd_req_t* req) {
+        // Extract filename from query string
+        char query[128] = {0};
+        char filename[64] = {0};
+        
+        if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
+            sendError(req, "Missing query string", 400);
+            return ESP_OK;
+        }
+        
+        if (httpd_query_key_value(query, "file", filename, sizeof(filename)) != ESP_OK) {
+            sendError(req, "Missing 'file' parameter", 400);
+            return ESP_OK;
+        }
+        
+        // Sanitize filename (prevent directory traversal)
+        if (strstr(filename, "..") || filename[0] == '/') {
+            sendError(req, "Invalid filename", 400);
+            return ESP_OK;
+        }
+        
+        // Build full path
+        char filepath[128];
+        snprintf(filepath, sizeof(filepath), "/data/%s", filename);
+        
+        // Open file
+        File file = SD_MMC.open(filepath, FILE_READ);
+        if (!file) {
+            sendError(req, "File not found", 404);
+            return ESP_OK;
+        }
+        
+        // Set headers for download
+        const char* contentType = strstr(filename, ".csv") ? "text/csv" : "application/octet-stream";
+        httpd_resp_set_type(req, contentType);
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        
+        char contentDisp[128];
+        snprintf(contentDisp, sizeof(contentDisp), "attachment; filename=\"%s\"", filename);
+        httpd_resp_set_hdr(req, "Content-Disposition", contentDisp);
+        
+        // Stream file in chunks
+        char buf[512];
+        size_t bytesRead;
+        while ((bytesRead = file.read((uint8_t*)buf, sizeof(buf))) > 0) {
+            if (httpd_resp_send_chunk(req, buf, bytesRead) != ESP_OK) {
+                file.close();
+                return ESP_FAIL;
+            }
+        }
+        
+        httpd_resp_send_chunk(req, nullptr, 0);  // End chunked response
+        file.close();
+        
+        Serial.printf("[WebUI] Downloaded: %s\n", filepath);
+        return ESP_OK;
+    }
+    
+    esp_err_t handleConvertFile(httpd_req_t* req) {
+        // Extract filename from query string
+        char query[128] = {0};
+        char filename[64] = {0};
+        
+        if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
+            sendError(req, "Missing query string", 400);
+            return ESP_OK;
+        }
+        
+        if (httpd_query_key_value(query, "file", filename, sizeof(filename)) != ESP_OK) {
+            sendError(req, "Missing 'file' parameter", 400);
+            return ESP_OK;
+        }
+        
+        // Sanitize filename
+        if (strstr(filename, "..") || filename[0] == '/') {
+            sendError(req, "Invalid filename", 400);
+            return ESP_OK;
+        }
+        
+        // Must be a .bin file
+        if (!strstr(filename, ".bin")) {
+            sendError(req, "Only .bin files can be converted", 400);
+            return ESP_OK;
+        }
+        
+        // Build full path
+        char binPath[128];
+        snprintf(binPath, sizeof(binPath), "/data/%s", filename);
+        
+        // Check if file exists
+        if (!SD_MMC.exists(binPath)) {
+            sendError(req, "File not found", 404);
+            return ESP_OK;
+        }
+        
+        // Start conversion
+        Serial.printf("[WebUI] Manual conversion requested: %s\n", binPath);
+        bool success = CSVConverter::convert(binPath);
+        
+        CSVConverter::Result result = CSVConverter::getLastResult();
+        
+        snprintf(jsonBuf, sizeof(jsonBuf),
+                 "{\"success\":%s,\"status\":\"%s\",\"adc_records\":%lu,\"imu_records\":%lu,"
+                 "\"duration_ms\":%lu,\"output_path\":\"%s\"}",
+                 success ? "true" : "false",
+                 CSVConverter::statusToString(result.status),
+                 result.adcRecords, result.imuRecords,
+                 result.durationMs, result.outputPath);
+        
+        sendJson(req, jsonBuf, success ? 200 : 500);
+        return ESP_OK;
+    }
+    
+    esp_err_t handleGetConvertProgress(httpd_req_t* req) {
+        CSVConverter::Result result = CSVConverter::getLastResult();
+        
+        snprintf(jsonBuf, sizeof(jsonBuf),
+                 "{\"converting\":%s,\"progress\":%.2f,\"status\":\"%s\","
+                 "\"adc_records\":%lu,\"imu_records\":%lu,\"output_path\":\"%s\"}",
+                 CSVConverter::isConverting() ? "true" : "false",
+                 CSVConverter::getProgress(),
+                 CSVConverter::statusToString(result.status),
+                 result.adcRecords, result.imuRecords, result.outputPath);
+        
+        sendJson(req, jsonBuf);
+        return ESP_OK;
+    }
+    
     esp_err_t handleValidateFile(httpd_req_t* req) {
         // Extract filename from URL query string
         char filepath[128] = "/data/";
@@ -1010,14 +1187,57 @@ namespace {
     // Static File Server
     // ========================================================================
     
+    // Get content type based on file path (handles .gz extension)
     const char* getContentType(const char* path) {
-        if (strstr(path, ".html")) return "text/html";
-        if (strstr(path, ".css")) return "text/css";
-        if (strstr(path, ".js")) return "application/javascript";
-        if (strstr(path, ".json")) return "application/json";
-        if (strstr(path, ".png")) return "image/png";
-        if (strstr(path, ".ico")) return "image/x-icon";
+        // Strip .gz suffix to determine actual content type
+        String p = path;
+        if (p.endsWith(".gz")) {
+            p = p.substring(0, p.length() - 3);
+        }
+        
+        if (p.endsWith(".html")) return "text/html";
+        if (p.endsWith(".css")) return "text/css";
+        if (p.endsWith(".js")) return "application/javascript";
+        if (p.endsWith(".json")) return "application/json";
+        if (p.endsWith(".png")) return "image/png";
+        if (p.endsWith(".ico")) return "image/x-icon";
         return "text/plain";
+    }
+    
+    // Check if client accepts gzip encoding
+    bool clientAcceptsGzip(httpd_req_t* req) {
+        char acceptEncoding[64] = {0};
+        if (httpd_req_get_hdr_value_str(req, "Accept-Encoding", acceptEncoding, sizeof(acceptEncoding)) == ESP_OK) {
+            return strstr(acceptEncoding, "gzip") != nullptr;
+        }
+        return false;
+    }
+    
+    // Serve a gzipped file with proper headers
+    esp_err_t serveGzippedFile(httpd_req_t* req, const char* gzPath, const char* contentType) {
+        File file = SPIFFS.open(gzPath, "r");
+        if (!file) {
+            return ESP_FAIL;
+        }
+        
+        httpd_resp_set_type(req, contentType);
+        httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_set_hdr(req, "Cache-Control", "max-age=86400");
+        httpd_resp_set_hdr(req, "Vary", "Accept-Encoding");
+        
+        char buf[512];
+        size_t bytesRead;
+        while ((bytesRead = file.read((uint8_t*)buf, sizeof(buf))) > 0) {
+            if (httpd_resp_send_chunk(req, buf, bytesRead) != ESP_OK) {
+                file.close();
+                return ESP_FAIL;
+            }
+        }
+        
+        httpd_resp_send_chunk(req, nullptr, 0);
+        file.close();
+        return ESP_OK;
     }
     
     esp_err_t handleStaticFile(httpd_req_t* req) {
@@ -1028,41 +1248,75 @@ namespace {
             uri = "/index.html";
         }
         
-        // Check if file exists in SPIFFS
-        if (!SPIFFS.exists(uri)) {
-            // Try adding .html
-            if (!uri.endsWith(".html") && SPIFFS.exists(uri + ".html")) {
-                uri += ".html";
-            } else {
-                httpd_resp_send_404(req);
-                return ESP_FAIL;
+        bool useGzip = clientAcceptsGzip(req);
+        
+        // All files are now pre-gzipped, so we always look for .gz versions
+        // Try paths in order: uri.gz, uri.html.gz, uri
+        String gzPath = uri + ".gz";
+        
+        if (useGzip && SPIFFS.exists(gzPath)) {
+            return serveGzippedFile(req, gzPath.c_str(), getContentType(uri.c_str()));
+        }
+        
+        // Try .html.gz for paths without extension
+        if (!uri.endsWith(".html") && !uri.endsWith(".js") && !uri.endsWith(".css")) {
+            String htmlGzPath = uri + ".html.gz";
+            if (useGzip && SPIFFS.exists(htmlGzPath)) {
+                return serveGzippedFile(req, htmlGzPath.c_str(), "text/html");
             }
         }
         
-        File file = SPIFFS.open(uri, "r");
-        if (!file) {
-            httpd_resp_send_404(req);
-            return ESP_FAIL;
-        }
-        
-        // Set content type
-        httpd_resp_set_type(req, getContentType(uri.c_str()));
-        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-        
-        // Stream file in chunks
-        char buf[512];
-        size_t bytesRead;
-        while ((bytesRead = file.read((uint8_t*)buf, sizeof(buf))) > 0) {
-            if (httpd_resp_send_chunk(req, buf, bytesRead) != ESP_OK) {
+        // Fall back to non-gzipped file (for clients that don't accept gzip)
+        if (SPIFFS.exists(uri)) {
+            File file = SPIFFS.open(uri, "r");
+            if (file) {
+                httpd_resp_set_type(req, getContentType(uri.c_str()));
+                httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+                httpd_resp_set_hdr(req, "Cache-Control", "max-age=86400");
+                
+                char buf[512];
+                size_t bytesRead;
+                while ((bytesRead = file.read((uint8_t*)buf, sizeof(buf))) > 0) {
+                    if (httpd_resp_send_chunk(req, buf, bytesRead) != ESP_OK) {
+                        file.close();
+                        return ESP_FAIL;
+                    }
+                }
+                
+                httpd_resp_send_chunk(req, nullptr, 0);
                 file.close();
-                return ESP_FAIL;
+                return ESP_OK;
             }
         }
         
-        // End chunked response
-        httpd_resp_send_chunk(req, nullptr, 0);
-        file.close();
-        return ESP_OK;
+        // Try adding .html
+        if (!uri.endsWith(".html")) {
+            String htmlPath = uri + ".html";
+            if (SPIFFS.exists(htmlPath)) {
+                File file = SPIFFS.open(htmlPath, "r");
+                if (file) {
+                    httpd_resp_set_type(req, "text/html");
+                    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+                    httpd_resp_set_hdr(req, "Cache-Control", "max-age=86400");
+                    
+                    char buf[512];
+                    size_t bytesRead;
+                    while ((bytesRead = file.read((uint8_t*)buf, sizeof(buf))) > 0) {
+                        if (httpd_resp_send_chunk(req, buf, bytesRead) != ESP_OK) {
+                            file.close();
+                            return ESP_FAIL;
+                        }
+                    }
+                    
+                    httpd_resp_send_chunk(req, nullptr, 0);
+                    file.close();
+                    return ESP_OK;
+                }
+            }
+        }
+        
+        httpd_resp_send_404(req);
+        return ESP_FAIL;
     }
 
 } // anonymous namespace
@@ -1105,7 +1359,7 @@ bool beginServer() {
     
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 35;  // Increased for all endpoints
+    config.max_uri_handlers = 40;  // Increased for all endpoints including file download
     config.stack_size = 8192;
     
     esp_err_t ret = httpd_start(&server, &config);
@@ -1158,6 +1412,18 @@ bool beginServer() {
     httpd_uri_t get_sd_health = { .uri = "/api/sd/health", .method = HTTP_GET,
         .handler = handleGetSDHealth, .user_ctx = nullptr };
     httpd_register_uri_handler(server, &get_sd_health);
+    
+    httpd_uri_t get_files = { .uri = "/api/files", .method = HTTP_GET,
+        .handler = handleGetFiles, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &get_files);
+    
+    httpd_uri_t get_download = { .uri = "/api/download", .method = HTTP_GET,
+        .handler = handleDownloadFile, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &get_download);
+    
+    httpd_uri_t get_convert_progress = { .uri = "/api/convert/progress", .method = HTTP_GET,
+        .handler = handleGetConvertProgress, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &get_convert_progress);
     
     // ---- POST Routes ----
     httpd_uri_t post_mode = { .uri = "/api/mode", .method = HTTP_POST,
@@ -1227,6 +1493,10 @@ bool beginServer() {
     httpd_uri_t post_ota = { .uri = "/api/ota", .method = HTTP_POST,
         .handler = handleOtaUpload, .user_ctx = nullptr };
     httpd_register_uri_handler(server, &post_ota);
+    
+    httpd_uri_t post_convert = { .uri = "/api/convert", .method = HTTP_POST,
+        .handler = handleConvertFile, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &post_convert);
     
     // ---- OPTIONS for CORS ----
     httpd_uri_t options_all = { .uri = "/api/*", .method = HTTP_OPTIONS,
