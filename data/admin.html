@@ -25,34 +25,41 @@
             <div class="grid grid--2">
                 <div class="form-group">
                     <label class="form-label">Loadcell ID</label>
-                    <input type="text" class="form-input" id="cfg-loadcell-id" placeholder="TC023L0-000025">
+                    <input type="text" class="form-input" id="cfg-loadcell-id" value="TC023L0-000025" placeholder="TC023L0-000025">
                     <div class="form-hint">Unique identifier for this loadcell</div>
                 </div>
                 
                 <div class="form-group">
                     <label class="form-label">Model</label>
-                    <input type="text" class="form-input" id="cfg-loadcell-model" placeholder="TC023L0">
+                    <input type="text" class="form-input" id="cfg-loadcell-model" value="TC023L0" placeholder="TC023L0">
                 </div>
                 
                 <div class="form-group">
                     <label class="form-label">Serial Number</label>
-                    <input type="text" class="form-input" id="cfg-loadcell-serial" placeholder="000025">
+                    <input type="text" class="form-input" id="cfg-loadcell-serial" value="000025" placeholder="000025">
                 </div>
                 
                 <div class="form-group">
                     <label class="form-label">Capacity (kg)</label>
-                    <input type="number" class="form-input" id="cfg-capacity" placeholder="2000" step="0.1">
+                    <input type="number" class="form-input" id="cfg-capacity" value="2000" placeholder="2000" step="0.1">
                 </div>
                 
                 <div class="form-group">
                     <label class="form-label">Excitation Voltage (V)</label>
-                    <input type="number" class="form-input" id="cfg-excitation" placeholder="10.0" step="0.1">
+                    <input type="number" class="form-input" id="cfg-excitation" value="3.3" placeholder="3.3" step="0.1">
+                    <div class="form-hint">Your hardware uses 3.3V excitation</div>
                 </div>
                 
                 <div class="form-group">
                     <label class="form-label">Sensitivity (mV/V)</label>
-                    <input type="number" class="form-input" id="cfg-sensitivity" placeholder="2.0" step="0.001">
-                    <div class="form-hint">Optional - from loadcell datasheet</div>
+                    <input type="number" class="form-input" id="cfg-sensitivity" value="1.372" placeholder="1.372" step="0.001">
+                    <div class="form-hint">From calibration certificate</div>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Zero Balance (µV at excitation)</label>
+                    <input type="number" class="form-input" id="cfg-zero-balance" value="18" placeholder="18" step="0.1">
+                    <div class="form-hint">Initial offset at zero load (scaled for 3.3V)</div>
                 </div>
             </div>
         </div>
@@ -266,14 +273,21 @@
         let calibrationPoints = [];
         let liveUpdateInterval = null;
 
-        // Initialize calibration table with default points
+        // Initialize calibration table with TC023L0-000025 default points
+        // (Scaled for 3.3V excitation from 10V certificate values)
         function initCalibrationTable() {
             calibrationPoints = [
                 { load_kg: 0, output_uV: 0 },
-                { load_kg: 500, output_uV: 2500 },
-                { load_kg: 1000, output_uV: 5000 },
-                { load_kg: 1500, output_uV: 7500 },
-                { load_kg: 2000, output_uV: 10000 }
+                { load_kg: 200, output_uV: 450 },
+                { load_kg: 400, output_uV: 901 },
+                { load_kg: 600, output_uV: 1352 },
+                { load_kg: 800, output_uV: 1804 },
+                { load_kg: 1000, output_uV: 2256 },
+                { load_kg: 1200, output_uV: 2709 },
+                { load_kg: 1400, output_uV: 3162 },
+                { load_kg: 1600, output_uV: 3617 },
+                { load_kg: 1800, output_uV: 4072 },
+                { load_kg: 2000, output_uV: 4528 }
             ];
             renderCalibrationTable();
         }
@@ -322,9 +336,10 @@
         async function useCurrentReading(index) {
             try {
                 const data = await API.get('/api/live');
-                calibrationPoints[index].output_uV = data.raw_adc || 0;
+                // Use voltage_uV instead of raw_adc for calibration points
+                calibrationPoints[index].output_uV = data.voltage_uV || 0;
                 renderCalibrationTable();
-                UI.showAlert(`Point ${index + 1} updated with current reading`, 'success');
+                UI.showAlert(`Point ${index + 1} updated: ${data.voltage_uV?.toFixed(1)} µV`, 'success');
             } catch (error) {
                 UI.showAlert('Failed to read current value', 'error');
             }
@@ -334,7 +349,8 @@
             try {
                 const data = await API.get('/api/live');
                 document.getElementById('live-adc').textContent = data.raw_adc?.toLocaleString() || '--';
-                document.getElementById('live-uv').textContent = (data.raw_adc / 100)?.toFixed(2) + ' µV' || '--';
+                // Use voltage_uV from API (properly converted by firmware)
+                document.getElementById('live-uv').textContent = (data.voltage_uV?.toFixed(1) || '--') + ' µV';
             } catch (error) {
                 UI.showAlert('Failed to read ADC', 'error');
             }
@@ -346,9 +362,10 @@
                 async () => {
                     try {
                         const data = await API.get('/api/live');
-                        calibrationPoints[0] = { load_kg: 0, output_uV: data.raw_adc || 0 };
+                        // Use voltage_uV for calibration
+                        calibrationPoints[0] = { load_kg: 0, output_uV: data.voltage_uV || 0 };
                         renderCalibrationTable();
-                        UI.showAlert('Zero point set successfully', 'success');
+                        UI.showAlert(`Zero point set: ${data.voltage_uV?.toFixed(1)} µV`, 'success');
                     } catch (error) {
                         UI.showAlert('Failed to auto-zero', 'error');
                     }
@@ -361,26 +378,29 @@
             try {
                 const config = await API.get('/api/config');
                 
-                // Populate form fields
-                document.getElementById('cfg-loadcell-id').value = config.loadcell_id || '';
-                document.getElementById('cfg-loadcell-model').value = config.loadcell_model || '';
-                document.getElementById('cfg-loadcell-serial').value = config.loadcell_serial || '';
-                document.getElementById('cfg-capacity').value = config.capacity_kg || '';
-                document.getElementById('cfg-excitation').value = config.excitation_V || '';
-                document.getElementById('cfg-sensitivity').value = config.sensitivity_mVV || '';
-                document.getElementById('cfg-pga-gain').value = config.adc_pga_gain || 128;
-                document.getElementById('cfg-imu-g-range').value = config.imu_g_range || 16;
-                document.getElementById('cfg-imu-gyro-dps').value = config.imu_gyro_dps || 2000;
-                
-                // Load calibration points
-                if (config.calibration_points && config.calibration_points.length > 0) {
-                    calibrationPoints = config.calibration_points;
-                    renderCalibrationTable();
+                if (config.loaded) {
+                    // Populate form fields from device
+                    document.getElementById('cfg-loadcell-id').value = config.loadcell_id || '';
+                    document.getElementById('cfg-loadcell-model').value = config.loadcell_model || '';
+                    document.getElementById('cfg-loadcell-serial').value = config.loadcell_serial || '';
+                    document.getElementById('cfg-capacity').value = config.capacity_kg || '';
+                    document.getElementById('cfg-excitation').value = config.excitation_V || 3.3;
+                    document.getElementById('cfg-sensitivity').value = config.sensitivity_mVV || '';
+                    document.getElementById('cfg-zero-balance').value = config.zero_balance_uV || 0;
+                    
+                    // Load calibration points
+                    if (config.calibration_points && config.calibration_points.length > 0) {
+                        calibrationPoints = config.calibration_points;
+                        renderCalibrationTable();
+                    }
+                    
+                    UI.showAlert('Configuration loaded from device', 'success');
+                } else {
+                    UI.showAlert('No calibration stored on device - using defaults', 'info');
                 }
-                
-                UI.showAlert('Configuration loaded', 'success');
             } catch (error) {
-                UI.showAlert('Failed to load configuration', 'error');
+                console.log('Config load error:', error);
+                // Keep defaults on error
             }
         }
 
@@ -391,19 +411,17 @@
                 loadcell_model: document.getElementById('cfg-loadcell-model').value,
                 loadcell_serial: document.getElementById('cfg-loadcell-serial').value,
                 capacity_kg: parseFloat(document.getElementById('cfg-capacity').value) || 2000,
-                excitation_V: parseFloat(document.getElementById('cfg-excitation').value) || 10,
-                sensitivity_mVV: parseFloat(document.getElementById('cfg-sensitivity').value) || 0,
-                adc_pga_gain: parseInt(document.getElementById('cfg-pga-gain').value),
-                imu_g_range: parseInt(document.getElementById('cfg-imu-g-range').value),
-                imu_gyro_dps: parseInt(document.getElementById('cfg-imu-gyro-dps').value),
+                excitation_V: parseFloat(document.getElementById('cfg-excitation').value) || 3.3,
+                sensitivity_mVV: parseFloat(document.getElementById('cfg-sensitivity').value) || 1.372,
+                zero_balance_uV: parseFloat(document.getElementById('cfg-zero-balance').value) || 0,
                 calibration_points: calibrationPoints
             };
             
             try {
-                await API.post('/api/config', config);
-                UI.showAlert('Configuration saved to device', 'success');
+                const result = await API.post('/api/config', config);
+                UI.showAlert(`Calibration saved: ${result.id} (${result.points} points)`, 'success');
             } catch (error) {
-                UI.showAlert('Failed to save configuration', 'error');
+                UI.showAlert('Failed to save: ' + (error.message || 'Unknown error'), 'error');
             }
         }
 
@@ -415,9 +433,8 @@
                 loadcell_serial: document.getElementById('cfg-loadcell-serial').value,
                 capacity_kg: parseFloat(document.getElementById('cfg-capacity').value),
                 excitation_V: parseFloat(document.getElementById('cfg-excitation').value),
-                adc_pga_gain: parseInt(document.getElementById('cfg-pga-gain').value),
-                imu_g_range: parseInt(document.getElementById('cfg-imu-g-range').value),
-                imu_gyro_dps: parseInt(document.getElementById('cfg-imu-gyro-dps').value),
+                sensitivity_mVV: parseFloat(document.getElementById('cfg-sensitivity').value),
+                zero_balance_uV: parseFloat(document.getElementById('cfg-zero-balance').value),
                 calibration_points: calibrationPoints
             };
             
@@ -449,16 +466,15 @@
                     if (config.loadcell_serial) document.getElementById('cfg-loadcell-serial').value = config.loadcell_serial;
                     if (config.capacity_kg) document.getElementById('cfg-capacity').value = config.capacity_kg;
                     if (config.excitation_V) document.getElementById('cfg-excitation').value = config.excitation_V;
-                    if (config.adc_pga_gain) document.getElementById('cfg-pga-gain').value = config.adc_pga_gain;
-                    if (config.imu_g_range) document.getElementById('cfg-imu-g-range').value = config.imu_g_range;
-                    if (config.imu_gyro_dps) document.getElementById('cfg-imu-gyro-dps').value = config.imu_gyro_dps;
+                    if (config.sensitivity_mVV) document.getElementById('cfg-sensitivity').value = config.sensitivity_mVV;
+                    if (config.zero_balance_uV !== undefined) document.getElementById('cfg-zero-balance').value = config.zero_balance_uV;
                     
                     if (config.calibration_points) {
                         calibrationPoints = config.calibration_points;
                         renderCalibrationTable();
                     }
                     
-                    UI.showAlert('Configuration imported', 'success');
+                    UI.showAlert('Configuration imported - click Save to store on device', 'success');
                 } catch (error) {
                     UI.showAlert('Failed to import: Invalid JSON', 'error');
                 }

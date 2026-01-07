@@ -13,6 +13,7 @@
 
 #include "admin_webui.h"
 #include "../app/app_mode.h"
+#include "../pin_config.h"
 #include "../drivers/status_led.h"
 #include "../drivers/max11270.h"
 #include "../drivers/max17048.h"
@@ -21,6 +22,8 @@
 #include "../drivers/rx8900ce.h"
 #include "../logging/logger_module.h"
 #include "../logging/binary_format.h"
+#include "../calibration/calibration_storage.h"
+#include "../calibration/calibration_interp.h"
 #include <esp_http_server.h>
 #include <SD_MMC.h>
 #include <esp_ota_ops.h>
@@ -1007,6 +1010,209 @@ namespace {
     }
     
     // ========================================================================
+    // ADC Diagnostic Endpoint
+    // ========================================================================
+    
+    esp_err_t handleDiagAdc(httpd_req_t* req) {
+        // Read ADC registers for diagnostics
+        uint32_t stat1 = MAX11270::readRegister(MAX11270::Register::STAT1);
+        uint32_t ctrl1 = MAX11270::readRegister(MAX11270::Register::CTRL1);
+        uint32_t ctrl2 = MAX11270::readRegister(MAX11270::Register::CTRL2);
+        uint32_t ctrl3 = MAX11270::readRegister(MAX11270::Register::CTRL3);
+        
+        // Read GPIO states
+        int rdyb = digitalRead(PIN_ADC_RDYB);
+        int sync = digitalRead(PIN_ADC_SYNC);
+        int rstb = digitalRead(PIN_ADC_RSTB);
+        
+        // Take a few readings
+        int32_t readings[3];
+        float voltages[3];
+        for (int i = 0; i < 3; i++) {
+            readings[i] = MAX11270::readSingle(50);
+            voltages[i] = (readings[i] != INT32_MIN) ? MAX11270::rawToMicrovolts(readings[i]) : 0;
+            delay(10);
+        }
+        
+        // Get current config
+        uint8_t gain = MAX11270::gainToMultiplier(MAX11270::getGain());
+        uint32_t rate = MAX11270::rateToHz(MAX11270::getSampleRate());
+        
+        snprintf(jsonBuf, sizeof(jsonBuf),
+            "{\"registers\":{\"STAT1\":\"0x%02X\",\"CTRL1\":\"0x%02X\",\"CTRL2\":\"0x%02X\",\"CTRL3\":\"0x%02X\"},"
+            "\"gpio\":{\"RDYB\":%d,\"SYNC\":%d,\"RSTB\":%d},"
+            "\"config\":{\"gain\":%d,\"rate_hz\":%lu},"
+            "\"readings\":[%ld,%ld,%ld],"
+            "\"voltages_uV\":[%.1f,%.1f,%.1f],"
+            "\"adc_present\":%s}",
+            stat1, ctrl1, ctrl2, ctrl3,
+            rdyb, sync, rstb,
+            gain, rate,
+            (long)readings[0], (long)readings[1], (long)readings[2],
+            voltages[0], voltages[1], voltages[2],
+            MAX11270::isPresent() ? "true" : "false"
+        );
+        sendJson(req, jsonBuf);
+        return ESP_OK;
+    }
+    
+    // ========================================================================
+    // Calibration Config Endpoints
+    // ========================================================================
+    
+    // Helper to extract float from JSON
+    bool jsonGetFloat(const char* json, const char* key, float* out) {
+        char searchKey[64];
+        snprintf(searchKey, sizeof(searchKey), "\"%s\":", key);
+        
+        const char* start = strstr(json, searchKey);
+        if (!start) return false;
+        
+        start += strlen(searchKey);
+        while (*start == ' ' || *start == '\t') start++;
+        
+        *out = atof(start);
+        return true;
+    }
+    
+    esp_err_t handleGetConfig(httpd_req_t* req) {
+        Calibration::LoadcellCalibration cal;
+        bool hasActive = CalibrationStorage::loadActive(&cal);
+        
+        if (!hasActive) {
+            // Return empty config
+            snprintf(jsonBuf, sizeof(jsonBuf),
+                "{\"loaded\":false,\"loadcell_id\":\"\",\"loadcell_model\":\"\","
+                "\"loadcell_serial\":\"\",\"capacity_kg\":0,\"excitation_V\":3.3,"
+                "\"sensitivity_mVV\":0,\"zero_balance_uV\":0,\"calibration_points\":[]}"
+            );
+            sendJson(req, jsonBuf);
+            return ESP_OK;
+        }
+        
+        // Build calibration points array
+        char pointsBuf[512] = "[";
+        for (uint8_t i = 0; i < cal.numPoints; i++) {
+            char pointStr[48];
+            snprintf(pointStr, sizeof(pointStr), 
+                "%s{\"load_kg\":%.1f,\"output_uV\":%.1f}",
+                i > 0 ? "," : "",
+                cal.points[i].load_kg,
+                cal.points[i].output_uV);
+            strncat(pointsBuf, pointStr, sizeof(pointsBuf) - strlen(pointsBuf) - 1);
+        }
+        strcat(pointsBuf, "]");
+        
+        snprintf(jsonBuf, sizeof(jsonBuf),
+            "{\"loaded\":true,\"loadcell_id\":\"%s\",\"loadcell_model\":\"%s\","
+            "\"loadcell_serial\":\"%s\",\"capacity_kg\":%.1f,\"excitation_V\":%.2f,"
+            "\"sensitivity_mVV\":%.4f,\"zero_balance_uV\":%.1f,\"calibration_points\":%s}",
+            cal.id, cal.model, cal.serial,
+            cal.capacity_kg, cal.excitation_V,
+            cal.sensitivity_mVV, cal.zeroBalance_uV,
+            pointsBuf
+        );
+        sendJson(req, jsonBuf);
+        return ESP_OK;
+    }
+    
+    esp_err_t handlePostConfig(httpd_req_t* req) {
+        // Read POST body (larger buffer for calibration data)
+        static char configBody[2048];
+        int len = httpd_req_recv(req, configBody, sizeof(configBody) - 1);
+        if (len <= 0) {
+            sendError(req, "No body");
+            return ESP_OK;
+        }
+        configBody[len] = '\0';
+        
+        // Parse JSON into calibration structure
+        Calibration::LoadcellCalibration cal;
+        cal.init();
+        
+        // Extract basic fields
+        jsonGetString(configBody, "loadcell_id", cal.id, sizeof(cal.id));
+        jsonGetString(configBody, "loadcell_model", cal.model, sizeof(cal.model));
+        jsonGetString(configBody, "loadcell_serial", cal.serial, sizeof(cal.serial));
+        jsonGetFloat(configBody, "capacity_kg", &cal.capacity_kg);
+        jsonGetFloat(configBody, "excitation_V", &cal.excitation_V);
+        jsonGetFloat(configBody, "sensitivity_mVV", &cal.sensitivity_mVV);
+        jsonGetFloat(configBody, "zero_balance_uV", &cal.zeroBalance_uV);
+        
+        // Generate ID if not provided
+        if (cal.id[0] == '\0' && cal.model[0] != '\0' && cal.serial[0] != '\0') {
+            cal.generateId();
+        }
+        
+        // Parse calibration_points array
+        const char* pointsStart = strstr(configBody, "\"calibration_points\":");
+        if (pointsStart) {
+            pointsStart = strchr(pointsStart, '[');
+            if (pointsStart) {
+                pointsStart++; // Skip '['
+                
+                // Parse each point: {"load_kg":X,"output_uV":Y}
+                while (*pointsStart && cal.numPoints < Calibration::MAX_CALIBRATION_POINTS) {
+                    // Find next object
+                    const char* objStart = strchr(pointsStart, '{');
+                    if (!objStart) break;
+                    
+                    const char* objEnd = strchr(objStart, '}');
+                    if (!objEnd) break;
+                    
+                    // Extract load_kg and output_uV from this object
+                    float load = 0, output = 0;
+                    
+                    // Simple extraction for load_kg
+                    const char* loadKey = strstr(objStart, "\"load_kg\":");
+                    if (loadKey && loadKey < objEnd) {
+                        load = atof(loadKey + 10);
+                    }
+                    
+                    // Simple extraction for output_uV
+                    const char* outputKey = strstr(objStart, "\"output_uV\":");
+                    if (outputKey && outputKey < objEnd) {
+                        output = atof(outputKey + 12);
+                    }
+                    
+                    cal.addPoint(load, output);
+                    pointsStart = objEnd + 1;
+                }
+            }
+        }
+        
+        // Set timestamps
+        cal.lastModified = millis() / 1000;
+        
+        // Validate
+        if (!cal.isValid()) {
+            sendError(req, "Invalid calibration: need ID, capacity, and at least 2 points");
+            return ESP_OK;
+        }
+        
+        // Sort points by output voltage
+        cal.sortPoints();
+        
+        // Save to NVS
+        if (!CalibrationStorage::save(cal)) {
+            sendError(req, "Failed to save calibration to NVS", 500);
+            return ESP_OK;
+        }
+        
+        // Set as active
+        CalibrationStorage::setActive(cal.id);
+        
+        // Reload interpolation module
+        CalibrationInterp::reload();
+        
+        snprintf(jsonBuf, sizeof(jsonBuf),
+            "{\"success\":true,\"message\":\"Calibration saved\",\"id\":\"%s\",\"points\":%d}",
+            cal.id, cal.numPoints);
+        sendJson(req, jsonBuf);
+        return ESP_OK;
+    }
+    
+    // ========================================================================
     // Static File Server
     // ========================================================================
     
@@ -1159,6 +1365,14 @@ bool beginServer() {
         .handler = handleGetSDHealth, .user_ctx = nullptr };
     httpd_register_uri_handler(server, &get_sd_health);
     
+    httpd_uri_t get_diag_adc = { .uri = "/api/diag/adc", .method = HTTP_GET,
+        .handler = handleDiagAdc, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &get_diag_adc);
+    
+    httpd_uri_t get_config = { .uri = "/api/config", .method = HTTP_GET,
+        .handler = handleGetConfig, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &get_config);
+    
     // ---- POST Routes ----
     httpd_uri_t post_mode = { .uri = "/api/mode", .method = HTTP_POST,
         .handler = handlePostMode, .user_ctx = nullptr };
@@ -1227,6 +1441,10 @@ bool beginServer() {
     httpd_uri_t post_ota = { .uri = "/api/ota", .method = HTTP_POST,
         .handler = handleOtaUpload, .user_ctx = nullptr };
     httpd_register_uri_handler(server, &post_ota);
+    
+    httpd_uri_t post_config = { .uri = "/api/config", .method = HTTP_POST,
+        .handler = handlePostConfig, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &post_config);
     
     // ---- OPTIONS for CORS ----
     httpd_uri_t options_all = { .uri = "/api/*", .method = HTTP_OPTIONS,

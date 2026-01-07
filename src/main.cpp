@@ -377,9 +377,18 @@ bool initHardware() {
         adcConfig.gain = MAX11270::Gain::X128;
         MAX11270::configure(adcConfig);
         
+        // Sync calibration module with ADC gain setting
+        // This ensures raw-to-uV conversion uses correct gain (128x)
+        CalibrationInterp::setADCConfig(
+            2500.0f,  // Vref in mV
+            24,       // ADC bits
+            MAX11270::gainToMultiplier(adcConfig.gain)  // 128
+        );
+        
         int32_t test = MAX11270::readSingle(100);
         if (test != INT32_MIN) {
-            Serial.printf("OK (test: %ld)\n", test);
+            float testUv = MAX11270::rawToMicrovolts(test);
+            Serial.printf("OK (raw: %ld, %.1f uV)\n", test, testUv);
         } else {
             Serial.println("OK (no signal)");
         }

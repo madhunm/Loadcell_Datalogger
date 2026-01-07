@@ -715,7 +715,8 @@ void sendCommand(uint8_t cmd) {
 float rawToMicrovolts(int32_t raw) {
     uint8_t gain = gainToMultiplier(currentConfig.gain);
     float fullScale = VREF / gain;
-    float resolution = fullScale / (float)(1 << 24);
+    // Use 1<<23 for bipolar (signed) 24-bit ADC, not 1<<24
+    float resolution = fullScale / (float)(1 << 23);
     return raw * resolution * 1000000.0f;
 }
 
