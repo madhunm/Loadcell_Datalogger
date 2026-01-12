@@ -380,7 +380,7 @@ bool initHardware() {
         // Sync calibration module with ADC gain setting
         // This ensures raw-to-uV conversion uses correct gain (128x)
         CalibrationInterp::setADCConfig(
-            2500.0f,  // Vref in mV
+            3300.0f,  // Vref in mV (external 3.3V reference)
             24,       // ADC bits
             MAX11270::gainToMultiplier(adcConfig.gain)  // 128
         );

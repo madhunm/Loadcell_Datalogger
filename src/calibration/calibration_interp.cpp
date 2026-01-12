@@ -18,7 +18,7 @@ namespace {
     bool calibrationLoaded = false;
     
     // ADC configuration
-    float adcVrefMv = 2500.0f;      // Reference voltage
+    float adcVrefMv = 3300.0f;      // Reference voltage (external 3.3V)
     uint8_t adcBits = 24;            // Resolution
     uint8_t adcGain = 1;             // PGA gain
     

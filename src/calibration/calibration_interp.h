@@ -157,7 +157,7 @@ void resetStats();
 /**
  * @brief Set ADC configuration for raw-to-uV conversion
  * 
- * @param vrefMv Reference voltage in millivolts (default 2500)
+ * @param vrefMv Reference voltage in millivolts (default 3300)
  * @param bits ADC resolution in bits (default 24)
  * @param gain PGA gain (default 1)
  */

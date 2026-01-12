@@ -41,8 +41,10 @@ namespace MAX11270 {
 enum class Register : uint8_t {
     STAT1   = 0x00,  ///< Status register 1
     CTRL1   = 0x01,  ///< Control register 1 (conversion mode, data rate)
-    CTRL2   = 0x02,  ///< Control register 2 (PGA gain, GPIO)
-    CTRL3   = 0x03,  ///< Control register 3 (sync, calibration)
+    CTRL2   = 0x02,  ///< Control register 2 (PGA gain, buffer, PGAEN)
+    CTRL3   = 0x03,  ///< Control register 3 (sync, data format)
+    CTRL4   = 0x04,  ///< Control register 4 (GPIO direction/state)
+    CTRL5   = 0x05,  ///< Control register 5 (calibration control)
     DATA    = 0x06,  ///< 24-bit conversion data
     SOC     = 0x07,  ///< System offset calibration
     SGC     = 0x09,  ///< System gain calibration

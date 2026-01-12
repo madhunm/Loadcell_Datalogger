@@ -129,8 +129,8 @@ The PGA gain affects input range:
 
 | Gain | Input Range | For Your Loadcell |
 |------|-------------|-------------------|
-| 1x   | ±2.5V | Way too large |
-| 128x | ±19.5mV | **Correct for 3.3V excitation** |
+| 1x   | ±3.3V | Way too large |
+| 128x | ±25.78mV | **Correct for 3.3V excitation** |
 
 ### Check CTRL2 Register
 
@@ -212,7 +212,7 @@ Loadcell → AIN+/AIN- → PGA (128x) → ADC (24-bit) → SPI → ESP32 → Rin
    - Calculated: input × 128
 
 3. **ADC counts**: From `/api/diag/adc` or serial
-   - Formula: `counts = (Vin × 128) / (2.5V / 2^23)`
+   - Formula: `counts = (Vin × 128) / (3.3V / 2^23)`
 
 ---
 
@@ -224,8 +224,8 @@ Loadcell → AIN+/AIN- → PGA (128x) → ADC (24-bit) → SPI → ESP32 → Rin
 // In max11270.cpp:
 float rawToMicrovolts(int32_t raw) {
     uint8_t gain = 128;  // PGA gain
-    float fullScale = 2.5 / gain;  // = 0.01953125V
-    float resolution = fullScale / (1 << 23);  // = 2.33 nV/count
+    float fullScale = 3.3 / gain;  // = 0.02578125V
+    float resolution = fullScale / (1 << 23);  // = 3.07 nV/count
     return raw * resolution * 1000000.0f;  // Convert to µV
 }
 ```
@@ -235,8 +235,8 @@ float rawToMicrovolts(int32_t raw) {
 | Raw ADC | Expected µV | Calculated |
 |---------|-------------|------------|
 | 0 | 0 | 0 |
-| 1,000,000 | 2328.3 | Check! |
-| 8,388,607 | 19531.2 | Full scale |
+| 1,000,000 | 3073.4 | Check! |
+| 8,388,607 | 25781.2 | Full scale |
 
 ---
 
@@ -368,4 +368,5 @@ Run these tests in order:
 ✅ Voltage readings match expected values (±10%)
 ✅ Calibration saves and loads correctly
 ✅ Continuous mode runs without dropped samples
+
 

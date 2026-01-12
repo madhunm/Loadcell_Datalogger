@@ -68,8 +68,8 @@ namespace {
     volatile uint32_t lastTimestampUs = 0;
     volatile uint32_t lastDrdyTimeUs = 0;
     
-    // Reference voltage (internal 2.5V)
-    constexpr float VREF = 2.5f;
+    // Reference voltage (external 3.3V from loadcell excitation)
+    constexpr float VREF = 3.3f;
     constexpr int32_t ADC_MAX = (1 << 23) - 1;  // 8388607
     
     // Read command for DATA register
@@ -473,12 +473,16 @@ bool isPresent() {
 void setGain(Gain gain) {
     currentConfig.gain = gain;
     
-    // CTRL2[2:0] = PGAG[2:0] (PGA gain)
-    uint32_t ctrl2 = readRegisterInternal(Register::CTRL2, 1);
-    ctrl2 = (ctrl2 & 0xF8) | static_cast<uint8_t>(gain);
+    // CTRL2: PGAEN (bit 3) must be enabled, PGAG[2:0] = gain setting
+    // Bits [7:6] DGAIN = 00 (digital gain x1)
+    // Bit 5 BUFEN = 0 (buffer off)
+    // Bit 4 LPMODE = 0 (normal power)
+    // Bit 3 PGAEN = 1 (PGA ENABLED - critical!)
+    // Bits [2:0] PGAG = gain
+    uint8_t ctrl2 = 0x08 | static_cast<uint8_t>(gain);  // 0x08 = PGAEN enabled
     writeRegisterInternal(Register::CTRL2, ctrl2, 1);
     
-    Serial.printf("[MAX11270] Gain set to %dx\n", gainToMultiplier(gain));
+    Serial.printf("[MAX11270] Gain set to %dx (CTRL2=0x%02X)\n", gainToMultiplier(gain), ctrl2);
 }
 
 Gain getGain() {
@@ -497,19 +501,42 @@ Rate getSampleRate() {
 void configure(const Config& config) {
     currentConfig = config;
     
-    // Set PGA gain in CTRL2
-    setGain(config.gain);
-    
-    // Configure CTRL1 for continuous mode preparation
+    // CTRL1: Conversion mode configuration
+    // Bit 7: SCYCLE (0 = continuous after command)
+    // Bit 6: FORMAT (0 = two's complement)
+    // Bit 5: U/B (0 = bipolar ±VREF range)
+    // Bits [4:3]: PD (00 = normal power)
+    // Bit 2: SYNCMODE (0 = no sync)
+    // Bit 1: EXTCK (0 = internal clock)
+    // Bit 0: CONTSC (don't care when SCYCLE=0)
     uint8_t ctrl1 = 0x00;
     if (config.singleCycle) {
-        ctrl1 |= 0x80;
+        ctrl1 |= 0x80;  // SCYCLE = 1
     }
     writeRegisterInternal(Register::CTRL1, ctrl1, 1);
     
-    // Configure CTRL3 for sync and calibration
-    uint8_t ctrl3 = 0x00;  // All calibrations enabled
+    // CTRL2: PGA configuration (handled by setGain)
+    setGain(config.gain);
+    
+    // CTRL3: Sync and data format
+    // Bit 6: ENMSYNC = 1 (master sync enabled - default)
+    // Bit 5: MODBITS = 1 (modulator bits in status)
+    // Bit 2: DATA32 = 0 (24-bit data reads)
+    // Other bits: reserved defaults
+    uint8_t ctrl3 = 0x61;
     writeRegisterInternal(Register::CTRL3, ctrl3, 1);
+    
+    // CTRL5: Calibration control
+    // Bits [7:6]: CAL = 00 (self-cal mode when CAL command issued)
+    // Bit 3: NOSYSG = 1 (ignore system gain cal)
+    // Bit 2: NOSYSO = 1 (ignore system offset cal)
+    // Bit 1: NOSCG = 0 (USE self-cal gain)
+    // Bit 0: NOSCO = 0 (USE self-cal offset)
+    uint8_t ctrl5 = 0x0C;
+    writeRegisterInternal(Register::CTRL5, ctrl5, 1);
+    
+    Serial.printf("[MAX11270] Configured: CTRL1=0x%02X, CTRL3=0x%02X, CTRL5=0x%02X\n",
+                  ctrl1, ctrl3, ctrl5);
 }
 
 int32_t readSingle(uint32_t timeout_ms) {

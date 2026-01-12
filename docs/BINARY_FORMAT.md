@@ -67,8 +67,8 @@ High-rate loadcell samples from the MAX11270 24-bit ADC.
 
 **Converting raw ADC to physical units:**
 ```python
-# ADC to microvolts (assuming Vref=2.5V, 24-bit, gain=1)
-uV = rawAdc * (2500000.0 / 8388608.0) / gain
+# ADC to microvolts (assuming Vref=3.3V, 24-bit, gain=1)
+uV = rawAdc * (3300000.0 / 8388608.0) / gain
 
 # Microvolts to kg (requires calibration curve)
 kg = calibration.interpolate(uV)
