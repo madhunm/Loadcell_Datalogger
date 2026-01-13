@@ -213,15 +213,9 @@ float getTemperature() {
         return -128.0f;
     }
     
-    // Empirical calibration: raw=153 (0x99) at 25°C room temperature
-    // Formula: temp = (raw - 103) * 0.5
-    // This gives: (153 - 103) * 0.5 = 25°C
-    float temp = (tempReg - 103) * 0.5f;
-    
-    // Debug output (can be removed once verified)
-    Serial.printf("[RX8900] TEMP raw=0x%02X (%d), calc=%.1f°C\n", 
-                  tempReg, tempReg, temp);
-    
+    // Datasheet: 0x00 corresponds to -60°C, 0.5°C per LSB, unsigned up-count
+    // Formula: T = (raw * 0.5) - 60
+    float temp = (static_cast<float>(tempReg) * 0.5f) - 60.0f;
     return temp;
 }
 

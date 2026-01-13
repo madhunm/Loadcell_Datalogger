@@ -25,7 +25,8 @@ namespace Logger {
 /** @brief Logger configuration */
 struct Config {
     uint32_t adcRateHz;             // Target ADC sample rate (e.g., 64000)
-    uint32_t imuDecimation;         // IMU reads every N ADC samples (e.g., 64)
+    uint32_t logRateHz;             // Logged output rate after decimation (e.g., 500)
+    uint32_t imuDecimation;         // IMU reads every N ADC samples (derived from ADC rate)
     const char* outputDir;          // Output directory (e.g., "/data")
     bool autoFilename;              // Generate filename from timestamp
     const char* filename;           // Manual filename (if not auto)
@@ -39,13 +40,18 @@ struct Config {
     bool enableCrc32;               // Compute CRC32 (slight CPU cost)
     bool enableTempCompensation;    // Temperature drift correction
     float tempCoefficient;          // Temperature coefficient (ppm/degC)
+    
+    // Decimation / peak capture
+    uint32_t peakThresholdLsb;      // Peak-to-peak threshold for anomaly capture
+    bool enablePeakCapture;         // Enable/disable peak window logging
 };
 
 /** @brief Default configuration */
 inline Config defaultConfig() {
     return {
         .adcRateHz = 64000,
-        .imuDecimation = 64,
+        .logRateHz = 500,
+        .imuDecimation = 128,           // 64k / 128 ≈ 500 Hz target
         .outputDir = "/data",
         .autoFilename = true,
         .filename = nullptr,
@@ -56,7 +62,9 @@ inline Config defaultConfig() {
         .maxFileDurationSec = 0,        // No time limit by default
         .enableCrc32 = true,            // Enable CRC32 by default
         .enableTempCompensation = false,// Disabled until calibrated
-        .tempCoefficient = -0.0005f     // Default temp coeff (ppm/degC)
+        .tempCoefficient = -0.0005f,    // Default temp coeff (ppm/degC)
+        .peakThresholdLsb = 10000,      // Default peak-to-peak threshold (adjust in UI)
+        .enablePeakCapture = true
     };
 }
 

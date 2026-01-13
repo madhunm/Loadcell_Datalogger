@@ -31,6 +31,8 @@ namespace {
     WriteBuffer bufferB = {nullptr, 0, 0, false, false};
     WriteBuffer* activeBuffer = nullptr;
     WriteBuffer* pendingBuffer = nullptr;
+    size_t backpressureWaitMs = 2;    // wait a few ms before dropping
+    size_t backpressureMaxLoops = 3;  // total wait ~6 ms default
     
     // Double buffer control
     bool doubleBufferEnabled = false;
@@ -81,7 +83,10 @@ namespace {
                 // Write the buffer
                 if (bufToWrite && bufToWrite->used > 0 && bufferedFileOpen) {
                     size_t bytesToWrite = bufToWrite->used;
-                    size_t written = bufferedFile.write(bufToWrite->data, bytesToWrite);
+            uint32_t startUs = micros();
+            size_t written = bufferedFile.write(bufToWrite->data, bytesToWrite);
+            uint32_t latencyUs = micros() - startUs;
+            recordWriteLatency(latencyUs);
                     
                     if (written == bytesToWrite) {
                         stats.bytesWritten += written;
@@ -113,12 +118,19 @@ namespace {
     bool swapBuffers() {
         if (!doubleBufferEnabled) return false;
         
-        // Check if pending buffer is still writing
+        // Check if pending buffer is still writing; apply backpressure before dropping
         if (pendingBuffer && (pendingBuffer->ready || pendingBuffer->writing)) {
-            // Can't swap - pending buffer not done
-            droppedBuffers++;
-            stats.droppedBuffers++;
-            return false;
+            for (size_t i = 0; i < backpressureMaxLoops; ++i) {
+                vTaskDelay(pdMS_TO_TICKS(backpressureWaitMs));
+                if (!(pendingBuffer->ready || pendingBuffer->writing)) {
+                    break;
+                }
+            }
+            if (pendingBuffer && (pendingBuffer->ready || pendingBuffer->writing)) {
+                droppedBuffers++;
+                stats.droppedBuffers++;
+                return false;
+            }
         }
         
         // Swap active and pending
@@ -173,16 +185,30 @@ bool mount(bool formatIfFailed) {
     
     SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0, PIN_SD_D1, PIN_SD_D2, PIN_SD_D3);
     
-    // Try 4-bit mode
-    if (!SD_MMC.begin("/sdcard", false, formatIfFailed)) {
-        ESP_LOGW(TAG, "4-bit mode failed, trying 1-bit");
-        if (!SD_MMC.begin("/sdcard", true, formatIfFailed)) {
-            ESP_LOGE(TAG, "Mount failed");
-            return false;
+    const int maxAttempts = 3;
+    bool mountedOk = false;
+    for (int attempt = 1; attempt <= maxAttempts && !mountedOk; ++attempt) {
+        bool oneBit = false;
+        if (!SD_MMC.begin("/sdcard", false, formatIfFailed)) {
+            ESP_LOGW(TAG, "4-bit mode failed (attempt %d), trying 1-bit", attempt);
+            oneBit = true;
+            mountedOk = SD_MMC.begin("/sdcard", true, formatIfFailed);
+        } else {
+            mountedOk = true;
         }
-        ESP_LOGI(TAG, "Mounted in 1-bit mode");
-    } else {
-        ESP_LOGI(TAG, "Mounted in 4-bit mode");
+        
+        if (mountedOk) {
+            ESP_LOGI(TAG, "Mounted in %s mode (attempt %d)", oneBit ? "1-bit" : "4-bit", attempt);
+            break;
+        }
+        
+        // Small delay before next attempt
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+    
+    if (!mountedOk) {
+        ESP_LOGE(TAG, "Mount failed after retries");
+        return false;
     }
     
     mounted = true;
@@ -403,12 +429,36 @@ bool initDoubleBuffer(const DoubleBufferConfig& config) {
     }
     
     if (!bufferA.data || !bufferB.data) {
-        ESP_LOGE(TAG, "Buffer allocation failed");
+        ESP_LOGE(TAG, "Buffer allocation failed @%zu bytes, trying smaller buffer", bufSize);
         if (bufferA.data) free(bufferA.data);
         if (bufferB.data) free(bufferB.data);
-        bufferA.data = nullptr;
-        bufferB.data = nullptr;
-        return false;
+        bufferA.data = bufferB.data = nullptr;
+        
+        size_t smaller = bufSize / 2;
+        if (smaller >= 4096) {  // don't go too small
+            if (config.usesPSRAM && psramFound()) {
+                bufferA.data = (uint8_t*)ps_malloc(smaller);
+                bufferB.data = (uint8_t*)ps_malloc(smaller);
+            } else {
+                bufferA.data = (uint8_t*)malloc(smaller);
+                bufferB.data = (uint8_t*)malloc(smaller);
+            }
+            if (bufferA.data && bufferB.data) {
+                ESP_LOGW(TAG, "Allocated smaller buffers: %zu bytes x2", smaller);
+                bufSize = smaller;
+            } else {
+                ESP_LOGE(TAG, "Smaller buffer allocation failed");
+                if (bufferA.data) free(bufferA.data);
+                if (bufferB.data) free(bufferB.data);
+                bufferA.data = bufferB.data = nullptr;
+                doubleBufferEnabled = false;
+                return false;
+            }
+        } else {
+            ESP_LOGE(TAG, "Buffer too small to continue");
+            doubleBufferEnabled = false;
+            return false;
+        }
     }
     
     // Initialize buffer structures

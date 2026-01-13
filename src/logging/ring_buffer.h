@@ -33,6 +33,97 @@ struct ADCSample {
 };
 
 /**
+ * @brief Decimation accumulator for Min/Max/Mean windows
+ */
+struct DecimationAccumulator {
+    int64_t sum = 0;
+    int32_t min = INT32_MAX;
+    int32_t max = INT32_MIN;
+    uint32_t windowStartUs = 0;
+    uint16_t count = 0;
+    
+    void reset(uint32_t timestampUs = 0) {
+        sum = 0;
+        min = INT32_MAX;
+        max = INT32_MIN;
+        windowStartUs = timestampUs;
+        count = 0;
+    }
+    
+    void accumulate(int32_t sample, uint32_t timestampUs) {
+        if (count == 0) {
+            windowStartUs = timestampUs;
+        }
+        sum += sample;
+        if (sample < min) min = sample;
+        if (sample > max) max = sample;
+        count++;
+    }
+    
+    bool isComplete(uint16_t windowSize) const {
+        return count >= windowSize;
+    }
+    
+    struct Result {
+        uint32_t windowStartUs;
+        int32_t mean;
+        int32_t min;
+        int32_t max;
+        uint16_t count;
+    };
+    
+    Result finalize() const {
+        Result r;
+        r.windowStartUs = windowStartUs;
+        r.mean = (count > 0) ? static_cast<int32_t>(sum / count) : 0;
+        r.min = (count > 0) ? min : 0;
+        r.max = (count > 0) ? max : 0;
+        r.count = count;
+        return r;
+    }
+};
+
+/**
+ * @brief Rolling peak capture buffer for raw samples + timestamps
+ * @tparam N Buffer size (number of samples)
+ */
+template<size_t N>
+struct PeakWindow {
+    static_assert(N > 0, "PeakWindow size must be > 0");
+    
+    int32_t samples[N] = {};
+    uint32_t timestamps[N] = {};
+    size_t writeIdx = 0;
+    bool filled = false;
+    
+    void push(int32_t sample, uint32_t timestampUs) {
+        samples[writeIdx] = sample;
+        timestamps[writeIdx] = timestampUs;
+        writeIdx = (writeIdx + 1) % N;
+        if (writeIdx == 0) filled = true;
+    }
+    
+    size_t size() const {
+        return filled ? N : writeIdx;
+    }
+    
+    size_t startIndex() const {
+        return filled ? writeIdx : 0;
+    }
+    
+    /**
+     * @brief Compute trigger offset relative to chronological start
+     * @param triggerIndex Index (0..N-1) where trigger occurred
+     */
+    uint16_t computeTriggerOffset(size_t triggerIndex) const {
+        size_t sz = size();
+        if (sz == 0) return 0;
+        size_t start = startIndex();
+        return static_cast<uint16_t>((triggerIndex + N - start) % sz);
+    }
+};
+
+/**
  * @brief Lock-free SPSC ring buffer for ADC samples
  * 
  * Thread-safe for single producer (ISR) and single consumer (task).

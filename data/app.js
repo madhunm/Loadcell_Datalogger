@@ -79,6 +79,30 @@ const API = {
 };
 
 // ============================================================================
+// IMU API Helpers
+// ============================================================================
+
+const IMU = {
+    async fetchConfig() {
+        try {
+            return await API.get('/api/imu/config');
+        } catch (e) {
+            console.error('[IMU] Failed to fetch config', e);
+            return null;
+        }
+    },
+    
+    async saveConfig(cfg) {
+        try {
+            return await API.post('/api/imu/config', cfg);
+        } catch (e) {
+            console.error('[IMU] Failed to save config', e);
+            throw e;
+        }
+    }
+};
+
+// ============================================================================
 // Mode Manager
 // ============================================================================
 

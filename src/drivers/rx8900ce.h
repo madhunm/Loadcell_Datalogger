@@ -48,7 +48,9 @@ namespace Reg {
     constexpr uint8_t CONTROL     = 0x0F;
     
     // Additional registers
-    constexpr uint8_t TEMP        = 0x17;  // Temperature (2's complement, 0.25°C/LSB, offset -60°C at 0x00)
+    // Temperature register: Empirically calibrated as (raw - 103) * 0.5
+    // where raw=103 corresponds to 0°C and resolution is 0.5°C/LSB
+    constexpr uint8_t TEMP        = 0x17;
     constexpr uint8_t BACKUP      = 0x18;
 }
 

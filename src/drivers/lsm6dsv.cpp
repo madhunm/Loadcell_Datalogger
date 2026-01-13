@@ -172,13 +172,11 @@ bool isPresent() {
 bool configureAccel(ODR odr, AccelScale scale) {
     if (!initialized) return false;
     
-    // LSM6DSV16X CTRL1 register format:
-    // Bits 3:0 = ODR_XL[3:0] - Output data rate
-    // Bits 6:4 = OP_MODE_XL[2:0] - Operating mode (0=high-performance)
-    // Bit 7 = (reserved)
-    uint8_t ctrl1 = static_cast<uint8_t>(odr) & 0x0F;  // ODR in low nibble
+    // LSM6DSV (LSM6DSVTR): ODR in [7:4], FS_XL in [3:2]
+    uint8_t ctrl1 = (static_cast<uint8_t>(odr) << 4) & 0xF0;
+    ctrl1 |= (static_cast<uint8_t>(scale) & 0x03) << 2;  // FS_XL bits [3:2]
     
-    ESP_LOGI(TAG, "Accel config: ODR=0x%X, Scale=0x%X, CTRL1=0x%02X", 
+    ESP_LOGI(TAG, "Accel config: ODR=0x%X, Scale=0x%X, CTRL1=0x%02X",
              static_cast<uint8_t>(odr), static_cast<uint8_t>(scale), ctrl1);
     
     if (!writeRegister(Reg::CTRL1, ctrl1)) {
@@ -186,12 +184,7 @@ bool configureAccel(ODR odr, AccelScale scale) {
         return false;
     }
     
-    // LSM6DSV16X: Full scale is in CTRL8 bits[1:0]
-    uint8_t ctrl8 = static_cast<uint8_t>(scale) & 0x03;
-    if (!writeRegister(Reg::CTRL8, ctrl8)) {
-        ESP_LOGE(TAG, "Failed to write CTRL8!");
-        return false;
-    }
+    // For LSM6DSVTR, FS_XL is in CTRL1[3:2]; CTRL8 FS bits are not used here
     
     // Small delay for configuration to take effect
     delay(5);
@@ -211,23 +204,16 @@ bool configureAccel(ODR odr, AccelScale scale) {
 bool configureGyro(ODR odr, GyroScale scale) {
     if (!initialized) return false;
     
-    // LSM6DSV16X CTRL2 register format:
-    // Bits 3:0 = ODR_G[3:0] - Output data rate
-    // Bits 6:4 = OP_MODE_G[2:0] - Operating mode (0=high-performance)
-    // Bit 7 = (reserved)
-    uint8_t ctrl2 = static_cast<uint8_t>(odr) & 0x0F;  // ODR in low nibble
+    // LSM6DSVTR: ODR in [7:4], FS_G in [3:1], bit0 reserved
+    uint8_t ctrl2 = (static_cast<uint8_t>(odr) << 4) & 0xF0;
+    ctrl2 |= (static_cast<uint8_t>(scale) & 0x07) << 1;
     
     if (!writeRegister(Reg::CTRL2, ctrl2)) {
         ESP_LOGE(TAG, "Failed to write CTRL2!");
         return false;
     }
     
-    // LSM6DSV16X: Gyro full scale is in CTRL6 bits[3:0]
-    uint8_t ctrl6 = static_cast<uint8_t>(scale) & 0x0F;
-    if (!writeRegister(Reg::CTRL6, ctrl6)) {
-        ESP_LOGE(TAG, "Failed to write CTRL6!");
-        return false;
-    }
+    // CTRL6 not used for FS_G on LSM6DSVTR in this mapping
     
     ESP_LOGI(TAG, "Gyro config: CTRL2=0x%02X (ODR=%d), CTRL6=0x%02X (FS=%d)",
              ctrl2, ctrl2 & 0x0F, ctrl6, ctrl6 & 0x0F);

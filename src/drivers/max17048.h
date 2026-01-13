@@ -42,17 +42,40 @@ namespace Reg {
 }
 
 // ============================================================================
-// Status Bits
+// Status Register Bits (address 0x1A)
 // ============================================================================
 
 namespace StatusBits {
-    constexpr uint8_t RI    = 0x01;  // Reset indicator
-    constexpr uint8_t VH    = 0x02;  // Voltage high alert
-    constexpr uint8_t VL    = 0x04;  // Voltage low alert
-    constexpr uint8_t VR    = 0x08;  // Voltage reset alert
-    constexpr uint8_t HD    = 0x10;  // SOC 1% change alert
-    constexpr uint8_t SC    = 0x20;  // SOC change alert
-    constexpr uint8_t ENVR  = 0x40;  // Enable voltage reset alert
+    constexpr uint16_t RI    = 0x0100;  // Reset indicator (bit 8, in MSB)
+    constexpr uint16_t VH    = 0x0200;  // Voltage high alert
+    constexpr uint16_t VL    = 0x0400;  // Voltage low alert
+    constexpr uint16_t VR    = 0x0800;  // Voltage reset alert
+    constexpr uint16_t HD    = 0x1000;  // SOC 1% change alert
+    constexpr uint16_t SC    = 0x2000;  // SOC change alert
+    constexpr uint16_t ENVR  = 0x4000;  // Enable voltage reset alert
+    
+    // Mask for all clearable alert bits
+    constexpr uint16_t ALERT_MASK = VH | VL | VR | HD | SC;
+}
+
+// ============================================================================
+// CONFIG Register Bits (address 0x0C)
+// ============================================================================
+
+namespace ConfigBits {
+    constexpr uint16_t SLEEP       = 0x0080;  // Sleep mode enable (bit 7 of LSB)
+    constexpr uint16_t ALSC        = 0x0040;  // Alert on SOC change
+    constexpr uint16_t ALRT        = 0x0020;  // Alert status (read-only)
+    constexpr uint16_t ATHD_MASK   = 0x001F;  // Alert threshold mask (bits 4:0)
+}
+
+// ============================================================================
+// MODE Register Commands (address 0x06)
+// ============================================================================
+
+namespace ModeCmd {
+    constexpr uint16_t QUICK_START = 0x4000;  // Trigger quick-start algorithm
+    constexpr uint16_t ENSLEEP     = 0x2000;  // Enable sleep mode
 }
 
 // ============================================================================

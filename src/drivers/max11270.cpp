@@ -11,6 +11,7 @@
 
 #include "max11270.h"
 #include "../pin_config.h"
+#include "../debug_config.h"
 #include <atomic>
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
@@ -444,16 +445,10 @@ void reset() {
     }
     
     // Run self-calibration for accurate readings
-    // Self-cal offset (command 0x10)
-    Serial.println("[MAX11270] Running self-calibration...");
-    sendCommandInternal(0x10);
+    sendCommandInternal(0x10);  // Self-cal offset
     delay(200);  // Wait for calibration (~100ms typical)
-    
-    // Self-cal gain (command 0x20)
-    sendCommandInternal(0x20);
+    sendCommandInternal(0x20);  // Self-cal gain
     delay(200);
-    
-    Serial.println("[MAX11270] Reset and self-cal complete");
 }
 
 bool isPresent() {
@@ -520,10 +515,10 @@ void configure(const Config& config) {
     
     // CTRL3: Sync and data format
     // Bit 6: ENMSYNC = 1 (master sync enabled - default)
-    // Bit 5: MODBITS = 1 (modulator bits in status)
+    // Bit 5: MODBITS = 0 (modulator output disabled per datasheet default)
     // Bit 2: DATA32 = 0 (24-bit data reads)
     // Other bits: reserved defaults
-    uint8_t ctrl3 = 0x61;
+    uint8_t ctrl3 = 0x41;
     writeRegisterInternal(Register::CTRL3, ctrl3, 1);
     
     // CTRL5: Calibration control
@@ -709,21 +704,36 @@ void resetStatistics() {
 }
 
 float readTemperature() {
-    // MAX11270 temperature sensor - placeholder
+    // MAX11270 internal temperature sensor
+    // Note: Reading temperature requires stopping continuous mode as it uses
+    // special GPIO pin configuration. For now, return a placeholder if running.
+    
+    if (continuousRunning) {
+        // Cannot read temperature during continuous acquisition
+        // Return last known or estimated value
+        return 25.0f;
+    }
+    
+    // The MAX11270 can use GPIO0/GPIO1 as temperature sensor inputs
+    // This requires configuring CTRL4 and performing a special conversion.
+    // For production, this would need:
+    // 1. Configure CTRL4 for temperature mode
+    // 2. Perform single conversion
+    // 3. Convert raw value to temperature
+    // 4. Restore normal configuration
+    
+    // For now, return room temperature placeholder
+    // TODO: Implement full temperature reading if needed
     return 25.0f;
 }
 
 bool selfCalibrate() {
-    Serial.println("[MAX11270] Starting self-calibration...");
-    
     sendCommandInternal(0xA0);  // Self-cal command
     
     if (!waitForReady(200)) {
-        Serial.println("[MAX11270] Self-calibration timeout!");
         return false;
     }
     
-    Serial.println("[MAX11270] Self-calibration complete");
     return true;
 }
 

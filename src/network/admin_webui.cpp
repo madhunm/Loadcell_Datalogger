@@ -28,6 +28,7 @@
 #include <SD_MMC.h>
 #include <esp_ota_ops.h>
 #include <freertos/FreeRTOS.h>
+#include <Preferences.h>
 #include <freertos/task.h>
 #include <SPIFFS.h>
 #include <cmath>
@@ -1057,6 +1058,280 @@ namespace {
     }
     
     // ========================================================================
+    // ADC Configuration Endpoint
+    // ========================================================================
+    
+    /**
+     * @brief Handle POST /api/adc/config - Set ADC gain and sample rate
+     * 
+     * JSON body: {"gain": 1-128, "rate": 1920-64000}
+     * Both fields optional - only provided values are changed.
+     */
+    esp_err_t handlePostAdcConfig(httpd_req_t* req) {
+        // Check if logging is active - can't change config while logging
+        if (Logger::isRunning()) {
+            sendError(req, "Cannot change ADC config while logging");
+            return ESP_OK;
+        }
+        
+        // Read POST body
+        char body[256];
+        int len = httpd_req_recv(req, body, sizeof(body) - 1);
+        if (len <= 0) {
+            sendError(req, "No body");
+            return ESP_OK;
+        }
+        body[len] = '\0';
+        
+        bool changed = false;
+        int gain = 0;
+        int rate = 0;
+        
+        // Parse gain if provided
+        if (jsonGetInt(body, "gain", &gain)) {
+            // Validate gain value (must be power of 2, 1-128)
+            MAX11270::Gain newGain;
+            switch (gain) {
+                case 1:   newGain = MAX11270::Gain::X1; break;
+                case 2:   newGain = MAX11270::Gain::X2; break;
+                case 4:   newGain = MAX11270::Gain::X4; break;
+                case 8:   newGain = MAX11270::Gain::X8; break;
+                case 16:  newGain = MAX11270::Gain::X16; break;
+                case 32:  newGain = MAX11270::Gain::X32; break;
+                case 64:  newGain = MAX11270::Gain::X64; break;
+                case 128: newGain = MAX11270::Gain::X128; break;
+                default:
+                    sendError(req, "Invalid gain (must be 1,2,4,8,16,32,64,128)");
+                    return ESP_OK;
+            }
+            
+            MAX11270::setGain(newGain);
+            
+            // Update CalibrationInterp with new gain
+            CalibrationInterp::setADCConfig(
+                3300.0f,  // Vref in mV
+                24,       // ADC bits
+                gain      // New gain value
+            );
+            
+            changed = true;
+            ESP_LOGI(TAG, "ADC gain set to %dx", gain);
+        }
+        
+        // Parse sample rate if provided
+        if (jsonGetInt(body, "rate", &rate)) {
+            MAX11270::Rate newRate;
+            switch (rate) {
+                case 2:     newRate = MAX11270::Rate::SPS_1_9; break;
+                case 4:     newRate = MAX11270::Rate::SPS_3_9; break;
+                case 8:     newRate = MAX11270::Rate::SPS_7_8; break;
+                case 16:    newRate = MAX11270::Rate::SPS_15_6; break;
+                case 31:    newRate = MAX11270::Rate::SPS_31_2; break;
+                case 63:    newRate = MAX11270::Rate::SPS_62_5; break;
+                case 125:   newRate = MAX11270::Rate::SPS_125; break;
+                case 250:   newRate = MAX11270::Rate::SPS_250; break;
+                case 500:   newRate = MAX11270::Rate::SPS_500; break;
+                case 1000:  newRate = MAX11270::Rate::SPS_1000; break;
+                case 2000:  newRate = MAX11270::Rate::SPS_2000; break;
+                case 4000:  newRate = MAX11270::Rate::SPS_4000; break;
+                case 8000:  newRate = MAX11270::Rate::SPS_8000; break;
+                case 16000: newRate = MAX11270::Rate::SPS_16000; break;
+                case 32000: newRate = MAX11270::Rate::SPS_32000; break;
+                case 64000: newRate = MAX11270::Rate::SPS_64000; break;
+                default:
+                    sendError(req, "Invalid sample rate");
+                    return ESP_OK;
+            }
+            
+            MAX11270::setSampleRate(newRate);
+            changed = true;
+            ESP_LOGI(TAG, "ADC sample rate set to %d sps", rate);
+        }
+        
+        if (!changed) {
+            sendError(req, "No valid parameters provided");
+            return ESP_OK;
+        }
+        
+        // Save to NVS for persistence across reboots
+        Preferences prefs;
+        if (prefs.begin("adc_config", false)) {
+            prefs.putUChar("gain", static_cast<uint8_t>(MAX11270::getGain()));
+            prefs.putUChar("rate", static_cast<uint8_t>(MAX11270::getSampleRate()));
+            prefs.end();
+            ESP_LOGI(TAG, "ADC config saved to NVS");
+        }
+        
+        // Return current config
+        uint8_t currentGain = MAX11270::gainToMultiplier(MAX11270::getGain());
+        uint32_t currentRate = MAX11270::rateToHz(MAX11270::getSampleRate());
+        
+        snprintf(jsonBuf, sizeof(jsonBuf),
+            "{\"success\":true,\"config\":{\"gain\":%d,\"rate_hz\":%lu}}",
+            currentGain, currentRate);
+        sendJson(req, jsonBuf);
+        return ESP_OK;
+    }
+
+    // ============================================================================
+    // IMU Configuration Endpoint
+    // ============================================================================
+
+    static int odrToHz(LSM6DSV::ODR odr) {
+        switch (odr) {
+            case LSM6DSV::ODR::Hz1_875: return 2;
+            case LSM6DSV::ODR::Hz7_5:   return 8;
+            case LSM6DSV::ODR::Hz15:    return 15;
+            case LSM6DSV::ODR::Hz30:    return 30;
+            case LSM6DSV::ODR::Hz60:    return 60;
+            case LSM6DSV::ODR::Hz120:   return 120;
+            case LSM6DSV::ODR::Hz240:   return 240;
+            case LSM6DSV::ODR::Hz480:   return 480;
+            case LSM6DSV::ODR::Hz960:   return 960;
+            case LSM6DSV::ODR::Hz1920:  return 1920;
+            case LSM6DSV::ODR::Hz3840:  return 3840;
+            case LSM6DSV::ODR::Hz7680:  return 7680;
+            default: return 0;
+        }
+    }
+
+    static LSM6DSV::ODR hzToOdr(int hz) {
+        switch (hz) {
+            case 2:    return LSM6DSV::ODR::Hz1_875;
+            case 8:    return LSM6DSV::ODR::Hz7_5;
+            case 15:   return LSM6DSV::ODR::Hz15;
+            case 30:   return LSM6DSV::ODR::Hz30;
+            case 60:   return LSM6DSV::ODR::Hz60;
+            case 120:  return LSM6DSV::ODR::Hz120;
+            case 240:  return LSM6DSV::ODR::Hz240;
+            case 480:  return LSM6DSV::ODR::Hz480;
+            case 960:  return LSM6DSV::ODR::Hz960;
+            case 1920: return LSM6DSV::ODR::Hz1920;
+            case 3840: return LSM6DSV::ODR::Hz3840;
+            case 7680: return LSM6DSV::ODR::Hz7680;
+            default:   return LSM6DSV::ODR::PowerDown;
+        }
+    }
+
+    static int accelScaleToG(LSM6DSV::AccelScale s) {
+        switch (s) {
+            case LSM6DSV::AccelScale::G2: return 2;
+            case LSM6DSV::AccelScale::G4: return 4;
+            case LSM6DSV::AccelScale::G8: return 8;
+            case LSM6DSV::AccelScale::G16: return 16;
+            default: return 0;
+        }
+    }
+
+    static int gyroScaleToDps(LSM6DSV::GyroScale s) {
+        switch (s) {
+            case LSM6DSV::GyroScale::DPS125:  return 125;
+            case LSM6DSV::GyroScale::DPS250:  return 250;
+            case LSM6DSV::GyroScale::DPS500:  return 500;
+            case LSM6DSV::GyroScale::DPS1000: return 1000;
+            case LSM6DSV::GyroScale::DPS2000: return 2000;
+            default: return 0;
+        }
+    }
+
+    esp_err_t handleGetImuConfig(httpd_req_t* req) {
+        bool present = LSM6DSV::isPresent();
+        auto cfg = LSM6DSV::getConfig();
+
+        snprintf(jsonBuf, sizeof(jsonBuf),
+                 "{\"present\":%s,\"odr_hz\":%d,\"accel_range_g\":%d,\"gyro_dps\":%d}",
+                 present ? "true" : "false",
+                 odrToHz(cfg.accelODR),
+                 accelScaleToG(cfg.accelScale),
+                 gyroScaleToDps(cfg.gyroScale));
+        sendJson(req, jsonBuf);
+        return ESP_OK;
+    }
+
+    /**
+     * @brief Handle POST /api/imu/config - Set IMU ODR and scales
+     * JSON body: { "accel_range":2|4|8|16, "gyro_dps":125|250|500|1000|2000, "odr":60|120|240|480|960|1920|3840|7680 }
+     * All fields optional; unchanged if omitted.
+     */
+    esp_err_t handlePostImuConfig(httpd_req_t* req) {
+        if (Logger::isRunning()) {
+            sendError(req, "Cannot change IMU config while logging");
+            return ESP_OK;
+        }
+
+        char body[256];
+        int len = httpd_req_recv(req, body, sizeof(body) - 1);
+        if (len <= 0) {
+            sendError(req, "No body");
+            return ESP_OK;
+        }
+        body[len] = '\0';
+
+        // Current config as baseline
+        auto cfg = LSM6DSV::getConfig();
+        bool changed = false;
+
+        int accelRange = 0;
+        if (jsonGetInt(body, "accel_range", &accelRange)) {
+            switch (accelRange) {
+                case 2:  cfg.accelScale = LSM6DSV::AccelScale::G2; break;
+                case 4:  cfg.accelScale = LSM6DSV::AccelScale::G4; break;
+                case 8:  cfg.accelScale = LSM6DSV::AccelScale::G8; break;
+                case 16: cfg.accelScale = LSM6DSV::AccelScale::G16; break;
+                default:
+                    sendError(req, "Invalid accel_range (2,4,8,16)");
+                    return ESP_OK;
+            }
+            changed = true;
+        }
+
+        int gyroDps = 0;
+        if (jsonGetInt(body, "gyro_dps", &gyroDps)) {
+            switch (gyroDps) {
+                case 125:  cfg.gyroScale = LSM6DSV::GyroScale::DPS125; break;
+                case 250:  cfg.gyroScale = LSM6DSV::GyroScale::DPS250; break;
+                case 500:  cfg.gyroScale = LSM6DSV::GyroScale::DPS500; break;
+                case 1000: cfg.gyroScale = LSM6DSV::GyroScale::DPS1000; break;
+                case 2000: cfg.gyroScale = LSM6DSV::GyroScale::DPS2000; break;
+                default:
+                    sendError(req, "Invalid gyro_dps (125,250,500,1000,2000)");
+                    return ESP_OK;
+            }
+            changed = true;
+        }
+
+        int odrHz = 0;
+        if (jsonGetInt(body, "odr", &odrHz)) {
+            auto newOdr = hzToOdr(odrHz);
+            if (newOdr == LSM6DSV::ODR::PowerDown) {
+                sendError(req, "Invalid odr");
+                return ESP_OK;
+            }
+            cfg.accelODR = newOdr;
+            cfg.gyroODR = newOdr;
+            changed = true;
+        }
+
+        if (!changed) {
+            sendError(req, "No valid fields provided");
+            return ESP_OK;
+        }
+
+        if (!LSM6DSV::configure(cfg.accelODR, cfg.accelScale, cfg.gyroScale)) {
+            sendError(req, "Failed to apply IMU config", 500);
+            return ESP_OK;
+        }
+
+        snprintf(jsonBuf, sizeof(jsonBuf),
+                 "{\"success\":true,\"odr_hz\":%d,\"accel_range_g\":%d,\"gyro_dps\":%d}",
+                 odrToHz(cfg.accelODR),
+                 accelScaleToG(cfg.accelScale),
+                 gyroScaleToDps(cfg.gyroScale));
+        sendJson(req, jsonBuf);
+        return ESP_OK;
+    }
+    
+    // ========================================================================
     // Calibration Config Endpoints
     // ========================================================================
     
@@ -1365,9 +1640,17 @@ bool beginServer() {
         .handler = handleGetSDHealth, .user_ctx = nullptr };
     httpd_register_uri_handler(server, &get_sd_health);
     
+    httpd_uri_t get_imu_config = { .uri = "/api/imu/config", .method = HTTP_GET,
+        .handler = handleGetImuConfig, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &get_imu_config);
+    
     httpd_uri_t get_diag_adc = { .uri = "/api/diag/adc", .method = HTTP_GET,
         .handler = handleDiagAdc, .user_ctx = nullptr };
     httpd_register_uri_handler(server, &get_diag_adc);
+    
+    httpd_uri_t post_adc_config = { .uri = "/api/adc/config", .method = HTTP_POST,
+        .handler = handlePostAdcConfig, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &post_adc_config);
     
     httpd_uri_t get_config = { .uri = "/api/config", .method = HTTP_GET,
         .handler = handleGetConfig, .user_ctx = nullptr };
@@ -1401,6 +1684,10 @@ bool beginServer() {
     httpd_uri_t post_logging_stop = { .uri = "/api/logging/stop", .method = HTTP_POST,
         .handler = handleLoggingStop, .user_ctx = nullptr };
     httpd_register_uri_handler(server, &post_logging_stop);
+    
+    httpd_uri_t post_imu_config = { .uri = "/api/imu/config", .method = HTTP_POST,
+        .handler = handlePostImuConfig, .user_ctx = nullptr };
+    httpd_register_uri_handler(server, &post_imu_config);
     
     httpd_uri_t post_recover_session = { .uri = "/api/recovery/recover", .method = HTTP_POST,
         .handler = handlePostRecoverSession, .user_ctx = nullptr };

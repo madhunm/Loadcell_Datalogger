@@ -89,6 +89,10 @@ namespace {
     
     // ADC Ring buffer for this logger (128ms at 64ksps for SD latency headroom)
     ADCRingBufferLarge* adcBuffer = nullptr;
+    DecimationAccumulator decimator;
+    uint16_t decimationFactor = 128;  // 64k / 500
+    static constexpr uint16_t PEAK_WINDOW_SAMPLES = BinaryFormat::PeakEventRecord::MAX_SAMPLES;
+    PeakWindow<PEAK_WINDOW_SAMPLES> peakWindow;
     
     // IMU FIFO batch reading
     static constexpr size_t IMU_FIFO_BATCH_SIZE = 32;  // Read up to 32 samples per batch
@@ -114,13 +118,12 @@ namespace {
                           uint64_t* imuCount, uint32_t* sequence, uint32_t* crc);
     
     // Estimate file size for pre-allocation
-    size_t estimateFileSize(uint32_t adcRateHz, uint32_t imuDecimation, uint32_t durationSec) {
-        // ADC: each sample is 16 bytes (timestamp + value + sequence)
-        size_t adcBytes = (size_t)adcRateHz * durationSec * sizeof(BinaryFormat::ADCRecord);
+    size_t estimateFileSize(uint32_t logRateHz, uint32_t durationSec) {
+        // Decimated ADC: mean/min/max record (16 bytes)
+        size_t adcBytes = (size_t)logRateHz * durationSec * sizeof(BinaryFormat::DecimatedADCRecord);
         
-        // IMU: sampled at adcRateHz / imuDecimation, each record is 28 bytes
-        uint32_t imuRate = (imuDecimation > 0) ? (adcRateHz / imuDecimation) : 0;
-        size_t imuBytes = (size_t)imuRate * durationSec * sizeof(BinaryFormat::IMURecord);
+        // IMU: aligned 1:1 with decimated windows
+        size_t imuBytes = (size_t)logRateHz * durationSec * sizeof(BinaryFormat::IMURecord);
         
         // Header + footer + 10% margin for events and alignment
         size_t overhead = sizeof(BinaryFormat::FileHeader) + sizeof(BinaryFormat::FileFooter);
@@ -247,8 +250,7 @@ namespace {
         // Pre-allocate new file
         if (currentConfig.maxDurationSec > 0) {
             size_t estimatedSize = estimateFileSize(
-                currentConfig.adcRateHz,
-                currentConfig.imuDecimation,
+                currentConfig.logRateHz,
                 currentConfig.maxFileDurationSec > 0 ? currentConfig.maxFileDurationSec : currentConfig.maxDurationSec
             );
             preAllocateFile(logFile, estimatedSize);
@@ -278,7 +280,8 @@ namespace {
         header.init();
         
         header.adcSampleRateHz = currentConfig.adcRateHz;
-        header.imuSampleRateHz = currentConfig.adcRateHz / currentConfig.imuDecimation;
+        header.logRateHz = currentConfig.logRateHz;
+        header.imuSampleRateHz = currentConfig.logRateHz;  // One IMU sample per decimated window
         header.startTimestampUs = TimestampSync::getEpochMicros();
         
         if (loadcellId[0] != '\0') {
@@ -476,11 +479,10 @@ namespace {
         ADCSample sample;
         uint32_t processed = 0;
         
-        while (adcBuffer->pop(sample) && processed < 1000) {
+        while (adcBuffer->pop(sample) && processed < 2000) {
             // Check for ADC saturation
             if (abs(sample.raw) > ADC_SATURATION_THRESHOLD) {
                 saturationCount++;
-                // Log saturation event (throttled to avoid spam)
                 static uint32_t lastSatWarn = 0;
                 if (millis() - lastSatWarn > 1000) {
                     ESP_LOGW(TAG, "ADC saturation detected: %ld", sample.raw);
@@ -495,68 +497,102 @@ namespace {
                 rawValue = (int32_t)compensated;
             }
             
-            // Calculate timestamp offset
+            // Timestamp offsets
             uint32_t offsetUs = (uint32_t)(sample.timestamp_us - (uint32_t)sessionStartUs);
-            uint32_t offsetMs = offsetUs / 1000;
             
-            // Track peak load (convert raw to kg, then to Newtons)
-            float loadKg = CalibrationInterp::rawToKg(rawValue);
-            float loadN = loadKg * 9.81f;
-            if (loadN > peakLoadN.load()) {
-                peakLoadN.store(loadN);
-                peakLoadTimeMs.store(offsetMs);
+            // Feed rolling peak buffer
+            peakWindow.push(rawValue, offsetUs);
+            
+            // Accumulate decimation window
+            decimator.accumulate(rawValue, offsetUs);
+            
+            // When a full window is ready, emit decimated record (mean/min/max)
+            if (decimator.isComplete(decimationFactor)) {
+                auto res = decimator.finalize();
+                
+                BinaryFormat::DecimatedADCRecord decRec;
+                decRec.timestampOffsetUs = res.windowStartUs;
+                decRec.mean = res.mean;
+                decRec.min = res.min;
+                decRec.max = res.max;
+                
+                if (!bufferWrite(&decRec, sizeof(decRec))) {
+                    droppedSamples++;
+                } else {
+                    adcSamplesLogged++;
+                }
+                
+                // Track peak load using mean of window
+                float loadKg = CalibrationInterp::rawToKg(decRec.mean);
+                float loadN = loadKg * 9.81f;
+                uint32_t offsetMs = decRec.timestampOffsetUs / 1000;
+                if (loadN > peakLoadN.load()) {
+                    peakLoadN.store(loadN);
+                    peakLoadTimeMs.store(offsetMs);
+                }
+                
+                // Peak detection and capture
+                uint32_t peakToPeak = (res.max >= res.min) ? (uint32_t)(res.max - res.min) : 0;
+                bool anomaly = currentConfig.enablePeakCapture &&
+                               (peakToPeak >= currentConfig.peakThresholdLsb);
+                
+                if (anomaly && peakWindow.size() > 0) {
+                    uint16_t sampleCount = static_cast<uint16_t>(peakWindow.size());
+                    uint16_t triggerIdx = static_cast<uint16_t>((peakWindow.writeIdx + PEAK_WINDOW_SAMPLES - 1) % PEAK_WINDOW_SAMPLES);
+                    
+                    BinaryFormat::PeakEventRecord peakRec;
+                    peakRec.timestampOffsetUs = offsetUs;
+                    peakRec.sampleCount = sampleCount;
+                    peakRec.triggerOffset = peakWindow.computeTriggerOffset(triggerIdx);
+                    
+                    uint8_t tag = static_cast<uint8_t>(BinaryFormat::RecordType::PeakEvent);
+                    bufferWrite(&tag, 1);
+                    bufferWrite(&peakRec, sizeof(peakRec));
+                    
+                    // Copy raw samples in chronological order
+                    uint16_t start = static_cast<uint16_t>(peakWindow.startIndex());
+                    static int32_t peakCopy[PEAK_WINDOW_SAMPLES];
+                    for (uint16_t i = 0; i < sampleCount; i++) {
+                        size_t idx = (start + i) % PEAK_WINDOW_SAMPLES;
+                        peakCopy[i] = peakWindow.samples[idx];
+                    }
+                    bufferWrite(peakCopy, sampleCount * sizeof(int32_t));
+                }
+                
+                // IMU sample aligned to decimation window
+                LSM6DSV::RawData imuRaw;
+                if (LSM6DSV::readRaw(&imuRaw)) {
+                    BinaryFormat::IMURecord imuRec;
+                    imuRec.timestampOffsetUs = res.windowStartUs;
+                    imuRec.accelX = imuRaw.accel[0];
+                    imuRec.accelY = imuRaw.accel[1];
+                    imuRec.accelZ = imuRaw.accel[2];
+                    imuRec.gyroX = imuRaw.gyro[0];
+                    imuRec.gyroY = imuRaw.gyro[1];
+                    imuRec.gyroZ = imuRaw.gyro[2];
+                    
+                    constexpr float ACCEL_SCALE = 0.061f / 1000.0f;  // mg/LSB to g/LSB (±2g)
+                    float ax = imuRec.accelX * ACCEL_SCALE;
+                    float ay = imuRec.accelY * ACCEL_SCALE;
+                    float az = imuRec.accelZ * ACCEL_SCALE;
+                    float accelMag = std::sqrt(ax*ax + ay*ay + az*az);
+                    
+                    uint32_t imuOffsetMs = imuRec.timestampOffsetUs / 1000;
+                    if (accelMag > peakDecelG.load()) {
+                        peakDecelG.store(accelMag);
+                        peakDecelTimeMs.store(imuOffsetMs);
+                    }
+                    
+                    if (bufferWrite(&imuRec, sizeof(imuRec))) {
+                        imuSamplesLogged++;
+                    }
+                }
+                
+                // Reset for next window
+                decimator.reset();
             }
             
-            // Write ADC record with sequence number for gap detection
-            BinaryFormat::ADCRecord adcRec;
-            adcRec.timestampOffsetUs = offsetUs;
-            adcRec.rawAdc = rawValue;
-            adcRec.sequenceNum = adcSequenceNum.fetch_add(1, std::memory_order_relaxed);
-            
-            if (!bufferWrite(&adcRec, sizeof(adcRec))) {
-                droppedSamples++;
-                continue;
-            }
-            
-            adcSamplesLogged++;
             processed++;
-            
-        }
-        
-        // Drain IMU FIFO in batches (more efficient than single reads)
-        uint16_t imuSamplesRead = 0;
-        if (LSM6DSV::readFIFO(imuFifoBatch, IMU_FIFO_BATCH_SIZE, &imuSamplesRead) && imuSamplesRead > 0) {
-            uint32_t nowUs = (uint32_t)(TimestampSync::getEpochMicros() - sessionStartUs);
-            uint32_t nowMs = nowUs / 1000;
-            
-            for (uint16_t i = 0; i < imuSamplesRead; i++) {
-                BinaryFormat::IMURecord imuRec;
-                imuRec.timestampOffsetUs = nowUs;  // Approximate timestamp
-                imuRec.accelX = imuFifoBatch[i].accel[0];
-                imuRec.accelY = imuFifoBatch[i].accel[1];
-                imuRec.accelZ = imuFifoBatch[i].accel[2];
-                imuRec.gyroX = imuFifoBatch[i].gyro[0];
-                imuRec.gyroY = imuFifoBatch[i].gyro[1];
-                imuRec.gyroZ = imuFifoBatch[i].gyro[2];
-                
-                // Track peak deceleration (acceleration magnitude in g)
-                // Raw values are in LSB, convert to g based on scale
-                // LSM6DSV at ±2g: 0.061 mg/LSB
-                constexpr float ACCEL_SCALE = 0.061f / 1000.0f;  // mg/LSB to g/LSB
-                float ax = imuRec.accelX * ACCEL_SCALE;
-                float ay = imuRec.accelY * ACCEL_SCALE;
-                float az = imuRec.accelZ * ACCEL_SCALE;
-                float accelMag = std::sqrt(ax*ax + ay*ay + az*az);
-                
-                if (accelMag > peakDecelG.load()) {
-                    peakDecelG.store(accelMag);
-                    peakDecelTimeMs.store(nowMs);
-                }
-                
-                if (bufferWrite(&imuRec, sizeof(imuRec))) {
-                    imuSamplesLogged++;
-                }
-            }
         }
         
         // Periodic flush to ensure data is saved
@@ -677,6 +713,9 @@ bool init(const Config& config) {
     }
     
     currentConfig = config;
+    decimationFactor = (currentConfig.logRateHz > 0) ? (currentConfig.adcRateHz / currentConfig.logRateHz) : 128;
+    if (decimationFactor == 0) decimationFactor = 128;
+    currentConfig.imuDecimation = decimationFactor;  // Align IMU reads to decimated windows
     
     // Allocate ADC ring buffer (large version for 128ms headroom)
     if (!adcBuffer) {
@@ -705,8 +744,10 @@ bool init(const Config& config) {
     }
     
     initialized = true;
-    ESP_LOGI(TAG, "Initialized: ADC %lu Hz, IMU %lu Hz",
-             config.adcRateHz, config.adcRateHz / config.imuDecimation);
+    ESP_LOGI(TAG, "Initialized: ADC %lu Hz, Log %lu Hz, IMU %lu Hz",
+             config.adcRateHz,
+             currentConfig.logRateHz,
+             currentConfig.adcRateHz / currentConfig.imuDecimation);
     return true;
 }
 
@@ -763,10 +804,9 @@ bool start() {
     // Skip pre-allocation if maxDurationSec is 0 or very large (would block too long)
     if (currentConfig.maxDurationSec > 0 && currentConfig.maxDurationSec <= 600) {
         size_t estimatedSize = estimateFileSize(
-            currentConfig.adcRateHz,
-            currentConfig.imuDecimation,
-            currentConfig.maxDurationSec
-        );
+                currentConfig.logRateHz,
+                currentConfig.maxDurationSec
+            );
         if (!preAllocateFile(logFile, estimatedSize)) {
             ESP_LOGW(TAG, "File pre-allocation failed - may have write latency spikes");
         }
@@ -832,8 +872,8 @@ bool start() {
     LSM6DSV::FIFOConfig fifoConfig;
     fifoConfig.watermark = 16;  // Interrupt at 16 samples
     fifoConfig.mode = LSM6DSV::FIFOMode::Continuous;
-    fifoConfig.accelBatchRate = LSM6DSV::FIFOBatchRate::Hz120;  // Match logger rate
-    fifoConfig.gyroBatchRate = LSM6DSV::FIFOBatchRate::Hz120;
+    fifoConfig.accelBatchRate = LSM6DSV::FIFOBatchRate::Hz480;  // Closest to 500 Hz target
+    fifoConfig.gyroBatchRate = LSM6DSV::FIFOBatchRate::Hz480;
     fifoConfig.enableTimestamp = false;
     
     if (LSM6DSV::configureFIFO(fifoConfig)) {
@@ -846,6 +886,8 @@ bool start() {
     
     // Start ADC continuous mode
     ESP_LOGI(TAG, "Starting ADC continuous mode...");
+    // Perform self-cal before starting continuous logging
+    MAX11270::selfCalibrate();
     if (!MAX11270::startContinuous(adcBuffer)) {
         ESP_LOGE(TAG, "Failed to start ADC");
         logFile.close();

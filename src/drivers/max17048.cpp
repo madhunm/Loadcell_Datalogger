@@ -133,7 +133,11 @@ bool getBatteryData(BatteryData* data) {
     data->socPercent = getSOC();
     data->chargeRate = getChargeRate();
     data->statusFlags = getStatus();
-    data->alertActive = (data->statusFlags & 0x3E) != 0;  // Any alert bits set
+    
+    // Check for any alert bits (VH, VL, VR, HD, SC) in the returned MSB
+    // StatusBits are defined as 16-bit, status is returned as MSB only (shifted >> 8)
+    constexpr uint8_t ALERT_BITS_MSB = 0x3E;  // (VH|VL|VR|HD|SC) >> 8
+    data->alertActive = (data->statusFlags & ALERT_BITS_MSB) != 0;
     
     return data->voltage >= 0 && data->socPercent >= 0;
 }
@@ -154,9 +158,9 @@ void clearAlerts() {
     // Read current status
     uint16_t status = 0;
     if (readRegister(Reg::STATUS, &status)) {
-        // Clear alert bits by writing 0 to them (write 1 to RI to clear reset indicator)
-        status &= 0x0100;  // Keep only RI bit to clear it
-        writeRegister(Reg::STATUS, status);
+        // Write back only the RI bit set (clears reset indicator) and zero for others
+        uint16_t clearMask = StatusBits::RI;  // RI=1 clears the flag
+        writeRegister(Reg::STATUS, clearMask);
     }
 }
 
@@ -165,8 +169,8 @@ void clearAlerts() {
 // ============================================================================
 
 void quickStart() {
-    // Write 0x4000 to MODE register to trigger quick-start
-    writeRegister(Reg::MODE, 0x4000);
+    // Trigger quick-start algorithm to re-estimate SOC
+    writeRegister(Reg::MODE, ModeCmd::QUICK_START);
     ESP_LOGI(TAG, "Quick-start initiated");
 }
 
@@ -174,8 +178,8 @@ void sleep() {
     // Read current config
     uint16_t config = 0;
     if (readRegister(Reg::CONFIG, &config)) {
-        // Set SLEEP bit (bit 7 of LSB)
-        config |= 0x0080;
+        // Set SLEEP bit to enter low-power mode
+        config |= ConfigBits::SLEEP;
         writeRegister(Reg::CONFIG, config);
         ESP_LOGI(TAG, "Entering sleep mode");
     }
@@ -185,8 +189,8 @@ void wake() {
     // Read current config
     uint16_t config = 0;
     if (readRegister(Reg::CONFIG, &config)) {
-        // Clear SLEEP bit
-        config &= ~0x0080;
+        // Clear SLEEP bit to resume normal operation
+        config &= ~ConfigBits::SLEEP;
         writeRegister(Reg::CONFIG, config);
         ESP_LOGI(TAG, "Waking from sleep");
     }
@@ -198,7 +202,17 @@ void wake() {
 
 void setVoltageAlert(float minV, float maxV) {
     // VALRT register: MSB = max threshold, LSB = min threshold
-    // Each bit = 20mV, range 0-5.1V
+    // Each bit = 20mV, range 0-5.1V. Clamp and order properly.
+    if (minV < 0.0f) minV = 0.0f;
+    if (maxV < 0.0f) maxV = 0.0f;
+    if (minV > 5.1f) minV = 5.1f;
+    if (maxV > 5.1f) maxV = 5.1f;
+    if (minV > maxV) {
+        float tmp = minV;
+        minV = maxV;
+        maxV = tmp;
+    }
+    
     uint8_t minThresh = (uint8_t)(minV / 0.020f);
     uint8_t maxThresh = (uint8_t)(maxV / 0.020f);
     
@@ -210,11 +224,12 @@ void setVoltageAlert(float minV, float maxV) {
 
 void setSOCAlert(uint8_t percent) {
     // SOC alert threshold is in CONFIG register bits 4:0
+    // Threshold is inverted: register value = 32 - percent
     if (percent > 32) percent = 32;
     
     uint16_t config = 0;
     if (readRegister(Reg::CONFIG, &config)) {
-        config = (config & 0xFFE0) | (32 - percent);  // Threshold is inverted
+        config = (config & ~ConfigBits::ATHD_MASK) | (32 - percent);
         writeRegister(Reg::CONFIG, config);
         ESP_LOGI(TAG, "SOC alert set at %d%%", percent);
     }

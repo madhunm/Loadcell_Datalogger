@@ -29,7 +29,7 @@ namespace BinaryFormat {
 constexpr uint32_t FILE_MAGIC = 0x474C434C;  // "LCLG" in little-endian
 
 /** @brief Current format version */
-constexpr uint16_t FORMAT_VERSION = 1;
+constexpr uint16_t FORMAT_VERSION = 2;
 
 /** @brief Header size in bytes */
 constexpr uint16_t HEADER_SIZE = 64;
@@ -42,6 +42,8 @@ constexpr uint16_t HEADER_SIZE = 64;
 enum class RecordType : uint8_t {
     ADC     = 0x01,     // ADC sample
     IMU     = 0x02,     // IMU sample (accel + gyro)
+    DecimatedADC = 0x03,// Decimated ADC sample (min/mean/max)
+    PeakEvent = 0x11,   // Peak capture event (raw window)
     Event   = 0x10,     // Event marker
     Comment = 0x20,     // Text comment
     End     = 0xFF      // End of file marker
@@ -65,7 +67,7 @@ struct __attribute__((packed)) FileHeader {
     
     // Sampling configuration (8 bytes)
     uint32_t adcSampleRateHz;   // ADC sample rate (e.g., 64000)
-    uint32_t imuSampleRateHz;   // IMU sample rate (e.g., 1000)
+    uint32_t imuSampleRateHz;   // IMU sample rate (e.g., 480/500)
     
     // Timing (8 bytes)
     uint64_t startTimestampUs;  // Unix epoch microseconds at start
@@ -79,7 +81,8 @@ struct __attribute__((packed)) FileHeader {
     uint8_t adcBits;            // ADC resolution (e.g., 24)
     uint8_t imuAccelScale;      // IMU accel scale (0=2g, 1=4g, etc.)
     uint8_t imuGyroScale;       // IMU gyro scale
-    uint8_t reserved[3];        // Padding
+    uint16_t logRateHz;         // Logged output rate after decimation (e.g., 500)
+    uint8_t reserved[1];        // Padding
     
     // Initialize with defaults
     void init() {
@@ -95,6 +98,7 @@ struct __attribute__((packed)) FileHeader {
         adcBits = 24;
         imuAccelScale = 0;
         imuGyroScale = 1;
+        logRateHz = 500;
         memset(reserved, 0, sizeof(reserved));
     }
     
@@ -129,6 +133,24 @@ struct __attribute__((packed)) ADCRecord {
 };
 
 static_assert(sizeof(ADCRecord) == 12, "ADCRecord must be 12 bytes");
+
+// ============================================================================
+// Decimated ADC Sample Record (16 bytes)
+// ============================================================================
+
+/**
+ * @brief Decimated ADC record (min/mean/max over a window)
+ */
+struct __attribute__((packed)) DecimatedADCRecord {
+    uint32_t timestampOffsetUs; // Microseconds since file start (window start)
+    int32_t mean;               // Average of window
+    int32_t min;                // Minimum in window
+    int32_t max;                // Maximum in window
+    
+    static constexpr size_t SIZE = 16;
+};
+
+static_assert(sizeof(DecimatedADCRecord) == 16, "DecimatedADCRecord must be 16 bytes");
 
 // ============================================================================
 // IMU Sample Record (16 bytes)
@@ -177,6 +199,14 @@ struct __attribute__((packed)) TaggedIMURecord {
     static constexpr size_t SIZE = 1 + IMURecord::SIZE;
 };
 
+// Tagged decimated ADC record
+struct __attribute__((packed)) TaggedDecimatedADCRecord {
+    uint8_t type;                   // RecordType::DecimatedADC
+    DecimatedADCRecord record;
+    
+    static constexpr size_t SIZE = 1 + DecimatedADCRecord::SIZE;
+};
+
 // ============================================================================
 // Event Record (variable length)
 // ============================================================================
@@ -213,7 +243,26 @@ namespace EventCode {
     constexpr uint16_t WriteLatency     = 0x00F4;  // High write latency warning
     constexpr uint16_t Recovery         = 0x00F5;  // Session recovered from crash
     constexpr uint16_t SDRemoved        = 0x00F6;  // SD card removed during logging
+    constexpr uint16_t PeakEvent        = 0x00F7;  // Peak capture window
 }
+
+// ============================================================================
+// Peak Event Record (variable length)
+// ============================================================================
+
+/**
+ * @brief Peak capture record
+ * 
+ * Tagged with RecordType::PeakEvent. Followed by sampleCount * int32_t raw samples.
+ */
+struct __attribute__((packed)) PeakEventRecord {
+    uint32_t timestampOffsetUs;  // Trigger timestamp
+    uint16_t sampleCount;        // Number of raw samples following
+    uint16_t triggerOffset;      // Index of triggering sample within the window
+    
+    static constexpr size_t HEADER_SIZE = 8;
+    static constexpr uint16_t MAX_SAMPLES = 512;
+};
 
 // ============================================================================
 // End of File Marker
@@ -284,9 +333,13 @@ static_assert(sizeof(FileFooter) == 32, "FileFooter must be 32 bytes");
  * @param useTagged Whether using tagged records
  * @return Bytes per second
  */
-inline uint32_t calculateDataRate(uint32_t adcRateHz, uint32_t imuRateHz, bool useTagged = false) {
-    size_t adcSize = useTagged ? TaggedADCRecord::SIZE : ADCRecord::SIZE;
-    size_t imuSize = useTagged ? TaggedIMURecord::SIZE : IMURecord::SIZE;
+inline uint32_t calculateDataRate(uint32_t adcRateHz,
+                                  uint32_t imuRateHz,
+                                  size_t adcRecordSize = ADCRecord::SIZE,
+                                  size_t imuRecordSize = IMURecord::SIZE,
+                                  bool useTagged = false) {
+    size_t adcSize = useTagged ? TaggedADCRecord::SIZE : adcRecordSize;
+    size_t imuSize = useTagged ? TaggedIMURecord::SIZE : imuRecordSize;
     return (adcRateHz * adcSize) + (imuRateHz * imuSize);
 }
 
@@ -298,8 +351,12 @@ inline uint32_t calculateDataRate(uint32_t adcRateHz, uint32_t imuRateHz, bool u
  * @param durationSec Recording duration in seconds
  * @return Estimated file size in bytes
  */
-inline uint64_t estimateFileSize(uint32_t adcRateHz, uint32_t imuRateHz, uint32_t durationSec) {
-    return HEADER_SIZE + (uint64_t)calculateDataRate(adcRateHz, imuRateHz) * durationSec;
+inline uint64_t estimateFileSize(uint32_t adcRateHz,
+                                 uint32_t imuRateHz,
+                                 uint32_t durationSec,
+                                 size_t adcRecordSize = ADCRecord::SIZE,
+                                 size_t imuRecordSize = IMURecord::SIZE) {
+    return HEADER_SIZE + (uint64_t)calculateDataRate(adcRateHz, imuRateHz, adcRecordSize, imuRecordSize) * durationSec;
 }
 
 } // namespace BinaryFormat

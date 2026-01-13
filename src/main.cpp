@@ -18,12 +18,16 @@
  * - Factory:    End-of-line testing
  */
 
-// Set to 0 to disable verbose debug output during normal operation
-#define DEBUG_VERBOSE 0
+#include "debug_config.h"
+
+#ifndef ENABLE_UI
+#define ENABLE_UI 1
+#endif
 
 #include <Arduino.h>
 #include <Wire.h>
 #include <esp_task_wdt.h>
+#include <Preferences.h>
 #include "pin_config.h"
 
 // Drivers
@@ -48,9 +52,11 @@
 #include "app/app_mode.h"
 #include "app/state_machine.h"
 
-// Network
+// Network (guarded by ENABLE_UI)
+#if ENABLE_UI
 #include "network/wifi_ap.h"
 #include "network/admin_webui.h"
+#endif
 
 // Button state for debouncing and long press detection
 namespace {
@@ -373,16 +379,46 @@ bool initHardware() {
     if (MAX11270::init()) {
         adcOk = true;
         MAX11270::Config adcConfig;
-        adcConfig.rate = MAX11270::Rate::SPS_64000;
-        adcConfig.gain = MAX11270::Gain::X128;
+        
+        // Load saved ADC settings from NVS, or use defaults
+        Preferences prefs;
+        if (prefs.begin("adc_config", true)) {
+            // Load gain (stored as enum value 0-7)
+            uint8_t savedGain = prefs.getUChar("gain", 7);  // Default: X128
+            if (savedGain <= 7) {
+                adcConfig.gain = static_cast<MAX11270::Gain>(savedGain);
+            } else {
+                adcConfig.gain = MAX11270::Gain::X128;
+            }
+            
+            // Load rate (stored as enum value 0-15)
+            uint8_t savedRate = prefs.getUChar("rate", 15);  // Default: 64ksps
+            if (savedRate <= 15) {
+                adcConfig.rate = static_cast<MAX11270::Rate>(savedRate);
+            } else {
+                adcConfig.rate = MAX11270::Rate::SPS_64000;
+            }
+            prefs.end();
+            
+            Serial.printf("[ADC] Loaded saved config: gain=%dx, rate=%lu sps\n",
+                MAX11270::gainToMultiplier(adcConfig.gain),
+                MAX11270::rateToHz(adcConfig.rate));
+        } else {
+            // Use defaults if NVS not available
+            adcConfig.rate = MAX11270::Rate::SPS_64000;
+            adcConfig.gain = MAX11270::Gain::X128;
+        }
+        
         MAX11270::configure(adcConfig);
+        // Perform self-cal at boot
+        MAX11270::selfCalibrate();
         
         // Sync calibration module with ADC gain setting
-        // This ensures raw-to-uV conversion uses correct gain (128x)
+        // This ensures raw-to-uV conversion uses correct gain
         CalibrationInterp::setADCConfig(
             3300.0f,  // Vref in mV (external 3.3V reference)
             24,       // ADC bits
-            MAX11270::gainToMultiplier(adcConfig.gain)  // 128
+            MAX11270::gainToMultiplier(adcConfig.gain)
         );
         
         int32_t test = MAX11270::readSingle(100);
@@ -423,8 +459,10 @@ bool initSoftware() {
     Logger::Config logConfig = Logger::defaultConfig();
     Logger::init(logConfig);
     
+#if ENABLE_UI
     // WebUI
     AdminWebUI::init();
+#endif
     
     return true;
 }
@@ -644,9 +682,11 @@ void setup() {
     // Software
     initSoftware();
     
+#if ENABLE_UI
     // WiFi
     WiFiAP::start();
     Serial.printf("[WiFi] http://%s\n", WiFiAP::getIP().c_str());
+#endif
     
     // Hardware summary
     Serial.printf("[Init] ADC:%s RTC:%s IMU:%s SD:%s\n", 
@@ -671,13 +711,15 @@ void setup() {
 }
 
 void loop() {
-    // Start web server when WiFi ready
+    // Start web server when WiFi ready (UI builds only)
+#if ENABLE_UI
     if (!webServerStarted && WiFiAP::isReady()) {
         if (AdminWebUI::beginServer()) {
             Serial.println("[WebUI] Server started");
             webServerStarted = true;
         }
     }
+#endif
     
     // Core updates
         StatusLED::update();
