@@ -32,6 +32,13 @@ void aux_set_rtc(uint32_t epoch, bool valid) {
   portEXIT_CRITICAL(&g_aux_mux);
 }
 
+void aux_set_imu_scales(float accel_g_per_lsb, float gyro_dps_per_lsb) {
+  portENTER_CRITICAL(&g_aux_mux);
+  g_aux.accel_g_per_lsb = accel_g_per_lsb;
+  g_aux.gyro_dps_per_lsb = gyro_dps_per_lsb;
+  portEXIT_CRITICAL(&g_aux_mux);
+}
+
 void aux_bump_i2c_err() {
   portENTER_CRITICAL(&g_aux_mux);
   g_aux.i2c_err_count++;

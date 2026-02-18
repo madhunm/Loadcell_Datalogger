@@ -1,6 +1,7 @@
 #include "services/sd_logger.h"
 #include "config.h"
 #include "pins.h"
+#include "esp_timer.h"
 #include <Arduino.h>
 #include <FS.h>
 #include <SD_MMC.h>
@@ -92,8 +93,9 @@ PdlHeaderV1 logger_make_default_header() {
   h.start_mono_us = (uint64_t)esp_timer_get_time();
   h.slope_mN_per_code = 1.0f;
   h.offset_mN = 0.0f;
-  h.accel_g_per_lsb = 1.0f / 16384.0f;
-  h.gyro_dps_per_lsb = 1.0f;
+  // Defaults match LSM6DSV FsXl::G_16 (0.488 mg/LSB), FsG::DPS_4000 (140 mdps/LSB)
+  h.accel_g_per_lsb = 0.488f / 1000.0f;
+  h.gyro_dps_per_lsb = 140.0f / 1000.0f;
   h.overload_mN = 2147483647;   // default: no overload trigger
   h.underload_mN = -2147483648;  // default: no underload trigger
   h.compression_mN = 2147483647; // default: no compression trigger
@@ -110,7 +112,7 @@ static inline bool sd_card_detect_present() {
 }
 
 bool logger_begin() {
-  SD_MMC.setPins(4, 5, 6, 7, 8, 9);
+  SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0, PIN_SD_D1, PIN_SD_D2, PIN_SD_D3);
   if (SD_CD_ENABLED) {
     pinMode(PIN_SD_CD, INPUT_PULLUP);
     if (!sd_card_detect_present()) {
@@ -147,6 +149,7 @@ bool logger_start_session(const PdlHeaderV1& hdr, bool rtc_valid, uint32_t rtc_e
   }
 
   PdlHeaderV1 h = hdr;
+  h.start_mono_us = (uint64_t)esp_timer_get_time();
   h.start_rtc_epoch = rtc_valid ? rtc_epoch : 0;
   h.start_rtc_ms = 0;
 
@@ -310,8 +313,12 @@ bool logger_export_latest_to_csv() {
   size_t l = strlen(g_last_bin_path);
   char csv_path[64];
   strncpy(csv_path, g_last_bin_path, sizeof(csv_path) - 1);
-  csv_path[sizeof(csv_path)-1] = '\0';
-  if (l >= 4) strcpy(csv_path + l - 4, "CSV");
+  csv_path[sizeof(csv_path) - 1] = '\0';
+  char* last_dot = strrchr(csv_path, '.');
+  if (last_dot && (size_t)(last_dot - csv_path) + 5 <= sizeof(csv_path))
+    strcpy(last_dot, ".CSV");
+  else if (l + 4 < sizeof(csv_path))
+    strcat(csv_path, ".CSV");
   File csv = SD_MMC.open(csv_path, FILE_WRITE);
   if (!csv) { bin.close(); system_status_set_fault(FaultCode::SD_WRITE_FAIL); return false; }
 

@@ -2,22 +2,22 @@
 
 bool RX8900CE::begin(TwoWire& wire) {
   _wire = &wire;
-  uint8_t f = 0;
-  return readReg(REG_FLAG, f);
+  uint8_t id = 0;
+  if (!readReg(REG_RTCID, id) || id != 0xC4) return false;
+  return true;
 }
 
 bool RX8900CE::readDateTime(DateTime& dt) {
   uint8_t b[7] = {0};
   if (!readBurst(REG_SEC, b, sizeof(b))) return false;
 
-  // Mask off reserved bits where applicable
   uint8_t sec   = b[0] & 0x7F;
   uint8_t min   = b[1] & 0x7F;
   uint8_t hour  = b[2] & 0x3F;
   uint8_t week  = b[3] & 0x7F;
   uint8_t day   = b[4] & 0x3F;
   uint8_t month = b[5] & 0x1F;
-  uint8_t year  = b[6]; // full BCD (00..99)
+  uint8_t year  = b[6];
 
   dt.second = bcdToBin(sec);
   dt.minute = bcdToBin(min);
@@ -26,7 +26,6 @@ bool RX8900CE::readDateTime(DateTime& dt) {
   dt.month  = bcdToBin(month);
   dt.year   = 2000u + bcdToBin(year);
 
-  // WEEK is a bitfield. Pick the lowest set bit as weekday index.
   uint8_t wd = 0;
   if (week != 0) {
     while (wd < 7 && ((week & (1u << wd)) == 0)) wd++;
@@ -47,7 +46,7 @@ bool RX8900CE::setDateTime(const DateTime& dt) {
   b[0] = binToBcd(dt.second) & 0x7F;
   b[1] = binToBcd(dt.minute) & 0x7F;
   b[2] = binToBcd(dt.hour)   & 0x3F;
-  b[3] = (uint8_t)(1u << dt.weekday);  // WEEK is bitfield
+  b[3] = (uint8_t)(1u << dt.weekday);
   b[4] = binToBcd(dt.day)    & 0x3F;
   b[5] = binToBcd(dt.month)  & 0x1F;
   b[6] = binToBcd((uint8_t)(dt.year - 2000));
@@ -62,7 +61,6 @@ bool RX8900CE::readFlags(uint8_t& flags) {
 bool RX8900CE::clearFlags(uint8_t mask_to_clear) {
   uint8_t f = 0;
   if (!readReg(REG_FLAG, f)) return false;
-  // Only 0 clears; writing 1 is ignored on flag bits.
   f = (uint8_t)(f & ~mask_to_clear);
   return writeReg(REG_FLAG, f);
 }
@@ -72,7 +70,6 @@ bool RX8900CE::readControl(uint8_t& ctrl) {
 }
 
 bool RX8900CE::writeControl(uint8_t ctrl) {
-  // Reserved bits must stay 0 (bits 2:1 are "0" in manual)
   ctrl &= (uint8_t)(0b11111001);
   return writeReg(REG_CTRL, ctrl);
 }
@@ -81,7 +78,7 @@ bool RX8900CE::pulseReset() {
   uint8_t c = 0;
   if (!readControl(c)) return false;
   c |= CTRL_RESET;
-  return writeControl(c); // executes on STOP, auto-clears
+  return writeControl(c);
 }
 
 bool RX8900CE::readUnix(uint32_t& epoch) {
@@ -158,14 +155,13 @@ bool RX8900CE::writeBurst(uint8_t start_reg, const uint8_t* buf, size_t len) {
   return (_wire->endTransmission(true) == 0);
 }
 
-// Howard Hinnant's days-from-civil (Gregorian), returns days since 1970-01-01
 int32_t RX8900CE::daysFromCivil(int32_t y, uint32_t m, uint32_t d) {
   y -= (m <= 2);
   const int32_t era = (y >= 0 ? y : y - 399) / 400;
   const uint32_t yoe = (uint32_t)(y - era * 400);
   const uint32_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
   const uint32_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-  return (int32_t)(era * 146097 + (int32_t)doe - 719468); // 719468 = days to 1970-01-01
+  return (int32_t)(era * 146097 + (int32_t)doe - 719468);
 }
 
 uint32_t RX8900CE::toUnix(const DateTime& dt) {

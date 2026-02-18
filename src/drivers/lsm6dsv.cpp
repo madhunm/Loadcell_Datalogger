@@ -20,7 +20,7 @@ bool LSM6DSV::readWhoAmI(uint8_t& whoami) {
 
 bool LSM6DSV::softReset() {
   // CTRL3: BOOT | BDU | 0 | 0 | 0 | IF_INC | 0 | SW_RESET
-  // We set SW_RESET=1; it auto-clears. Also keep BDU=1, IF_INC=1.
+  // We set SW_RESET=1; it auto-clears. Keep BDU=1, IF_INC=1.
   uint8_t ctrl3 = 0;
   if (!readReg(REG_CTRL3, ctrl3)) return false;
 
@@ -114,7 +114,7 @@ bool LSM6DSV::readRaw(SampleRaw& s) {
 }
 
 float LSM6DSV::accel_g_per_lsb() const {
-  // LA_So: 2g=0.061 mg/LSB, 4g=0.122, 8g=0.244, 16g=0.488 :contentReference[oaicite:7]{index=7}
+  // LA_So: 2g=0.061 mg/LSB, 4g=0.122, 8g=0.244, 16g=0.488
   float mg_per_lsb = 0.488f;
   switch (_fs_xl) {
     case FsXl::G_2:  mg_per_lsb = 0.061f; break;
@@ -126,7 +126,7 @@ float LSM6DSV::accel_g_per_lsb() const {
 }
 
 float LSM6DSV::gyro_dps_per_lsb() const {
-  // G_So: 125=4.375 mdps/LSB, 250=8.75, 500=17.5, 1000=35, 2000=70, 4000=140 :contentReference[oaicite:8]{index=8}
+  // G_So: 125=4.375 mdps/LSB, 250=8.75, 500=17.5, 1000=35, 2000=70, 4000=140
   float mdps_per_lsb = 140.0f;
   switch (_fs_g) {
     case FsG::DPS_125:  mdps_per_lsb = 4.375f; break;

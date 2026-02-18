@@ -1,15 +1,15 @@
-import time, csv
+#!/usr/bin/env python3
+"""Live scope plot: send 'scope <hz>' to device, parse CSV, write file and plot."""
+import argparse
+import csv
+import time
 from collections import deque
 
+import matplotlib.pyplot as plt
 import numpy as np
 import serial
 from serial.tools import list_ports
-import matplotlib.pyplot as plt
 
-BAUD = 115200
-SCOPE_HZ = 25
-WINDOW_S = 30
-OUTFILE = f"scope_{int(time.time())}.csv"
 
 def choose_port():
     ports = list(list_ports.comports())
@@ -21,28 +21,39 @@ def choose_port():
             return p.device
     return ports[0].device
 
+
 def main():
-    port = choose_port()
-    print(f"Opening {port} @ {BAUD}")
-    ser = serial.Serial(port, BAUD, timeout=1)
+    parser = argparse.ArgumentParser(description="Scope plot from PDL device")
+    parser.add_argument("--port", type=str, default=None, help="Serial port (auto if omitted)")
+    parser.add_argument("--baud", type=int, default=115200, help="Baud rate")
+    parser.add_argument("--hz", type=int, default=25, help="Scope rate in Hz")
+    parser.add_argument("--window", type=float, default=30, help="Plot window in seconds")
+    parser.add_argument("--outfile", type=str, default=None, help="Output CSV (default scope_<epoch>.csv)")
+    args = parser.parse_args()
 
-    ser.write(f"scope {SCOPE_HZ}\n".encode("ascii"))
+    port = args.port or choose_port()
+    outfile = args.outfile or f"scope_{int(time.time())}.csv"
 
-    f = open(OUTFILE, "w", newline="")
+    print(f"Opening {port} @ {args.baud}")
+    ser = serial.Serial(port, args.baud, timeout=1)
+
+    ser.write(f"scope {args.hz}\n".encode("ascii"))
+
+    f = open(outfile, "w", newline="")
     w = csv.writer(f)
-    w.writerow(["ms","force_mean_N","force_peak_N","accel_mag_g","flags"])
+    w.writerow(["ms", "force_mean_N", "force_peak_N", "accel_mag_g", "flags"])
 
-    maxlen = int(WINDOW_S * SCOPE_HZ * 2)
+    maxlen = int(args.window * args.hz * 2)
     t = deque(maxlen=maxlen)
-    meanN = deque(maxlen=maxlen)
-    peakN = deque(maxlen=maxlen)
+    mean_n = deque(maxlen=maxlen)
+    peak_n = deque(maxlen=maxlen)
     amag = deque(maxlen=maxlen)
 
     plt.ion()
     fig, ax = plt.subplots()
-    l1, = ax.plot([], [], label="force_mean (N)")
-    l2, = ax.plot([], [], label="force_peak (N)")
-    l3, = ax.plot([], [], label="accel_mag (g)")
+    (l1,) = ax.plot([], [], label="force_mean (N)")
+    (l2,) = ax.plot([], [], label="force_peak (N)")
+    (l3,) = ax.plot([], [], label="accel_mag (g)")
     ax.set_xlabel("t (s)")
     ax.legend()
 
@@ -74,22 +85,26 @@ def main():
             f.flush()
 
             ts = ms / 1000.0
-            t.append(ts); meanN.append(fm); peakN.append(fp); amag.append(ag)
+            t.append(ts)
+            mean_n.append(fm)
+            peak_n.append(fp)
+            amag.append(ag)
 
             now = time.time()
             if now - last_plot >= 0.1:
                 last_plot = now
                 tt = np.array(t)
-                if tt.size < 2:
-                    continue
-                t0 = tt[-1] - WINDOW_S
-                m = tt >= t0
-                x = tt[m] - tt[m][0]
-                l1.set_data(x, np.array(meanN)[m])
-                l2.set_data(x, np.array(peakN)[m])
-                l3.set_data(x, np.array(amag)[m])
-                ax.relim(); ax.autoscale_view()
-                fig.canvas.draw(); fig.canvas.flush_events()
+                if tt.size >= 2:
+                    t0 = tt[-1] - args.window
+                    m = tt >= t0
+                    x = tt[m] - tt[m][0]
+                    l1.set_data(x, np.array(mean_n)[m])
+                    l2.set_data(x, np.array(peak_n)[m])
+                    l3.set_data(x, np.array(amag)[m])
+                    ax.relim()
+                    ax.autoscale_view()
+                    fig.canvas.draw()
+                    fig.canvas.flush_events()
 
     except KeyboardInterrupt:
         print("Stopping...")
@@ -101,7 +116,8 @@ def main():
             pass
         ser.close()
         f.close()
-        print("Saved:", OUTFILE)
+        print("Saved:", outfile)
+
 
 if __name__ == "__main__":
     main()

@@ -8,11 +8,7 @@
 #include "drivers/max17048.h"
 #include "drivers/rx8900ce.h"
 #include "drivers/lsm6dsv.h"
-
-static constexpr int I2C_SDA = 41;
-static constexpr int I2C_SCL = 42;
-static constexpr int IMU_INT1_GPIO = 39;
-static constexpr int RTC_INT_GPIO = 34;
+#include "pins.h"
 
 static MAX17048 fuel;
 static RX8900CE rtc;
@@ -57,25 +53,26 @@ static uint32_t toEpoch2000To2099(uint16_t year, uint8_t mon, uint8_t day,
 static void sensors_task(void*) {
   aux_init();
 
-  Wire.begin(I2C_SDA, I2C_SCL, 400000);
+  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000);
 
   // Bring-up devices (don�t hard-fail the whole system on one missing device)
   bool fuel_ok = fuel.begin(Wire);
   static bool rtc_ok = rtc.begin(Wire);
   static bool imu_ok = imu.begin(Wire) && imu.configure(LSM6DSV::Odr::HZ_960, LSM6DSV::Odr::HZ_960);
 
+  if (imu_ok) aux_set_imu_scales(imu.accel_g_per_lsb(), imu.gyro_dps_per_lsb());
   if (!imu_ok) system_status_set_fault(FaultCode::IMU_FAULT);
 
   if (imu_ok) {
     imu.setIntPinConfig(false, false);
     imu.routeDrdyToInt1(true, true);
-    pinMode(IMU_INT1_GPIO, INPUT);
-    attachInterrupt(digitalPinToInterrupt(IMU_INT1_GPIO), imu_int1_isr, RISING);
+    pinMode(PIN_IMU_INT1, INPUT);
+    attachInterrupt(digitalPinToInterrupt(PIN_IMU_INT1), imu_int1_isr, RISING);
   }
   if (rtc_ok) {
     rtc.enableSecondUpdateInterrupt(true);
-    pinMode(RTC_INT_GPIO, INPUT);
-    attachInterrupt(digitalPinToInterrupt(RTC_INT_GPIO), rtc_int_isr, FALLING);
+    pinMode(PIN_RTC_INT, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(PIN_RTC_INT), rtc_int_isr, FALLING);
   }
 
   uint32_t last_batt_ms = 0;
@@ -93,16 +90,17 @@ static void sensors_task(void*) {
       rtc_ok = rtc.begin(Wire);
       if (imu_ok) {
         system_status_clear_fault(FaultCode::IMU_FAULT);
+        aux_set_imu_scales(imu.accel_g_per_lsb(), imu.gyro_dps_per_lsb());
         imu.setIntPinConfig(false, false);
         imu.routeDrdyToInt1(true, true);
-        pinMode(IMU_INT1_GPIO, INPUT);
-        attachInterrupt(digitalPinToInterrupt(IMU_INT1_GPIO), imu_int1_isr, RISING);
+        pinMode(PIN_IMU_INT1, INPUT);
+        attachInterrupt(digitalPinToInterrupt(PIN_IMU_INT1), imu_int1_isr, RISING);
       }
       if (rtc_ok) {
         system_status_clear_warning(WarningCode::RTC_FAULT);
         rtc.enableSecondUpdateInterrupt(true);
-        pinMode(RTC_INT_GPIO, INPUT);
-        attachInterrupt(digitalPinToInterrupt(RTC_INT_GPIO), rtc_int_isr, FALLING);
+        pinMode(PIN_RTC_INT, INPUT_PULLUP);
+        attachInterrupt(digitalPinToInterrupt(PIN_RTC_INT), rtc_int_isr, FALLING);
       }
     }
 

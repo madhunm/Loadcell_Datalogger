@@ -6,17 +6,15 @@
 #include "services/aux_state.h"
 #include "services/system_status.h"
 #include "services/sensors_task.h"
+#include "pins.h"
 #include <Arduino.h>
-
-static constexpr int BUTTON_GPIO = 2;
-static constexpr int LED_GPIO = 21;
 
 static UiState s_ui_state = UiState::BOOT;
 static uint32_t s_warning_blink_until_ms = 0;
 
 void ui_init() {
-  button_begin(BUTTON_GPIO, true);
-  led_begin(LED_GPIO, 1);
+  button_begin(PIN_LOG_BUTTON, true);
+  led_begin(PIN_NEOPIXEL, 1);
   s_ui_state = UiState::BOOT;
   led_set_state(UiState::BOOT);
   s_warning_blink_until_ms = 0;
@@ -32,6 +30,10 @@ void ui_init() {
 static void do_start_log() {
   AuxSnapshot snap = aux_get_snapshot();
   PdlHeaderV1 hdr = logger_make_default_header();
+  if (snap.accel_g_per_lsb > 0.f && snap.gyro_dps_per_lsb > 0.f) {
+    hdr.accel_g_per_lsb = snap.accel_g_per_lsb;
+    hdr.gyro_dps_per_lsb = snap.gyro_dps_per_lsb;
+  }
   if (logger_start_session(hdr, snap.rtc_valid, snap.rtc_epoch)) {
     s_ui_state = UiState::LOGGING;
     led_set_state(UiState::LOGGING);

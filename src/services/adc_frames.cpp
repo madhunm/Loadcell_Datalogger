@@ -9,6 +9,7 @@
 #include "services/aux_state.h"
 #include "services/sd_logger.h"
 #include "services/system_status.h"
+#include "pins.h"
 
 static constexpr int ADC_HZ = 64000;
 static constexpr int FRAME_HZ = 500;
@@ -47,8 +48,8 @@ static inline int32_t code_to_force_mN(int32_t code) {
 
 static void adc_frame_task(void*) {
   Max11270::BusConfig bus { .host=SPI2_HOST, .dma_chan=SPI_DMA_CH_AUTO, .clock_hz=5'000'000, .init_bus=true, .queue_size=1 };
-  Max11270::SpiPins spi { .mosi=GPIO_NUM_13, .miso=GPIO_NUM_12, .sclk=GPIO_NUM_18, .cs=GPIO_NUM_17 };
-  Max11270::GpioPins gp { .rdyb=GPIO_NUM_16, .rstb=GPIO_NUM_15, .sync=GPIO_NUM_14 };
+  Max11270::SpiPins spi { .mosi=(gpio_num_t)PIN_ADC_MOSI, .miso=(gpio_num_t)PIN_ADC_MISO, .sclk=(gpio_num_t)PIN_ADC_SCK, .cs=(gpio_num_t)PIN_ADC_CS };
+  Max11270::GpioPins gp { .rdyb=(gpio_num_t)PIN_ADC_RDYB, .rstb=(gpio_num_t)PIN_ADC_RSTB, .sync=(gpio_num_t)PIN_ADC_SYNC };
 
   ESP_ERROR_CHECK(adc.begin(bus, spi, gp));
   ESP_ERROR_CHECK(adc.hardwareReset(2, 5));

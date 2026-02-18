@@ -59,6 +59,7 @@ private:
   static constexpr uint8_t REG_EXT     = 0x0D;
   static constexpr uint8_t REG_FLAG    = 0x0E;
   static constexpr uint8_t REG_CTRL    = 0x0F;
+  static constexpr uint8_t REG_RTCID   = 0x30;  // model ID, expect 0xC4
 
   static constexpr uint8_t CTRL_UIE   = (1u << 5);
   static constexpr uint8_t CTRL_TIE   = (1u << 4);
