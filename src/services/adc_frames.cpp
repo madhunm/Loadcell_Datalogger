@@ -31,7 +31,14 @@ static int32_t s_underload_mN = std::numeric_limits<int32_t>::min();
 static int32_t s_compression_mN = std::numeric_limits<int32_t>::max();
 
 void adc_frames_on_session_start(const PdlHeaderV1& hdr) {
-  s_tare_phase = true;
+  g_slope_mN_per_code = hdr.slope_mN_per_code;
+  g_offset_mN = hdr.offset_mN;
+  if (hdr.tare_frames > 0) {
+    g_tare_code = hdr.tare_adc_code;
+    s_tare_phase = false;
+  } else {
+    s_tare_phase = true;
+  }
   s_tare_sum = 0;
   s_tare_count = 0;
   s_overload_mN = hdr.overload_mN;
