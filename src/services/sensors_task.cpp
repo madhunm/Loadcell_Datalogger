@@ -55,7 +55,7 @@ static void sensors_task(void*) {
 
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000);
 
-  // Bring-up devices (don�t hard-fail the whole system on one missing device)
+  // Bring-up devices (don't hard-fail the whole system on one missing device)
   bool fuel_ok = fuel.begin(Wire);
   static bool rtc_ok = rtc.begin(Wire);
   static bool imu_ok = imu.begin(Wire) && imu.configure(LSM6DSV::Odr::HZ_960, LSM6DSV::Odr::HZ_960);

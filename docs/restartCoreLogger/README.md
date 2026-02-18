@@ -109,4 +109,4 @@ Uses header magic and `frame_ver`/`frame_size` to support V1 (56-byte) or V2 (64
 - **Includes:** Searched for malformed `#include` lines in `src/`; none found.
 - **lsm6dsv.cpp:** Verified no uncommented stray text; "Keep BDU=1, IF_INC=1." exists only inside a comment.
 - **Host tools:** Confirmed `scope_plot.py` and `bin2csv.py` compile with `python -m py_compile`; requirements (pyserial, matplotlib, numpy) documented in `tools/host/requirements.txt`.
-- **Documentation:** This file added; root `README.md` updated to link here and to correct the “IMU and fuel gauge stubbed” statement for this branch.
+- **sensors_task:** Comment typo fixed (don't). **Guardrails:** `.gitattributes`, `.editorconfig`. **Documentation:** This file added; root `README.md` updated to link here and to correct the “IMU and fuel gauge stubbed” statement for this branch.
