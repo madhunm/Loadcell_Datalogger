@@ -1,4 +1,6 @@
 #include "services/sd_logger.h"
+#include "config.h"
+#include "pins.h"
 #include <Arduino.h>
 #include <FS.h>
 #include <SD_MMC.h>
@@ -7,6 +9,7 @@
 #include "services/frame_pipe.h"
 #include "services/scope_stream.h"
 #include "services/adc_frames.h"
+#include "services/system_status.h"
 
 struct TareResult {
   uint16_t frames;
@@ -100,16 +103,33 @@ PdlHeaderV1 logger_make_default_header() {
   return h;
 }
 
+static inline bool sd_card_detect_present() {
+  if (!SD_CD_ENABLED) return true;
+  int v = digitalRead(PIN_SD_CD);
+  return SD_CD_ACTIVE_LOW ? (v == LOW) : (v == HIGH);
+}
+
 bool logger_begin() {
   SD_MMC.setPins(4, 5, 6, 7, 8, 9);
+  if (SD_CD_ENABLED) {
+    pinMode(PIN_SD_CD, INPUT_PULLUP);
+    if (!sd_card_detect_present()) {
+      Serial.println("#ERR: SD card-detect: no card");
+      system_status_set_fault(FaultCode::SD_MOUNT_FAIL);
+      return false;
+    }
+  }
   if (!SD_MMC.begin("/sdcard", false)) {
     Serial.println("#ERR: SD_MMC.begin failed");
+    system_status_set_fault(FaultCode::SD_MOUNT_FAIL);
     return false;
   }
   if (SD_MMC.cardType() == CARD_NONE) {
     Serial.println("#ERR: No SD card");
+    system_status_set_fault(FaultCode::SD_MOUNT_FAIL);
     return false;
   }
+  system_status_clear_fault(FaultCode::SD_MOUNT_FAIL);
   return true;
 }
 
@@ -122,6 +142,7 @@ bool logger_start_session(const PdlHeaderV1& hdr, bool rtc_valid, uint32_t rtc_e
   g_file = SD_MMC.open(g_current_tmp_path, FILE_WRITE);
   if (!g_file) {
     Serial.println("#ERR: open log file failed");
+    system_status_set_fault(FaultCode::SD_WRITE_FAIL);
     return false;
   }
 
@@ -133,6 +154,7 @@ bool logger_start_session(const PdlHeaderV1& hdr, bool rtc_valid, uint32_t rtc_e
   if (n != sizeof(h)) {
     Serial.println("#ERR: header write failed");
     g_file.close();
+    system_status_set_fault(FaultCode::SD_WRITE_FAIL);
     return false;
   }
   g_file.flush();
@@ -176,6 +198,7 @@ static void do_rename_tmp_to_bin() {
     Serial.println(bin_path);
   } else {
     Serial.println("#ERR: rename TMP to BIN failed");
+    system_status_set_fault(FaultCode::SD_WRITE_FAIL);
   }
   g_current_tmp_path[0] = '\0';
 }
@@ -193,6 +216,11 @@ static void logger_task(void*) {
   }
 
   while (true) {
+    if (SD_CD_ENABLED && g_logging && !g_drain_requested && !sd_card_detect_present()) {
+      system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+      g_drain_requested = true;
+    }
+
     TareResult tr;
     if (g_tare_result_q && xQueueReceive(g_tare_result_q, &tr, 0) == pdTRUE && g_file) {
       const size_t off_tare = offsetof(PdlHeaderV1, tare_frames);
@@ -225,6 +253,8 @@ static void logger_task(void*) {
       size_t n = g_file.write(frame_buf, to_write);
       if (n != to_write) {
         Serial.println("#ERR: SD write failed");
+        system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+        g_drain_requested = true;
       }
       bytes_since_flush += n;
       frame_buf_n = 0;
@@ -276,18 +306,18 @@ void start_logger_task() {
 bool logger_export_latest_to_csv() {
   if (g_last_bin_path[0] == '\0') return false;
   File bin = SD_MMC.open(g_last_bin_path, FILE_READ);
-  if (!bin) return false;
+  if (!bin) { system_status_set_fault(FaultCode::SD_WRITE_FAIL); return false; }
   size_t l = strlen(g_last_bin_path);
   char csv_path[64];
   strncpy(csv_path, g_last_bin_path, sizeof(csv_path) - 1);
   csv_path[sizeof(csv_path)-1] = '\0';
   if (l >= 4) strcpy(csv_path + l - 4, "CSV");
   File csv = SD_MMC.open(csv_path, FILE_WRITE);
-  if (!csv) { bin.close(); return false; }
+  if (!csv) { bin.close(); system_status_set_fault(FaultCode::SD_WRITE_FAIL); return false; }
 
   PdlHeaderV1 hdr;
   if (bin.read((uint8_t*)&hdr, sizeof(hdr)) != sizeof(hdr) || hdr.magic != PDL_MAGIC) {
-    bin.close(); csv.close(); return false;
+    bin.close(); csv.close(); system_status_set_fault(FaultCode::SD_WRITE_FAIL); return false;
   }
 
   const uint16_t frame_ver = hdr.frame_ver;

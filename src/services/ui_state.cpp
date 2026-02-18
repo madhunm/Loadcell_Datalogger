@@ -4,22 +4,15 @@
 #include "services/sd_logger.h"
 #include "services/frame_pipe.h"
 #include "services/aux_state.h"
+#include "services/system_status.h"
+#include "services/sensors_task.h"
 #include <Arduino.h>
 
-static constexpr int BUTTON_GPIO = 0;
-static constexpr int LED_GPIO = 2;
+static constexpr int BUTTON_GPIO = 2;
+static constexpr int LED_GPIO = 21;
 
 static UiState s_ui_state = UiState::BOOT;
 static uint32_t s_warning_blink_until_ms = 0;
-
-static void apply_led_state() {
-  led_set_state(s_ui_state);
-  if (s_ui_state == UiState::FAULT) {
-    led_set_fault(LedFault::SD_MOUNT);
-  } else {
-    led_clear_fault();
-  }
-}
 
 void ui_init() {
   button_begin(BUTTON_GPIO, true);
@@ -31,10 +24,8 @@ void ui_init() {
   if (logger_begin()) {
     s_ui_state = UiState::IDLE_READY;
     led_set_state(UiState::IDLE_READY);
-    led_clear_fault();
   } else {
     s_ui_state = UiState::FAULT;
-    led_set_fault(LedFault::SD_MOUNT);
   }
 }
 
@@ -64,16 +55,19 @@ static void do_export_latest() {
     s_ui_state = UiState::IDLE_READY;
     led_set_state(UiState::IDLE_READY);
   } else {
-    led_set_fault(LedFault::SD_WRITE);
+    system_status_set_fault(FaultCode::SD_WRITE_FAIL);
     s_ui_state = UiState::IDLE_READY;
     led_set_state(UiState::IDLE_READY);
-    led_clear_fault();
   }
 }
 
 static void do_retry_init() {
-  led_clear_fault();
   if (logger_begin()) {
+    system_status_clear_fault(FaultCode::SD_MOUNT_FAIL);
+    system_status_clear_fault(FaultCode::SD_WRITE_FAIL);
+  }
+  sensors_request_retry_probe();
+  if (system_status_get_led_fault() == LedFault::NONE) {
     s_ui_state = UiState::IDLE_READY;
     led_set_state(UiState::IDLE_READY);
   }
@@ -114,6 +108,19 @@ void ui_tick(uint32_t now_ms) {
     else led_set_custom1(0, 0, 0);
   } else {
     s_warning_blink_until_ms = 0;
+    LedFault f = system_status_get_led_fault();
+    LedWarning w = system_status_get_led_warning();
+    if (f != LedFault::NONE) {
+      s_ui_state = UiState::FAULT;
+      led_set_fault(f);
+      led_set_state(UiState::FAULT);
+    } else {
+      led_clear_fault();
+      if (s_ui_state == UiState::FAULT) s_ui_state = UiState::IDLE_READY;
+      led_set_state(s_ui_state);
+    }
+    if (w != LedWarning::NONE) led_set_warning(w);
+    else led_clear_warning();
     led_tick(now_ms);
   }
 }

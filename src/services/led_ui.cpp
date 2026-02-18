@@ -88,6 +88,13 @@ static void run_warning_pattern(uint32_t now_ms, LedColor col) {
       else set_pixel(0,0,0);
       return;
     }
+    case LedWarning::RTC_FAULT: {
+      uint32_t pos = (now_ms - s_phase_start_ms) % 1200;
+      if (pos < 120) { uint8_t r,g,b; get_color_rgb(LedColor::YELLOW, DEFAULT_BRIGHTNESS, &r,&g,&b); set_pixel(r,g,b); }
+      else if (pos >= 240 && pos < 360) { uint8_t r,g,b; get_color_rgb(LedColor::YELLOW, DEFAULT_BRIGHTNESS, &r,&g,&b); set_pixel(r,g,b); }
+      else set_pixel(0,0,0);
+      return;
+    }
     case LedWarning::LOW_BATT: {
       uint32_t period = 2000;
       uint32_t pos = (now_ms - s_phase_start_ms) % period;

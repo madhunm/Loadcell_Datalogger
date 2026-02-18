@@ -29,6 +29,7 @@ enum class LedFault : uint8_t {
 enum class LedWarning : uint8_t {
   NONE = 0,
   RTC_INVALID,
+  RTC_FAULT,   // RTC read failed
   LOW_BATT,
   UNDERLOAD,
   OVERLOAD,

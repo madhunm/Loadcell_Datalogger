@@ -8,6 +8,7 @@
 #include "services/frame_pipe.h"
 #include "services/aux_state.h"
 #include "services/sd_logger.h"
+#include "services/system_status.h"
 
 static constexpr int ADC_HZ = 64000;
 static constexpr int FRAME_HZ = 500;
@@ -72,10 +73,16 @@ static void adc_frame_task(void*) {
     int32_t mn = INT32_MAX;
     int32_t mx = INT32_MIN;
     uint64_t t_first = 0;
+    bool adc_error = false;
 
     for (int i=0; i<DECIM; i++) {
       Max11270::Sample smp;
-      ESP_ERROR_CHECK(adc.readSampleBlocking(&smp, 0));
+      esp_err_t err = adc.readSampleBlocking(&smp, 0);
+      if (err != ESP_OK) {
+        system_status_set_fault(FaultCode::ADC_FAULT);
+        adc_error = true;
+        break;
+      }
       if (i == 0) t_first = smp.t_us;
 
       const int32_t code = smp.code;
@@ -83,6 +90,8 @@ static void adc_frame_task(void*) {
       if (code < mn) mn = code;
       if (code > mx) mx = code;
     }
+
+    if (adc_error) continue;
 
     const int32_t mean = (int32_t)(sum / DECIM);
 
@@ -118,11 +127,11 @@ static void adc_frame_task(void*) {
     if (frame_pipe_consume_mark_next()) fr.v1.flags |= FLG_MARK;
     uint32_t now_ms = (uint32_t)(t_first / 1000);
     if (frame_pipe_should_set_dropped(now_ms)) fr.v1.flags |= FLG_DROPPED_FRAME;
-    if (fr.v1.force_peak_mN > s_overload_mN) fr.v1.flags |= FLG_OVERLOAD;
-    if (fr.v1.force_mean_mN < s_underload_mN) fr.v1.flags |= FLG_UNDERLOAD;
-    if (fr.v1.force_min_mN < -s_compression_mN) fr.v1.flags |= FLG_COMPRESSION;
-    if (!snap.rtc_valid) fr.v1.flags |= FLG_RTC_INVALID;
-    if (snap.soc_centiPct < LOW_BATT_SOC_CENTI || snap.vbat_mV < LOW_BATT_MV) fr.v1.flags |= FLG_LOW_BATT;
+    if (fr.v1.force_peak_mN > s_overload_mN) { fr.v1.flags |= FLG_OVERLOAD; system_status_set_warning(WarningCode::OVERLOAD); } else { system_status_clear_warning(WarningCode::OVERLOAD); }
+    if (fr.v1.force_mean_mN < s_underload_mN) { fr.v1.flags |= FLG_UNDERLOAD; system_status_set_warning(WarningCode::UNDERLOAD); } else { system_status_clear_warning(WarningCode::UNDERLOAD); }
+    if (fr.v1.force_min_mN < -s_compression_mN) { fr.v1.flags |= FLG_COMPRESSION; system_status_set_warning(WarningCode::COMPRESSION); } else { system_status_clear_warning(WarningCode::COMPRESSION); }
+    if (!snap.rtc_valid) { fr.v1.flags |= FLG_RTC_INVALID; system_status_set_warning(WarningCode::RTC_INVALID); } else { system_status_clear_warning(WarningCode::RTC_INVALID); }
+    if (snap.soc_centiPct < LOW_BATT_SOC_CENTI || snap.vbat_mV < LOW_BATT_MV) { fr.v1.flags |= FLG_LOW_BATT; system_status_set_warning(WarningCode::LOW_BATT); } else { system_status_clear_warning(WarningCode::LOW_BATT); }
     fr.v1.pad = 0;
 
     fr.imu_sample_t_us = snap.imu_sample_t_us;

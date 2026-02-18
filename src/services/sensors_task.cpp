@@ -4,6 +4,7 @@
 
 #include "services/sensors_task.h"
 #include "services/aux_state.h"
+#include "services/system_status.h"
 #include "drivers/max17048.h"
 #include "drivers/rx8900ce.h"
 #include "drivers/lsm6dsv.h"
@@ -19,6 +20,7 @@ static LSM6DSV imu;
 
 static volatile uint32_t s_imu_irq_count = 0;
 static volatile bool s_rtc_pending = false;
+static volatile bool s_retry_requested = false;
 
 static void IRAM_ATTR imu_int1_isr() {
   uint32_t c = s_imu_irq_count;
@@ -59,8 +61,10 @@ static void sensors_task(void*) {
 
   // Bring-up devices (don�t hard-fail the whole system on one missing device)
   bool fuel_ok = fuel.begin(Wire);
-  bool rtc_ok  = rtc.begin(Wire);
-  bool imu_ok  = imu.begin(Wire) && imu.configure(LSM6DSV::Odr::HZ_960, LSM6DSV::Odr::HZ_960);
+  static bool rtc_ok = rtc.begin(Wire);
+  static bool imu_ok = imu.begin(Wire) && imu.configure(LSM6DSV::Odr::HZ_960, LSM6DSV::Odr::HZ_960);
+
+  if (!imu_ok) system_status_set_fault(FaultCode::IMU_FAULT);
 
   if (imu_ok) {
     imu.setIntPinConfig(false, false);
@@ -83,6 +87,25 @@ static void sensors_task(void*) {
   while (true) {
     vTaskDelayUntil(&last_wake, period);
 
+    if (s_retry_requested) {
+      s_retry_requested = false;
+      imu_ok = imu.begin(Wire) && imu.configure(LSM6DSV::Odr::HZ_960, LSM6DSV::Odr::HZ_960);
+      rtc_ok = rtc.begin(Wire);
+      if (imu_ok) {
+        system_status_clear_fault(FaultCode::IMU_FAULT);
+        imu.setIntPinConfig(false, false);
+        imu.routeDrdyToInt1(true, true);
+        pinMode(IMU_INT1_GPIO, INPUT);
+        attachInterrupt(digitalPinToInterrupt(IMU_INT1_GPIO), imu_int1_isr, RISING);
+      }
+      if (rtc_ok) {
+        system_status_clear_warning(WarningCode::RTC_FAULT);
+        rtc.enableSecondUpdateInterrupt(true);
+        pinMode(RTC_INT_GPIO, INPUT);
+        attachInterrupt(digitalPinToInterrupt(RTC_INT_GPIO), rtc_int_isr, FALLING);
+      }
+    }
+
     uint32_t now = millis();
 
     if (imu_ok && s_imu_irq_count != last_imu_count) {
@@ -103,9 +126,11 @@ static void sensors_task(void*) {
       if (rtc.readDateTime(t)) {
         uint32_t epoch = toEpoch2000To2099(t.year, t.month, t.day, t.hour, t.minute, t.second);
         aux_set_rtc(epoch, true);
+        system_status_clear_warning(WarningCode::RTC_FAULT);
       } else {
         aux_set_rtc(0, false);
         aux_bump_i2c_err();
+        system_status_set_warning(WarningCode::RTC_FAULT);
       }
     }
 
@@ -124,4 +149,8 @@ static void sensors_task(void*) {
 
 void start_sensors_task() {
   xTaskCreatePinnedToCore(sensors_task, "sensors", 4096, nullptr, 3, nullptr, 0);
+}
+
+void sensors_request_retry_probe() {
+  s_retry_requested = true;
 }
