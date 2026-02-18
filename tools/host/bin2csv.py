@@ -9,7 +9,7 @@ import sys
 PDL_MAGIC = 0x314C4450
 HDR_FMT = "<IHHHHIIIIQIIffffiiiHiII170s"
 HDR_SIZE = 256
-FRAME_V1_FMT = "<IQiiiiiihhhhhhHHHH"   # FrameV1: 56 bytes
+FRAME_V1_FMT = "<IQiiiiiihhhhhhHHHH"   # FrameV1: 56 bytes (6*i)
 FRAME_V1_SIZE = 56
 FRAME_V2_FMT = "<IQiiiiiihhhhhhHHHHQ"  # FrameV2: V1 + imu_sample_t_us
 FRAME_V2_SIZE = 64
@@ -62,6 +62,9 @@ def main():
 
         with open(args.output, "w", newline="") as out:
             w = csv.writer(out)
+            # Optional: rtc_epoch from header (start_rtc_epoch)
+            if start_rtc_epoch:
+                out.write(f"# rtc_epoch={start_rtc_epoch}\n")
             if has_imu_ts:
                 w.writerow(
                     [

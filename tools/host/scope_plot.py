@@ -28,11 +28,11 @@ def main():
     parser.add_argument("--baud", type=int, default=115200, help="Baud rate")
     parser.add_argument("--hz", type=int, default=25, help="Scope rate in Hz")
     parser.add_argument("--window", type=float, default=30, help="Plot window in seconds")
-    parser.add_argument("--outfile", type=str, default=None, help="Output CSV (default scope_<epoch>.csv)")
+    parser.add_argument("--outfile", type=str, default="scope_capture.csv", help="Output CSV file")
     args = parser.parse_args()
 
     port = args.port or choose_port()
-    outfile = args.outfile or f"scope_{int(time.time())}.csv"
+    outfile = args.outfile
 
     print(f"Opening {port} @ {args.baud}")
     ser = serial.Serial(port, args.baud, timeout=1)

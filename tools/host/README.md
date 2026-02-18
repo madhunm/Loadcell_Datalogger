@@ -55,14 +55,14 @@ python tools\host\scope_plot.py --port COM3 --baud 115200
 All options:
 
 ```cmd
-python tools\host\scope_plot.py --port COM3 --baud 115200 --hz 25 --window 60 --outfile scope_data.csv
+python tools\host\scope_plot.py --port COM3 --baud 115200 --hz 25 --window 30 --outfile scope_capture.csv
 ```
 
 - `--port`: Serial port (e.g. `COM3`). Omit to auto-select.
 - `--baud`: Baud rate (default 115200).
 - `--hz`: Scope rate in Hz sent to device (default 25).
-- `--window`: Plot window in seconds (default 30; ring buffer keeps last 60s when window=60).
-- `--outfile`: Output CSV path (default `scope_<epoch>.csv`).
+- `--window`: Plot window in seconds (default 30).
+- `--outfile`: Output CSV path (default `scope_capture.csv`).
 
 CSV line format from device: `ms,force_mean_N,force_peak_N,accel_mag_g,flags`.
 

@@ -62,6 +62,7 @@ Single WS2812; saturated colors only. Priority: fault > warning > state.
 - **Header:** Magic `0x314C4450`, adc_rate_hz (64000), frame_rate_hz (500), decim (128), start_mono_us, RTC fields, slope/offset/tare, overload/underload/compression, etc.
 - **Frame (V2):** sample_index, t_us, adc mean/peak/min, force mean/peak/min (mN), ax/ay/az, gx/gy/gz, flags, vbat_mV, soc_centiPct, imu_sample_t_us.
 - **Rate:** 500 frames per second; 128 ADC samples per frame (64 ksps).
+- **SD file lifecycle:** Logging writes to a temporary file (`.TMP`); on stop the file is renamed to `.BIN`. Export (long-press after stop) converts the latest `.BIN` to `.CSV` on the SD card.
 
 ## Build and Flash
 
@@ -80,9 +81,13 @@ Default environment is `esp32s3mini` (ESP32-S3, Arduino).
 2. CSV line format: `ms,force_mean_N,force_peak_N,accel_mag_g,flags`. Lines starting with `#` are comments.
 3. Host script (Windows):
 
+From repo root:
+
 ```cmd
-pip install pyserial matplotlib numpy
-python tools\host\scope_plot.py --port COM3 --baud 115200 --hz 25 --window 30 --outfile scope.csv
+pip install -r tools\host\requirements.txt
+python tools\host\scope_plot.py
+python tools\host\scope_plot.py --port COM3 --baud 115200 --hz 25 --window 30 --outfile scope_capture.csv
+python tools\host\bin2csv.py input.BIN output.csv
 ```
 
 Omit `--port` to auto-detect. On Ctrl+C the script sends `scope 0` and closes the CSV.
