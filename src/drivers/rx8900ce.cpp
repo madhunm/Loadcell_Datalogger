@@ -96,8 +96,12 @@ bool RX8900CE::enableSecondUpdateInterrupt(bool enable) {
   if (!writeReg(REG_EXT, ext)) return false;
   uint8_t ctrl = 0;
   if (!readControl(ctrl)) return false;
-  if (enable) ctrl |= CTRL_UIE;
-  else ctrl &= (uint8_t)~CTRL_UIE;
+  if (enable) {
+    ctrl |= CTRL_UIE;
+    if (!clearFlags(FLAG_UF)) return false;  // clear update flag before enabling
+  } else {
+    ctrl &= (uint8_t)~CTRL_UIE;
+  }
   return writeControl(ctrl);
 }
 

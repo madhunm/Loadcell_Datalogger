@@ -5,12 +5,13 @@ import csv
 import struct
 import sys
 
+# Per src/format/log_format.h: Header 256 bytes, FrameV1 56 bytes, FrameV2 64 bytes
 PDL_MAGIC = 0x314C4450
 HDR_FMT = "<IHHHHIIIIQIIffffiiiHiII170s"
 HDR_SIZE = 256
-FRAME_V1_FMT = "<IQ6i6h4H"
+FRAME_V1_FMT = "<IQiiiiiihhhhhhHHHH"   # FrameV1: 56 bytes
 FRAME_V1_SIZE = 56
-FRAME_V2_FMT = "<IQ6i6h4HQ"
+FRAME_V2_FMT = "<IQiiiiiihhhhhhHHHHQ"  # FrameV2: V1 + imu_sample_t_us
 FRAME_V2_SIZE = 64
 
 
