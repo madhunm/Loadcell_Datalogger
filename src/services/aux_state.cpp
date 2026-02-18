@@ -10,10 +10,11 @@ void aux_init() {
   portEXIT_CRITICAL(&g_aux_mux);
 }
 
-void aux_set_imu(int16_t ax, int16_t ay, int16_t az, int16_t gx, int16_t gy, int16_t gz) {
+void aux_set_imu(int16_t ax, int16_t ay, int16_t az, int16_t gx, int16_t gy, int16_t gz, uint64_t imu_sample_t_us) {
   portENTER_CRITICAL(&g_aux_mux);
   g_aux.ax=ax; g_aux.ay=ay; g_aux.az=az;
   g_aux.gx=gx; g_aux.gy=gy; g_aux.gz=gz;
+  g_aux.imu_sample_t_us = imu_sample_t_us;
   portEXIT_CRITICAL(&g_aux_mux);
 }
 

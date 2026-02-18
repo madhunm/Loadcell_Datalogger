@@ -16,3 +16,5 @@ bool logger_get_last_bin_path(char* buf, size_t len);
 bool logger_export_latest_to_csv();
 
 PdlHeaderV1 logger_make_default_header();
+
+void logger_set_tare_result(uint16_t tare_frames, int32_t tare_adc_code, uint16_t tare_duration_ms);

@@ -16,10 +16,6 @@ void setup() {
 
   scope_init();
   start_cli_task();
-
-  if (!logger_begin()) {
-    Serial.println("#ERR: SD init failed (logger_begin). Logging will not work until fixed.");
-  }
   start_logger_task();
 
   start_adc_frames();

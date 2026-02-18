@@ -89,7 +89,8 @@ static void sensors_task(void*) {
       last_imu_count = s_imu_irq_count;
       LSM6DSV::SampleRaw s;
       if (imu.readRaw(s)) {
-        aux_set_imu(s.ax, s.ay, s.az, s.gx, s.gy, s.gz);
+        uint64_t t_us = (uint64_t)esp_timer_get_time();
+        aux_set_imu(s.ax, s.ay, s.az, s.gx, s.gy, s.gz, t_us);
       } else {
         aux_bump_i2c_err();
       }

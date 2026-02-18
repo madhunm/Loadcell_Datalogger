@@ -27,8 +27,8 @@
       while (true) {
         while (Serial.available()) {
           char c = (char)Serial.read();
-          if (c == ' ') continue;
-          if (c == ' ') {
+          if (c == '\r') continue;
+          if (c == '\n') {
             linebuf[linelen] = 0;
 
             if (strcmp(linebuf, "help") == 0) {
@@ -59,7 +59,7 @@
             }
 
             linelen = 0;
-          } else if (linelen < sizeof(linebuf)-1) {
+          } else if (linelen < sizeof(linebuf) - 1) {
             linebuf[linelen++] = c;
           }
         }

@@ -2,9 +2,18 @@
 #include <Arduino.h>
 #include <FS.h>
 #include <SD_MMC.h>
+#include <cstddef>
 
 #include "services/frame_pipe.h"
 #include "services/scope_stream.h"
+#include "services/adc_frames.h"
+
+struct TareResult {
+  uint16_t frames;
+  int32_t adc_code;
+  uint16_t duration_ms;
+};
+static QueueHandle_t g_tare_result_q = nullptr;
 
 static File g_file;
 static volatile bool g_logging = false;
@@ -13,19 +22,22 @@ static char g_current_tmp_path[64] = "";
 static char g_last_bin_path[64] = "";
 
 static constexpr size_t FRAME_BUF_COUNT = 256;
-static constexpr size_t FRAME_BUF_BYTES = FRAME_BUF_COUNT * sizeof(PdlFrameV1);
+static constexpr size_t FRAME_BUF_BYTES = FRAME_BUF_COUNT * sizeof(PdlFrameV2);
 static constexpr size_t FLUSH_INTERVAL_BYTES = 256 * 1024;
 
 static uint32_t next_run_number() {
-  File f = SD_MMC.open("/PDL_RUN.NUM", FILE_READ);
   uint32_t n = 0;
+  File f = SD_MMC.open("/PDL_RUN.NUM", FILE_READ);
   if (f && f.available() >= 4) {
     uint8_t b[4];
     f.read(b, 4);
+    f.close();
     n = (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+  } else if (f) {
+    f.close();
   }
-  if (f) f.close();
   n++;
+  SD_MMC.remove("/PDL_RUN.NUM");
   f = SD_MMC.open("/PDL_RUN.NUM", FILE_WRITE);
   if (f) {
     uint8_t b[4] = { (uint8_t)(n & 0xFF), (uint8_t)((n >> 8) & 0xFF), (uint8_t)((n >> 16) & 0xFF), (uint8_t)((n >> 24) & 0xFF) };
@@ -69,8 +81,8 @@ PdlHeaderV1 logger_make_default_header() {
   h.magic = PDL_MAGIC;
   h.header_ver = 1;
   h.header_size = sizeof(PdlHeaderV1);
-  h.frame_ver = 1;
-  h.frame_size = sizeof(PdlFrameV1);
+  h.frame_ver = 2;
+  h.frame_size = sizeof(PdlFrameV2);
   h.adc_rate_hz = 64000;
   h.frame_rate_hz = 500;
   h.decim = 128;
@@ -79,6 +91,11 @@ PdlHeaderV1 logger_make_default_header() {
   h.offset_mN = 0.0f;
   h.accel_g_per_lsb = 1.0f / 16384.0f;
   h.gyro_dps_per_lsb = 1.0f;
+  h.overload_mN = 2147483647;   // default: no overload trigger
+  h.underload_mN = -2147483648;  // default: no underload trigger
+  h.compression_mN = 2147483647; // default: no compression trigger
+  h.tare_frames = 0;
+  h.tare_adc_code = 0;
   memset(h.reserved, 0, sizeof(h.reserved));
   return h;
 }
@@ -121,6 +138,7 @@ bool logger_start_session(const PdlHeaderV1& hdr, bool rtc_valid, uint32_t rtc_e
   g_file.flush();
   g_logging = true;
   g_drain_requested = false;
+  adc_frames_on_session_start(h);
   Serial.print("#LOGFILE: ");
   Serial.println(g_current_tmp_path);
   return true;
@@ -175,23 +193,35 @@ static void logger_task(void*) {
   }
 
   while (true) {
-    PdlFrameV1 fr;
+    TareResult tr;
+    if (g_tare_result_q && xQueueReceive(g_tare_result_q, &tr, 0) == pdTRUE && g_file) {
+      const size_t off_tare = offsetof(PdlHeaderV1, tare_frames);
+      g_file.seek(off_tare, SeekSet);
+      g_file.write((const uint8_t*)&tr.frames, sizeof(tr.frames));
+      g_file.write((const uint8_t*)&tr.adc_code, sizeof(tr.adc_code));
+      const size_t off_reserved = offsetof(PdlHeaderV1, reserved);
+      g_file.seek(off_reserved, SeekSet);
+      g_file.write((const uint8_t*)&tr.duration_ms, sizeof(tr.duration_ms));
+      g_file.flush();
+    }
+
+    PdlFrameV2 fr;
     BaseType_t received = (g_frame_q && frame_buf_n < FRAME_BUF_COUNT)
       ? xQueueReceive(g_frame_q, &fr, pdMS_TO_TICKS(50))
       : pdFALSE;
     if (received == pdTRUE) {
       if (g_logging && !g_drain_requested) {
-        memcpy(frame_buf + frame_buf_n * sizeof(PdlFrameV1), &fr, sizeof(fr));
+        memcpy(frame_buf + frame_buf_n * sizeof(PdlFrameV2), &fr, sizeof(fr));
         frame_buf_n++;
-        scope_feed_frame(fr);
+        scope_feed_frame(fr.v1);
       } else if (g_drain_requested && g_file) {
-        memcpy(frame_buf + frame_buf_n * sizeof(PdlFrameV1), &fr, sizeof(fr));
+        memcpy(frame_buf + frame_buf_n * sizeof(PdlFrameV2), &fr, sizeof(fr));
         frame_buf_n++;
       }
     }
 
     if (frame_buf_n >= FRAME_BUF_COUNT && g_file) {
-      size_t to_write = frame_buf_n * sizeof(PdlFrameV1);
+      size_t to_write = frame_buf_n * sizeof(PdlFrameV2);
       size_t n = g_file.write(frame_buf, to_write);
       if (n != to_write) {
         Serial.println("#ERR: SD write failed");
@@ -209,16 +239,16 @@ static void logger_task(void*) {
 
     if (g_drain_requested && g_file) {
       while (g_frame_q && xQueueReceive(g_frame_q, &fr, 0) == pdTRUE) {
-        memcpy(frame_buf + frame_buf_n * sizeof(PdlFrameV1), &fr, sizeof(fr));
+        memcpy(frame_buf + frame_buf_n * sizeof(PdlFrameV2), &fr, sizeof(fr));
         frame_buf_n++;
         if (frame_buf_n >= FRAME_BUF_COUNT) {
-          size_t to_write = frame_buf_n * sizeof(PdlFrameV1);
+          size_t to_write = frame_buf_n * sizeof(PdlFrameV2);
           g_file.write(frame_buf, to_write);
           frame_buf_n = 0;
         }
       }
       if (frame_buf_n > 0) {
-        g_file.write(frame_buf, frame_buf_n * sizeof(PdlFrameV1));
+        g_file.write(frame_buf, frame_buf_n * sizeof(PdlFrameV2));
         frame_buf_n = 0;
       }
       g_file.flush();
@@ -232,7 +262,14 @@ static void logger_task(void*) {
   free(frame_buf);
 }
 
+void logger_set_tare_result(uint16_t tare_frames, int32_t tare_adc_code, uint16_t tare_duration_ms) {
+  if (!g_tare_result_q) return;
+  TareResult tr = { tare_frames, tare_adc_code, tare_duration_ms };
+  xQueueOverwrite(g_tare_result_q, &tr);
+}
+
 void start_logger_task() {
+  g_tare_result_q = xQueueCreate(1, sizeof(TareResult));
   xTaskCreatePinnedToCore(logger_task, "sd_logger", 6144, nullptr, configMAX_PRIORITIES - 4, nullptr, 0);
 }
 
@@ -253,18 +290,41 @@ bool logger_export_latest_to_csv() {
     bin.close(); csv.close(); return false;
   }
 
-  csv.println("sample_index,t_us,adc_mean,adc_peak,adc_min,force_mean_mN,force_peak_mN,force_min_mN,ax,ay,az,gx,gy,gz,flags,vbat_mV,soc_centiPct");
-  PdlFrameV1 fr;
-  char line[160];
-  while (bin.read((uint8_t*)&fr, sizeof(fr)) == sizeof(fr)) {
-    snprintf(line, sizeof(line), "%u,%llu,%ld,%ld,%ld,%ld,%ld,%ld,%d,%d,%d,%d,%d,%d,%u,%u,%u",
-      (unsigned)fr.sample_index,
-      (unsigned long long)fr.t_us,
-      (long)fr.adc_mean, (long)fr.adc_peak, (long)fr.adc_min,
-      (long)fr.force_mean_mN, (long)fr.force_peak_mN, (long)fr.force_min_mN,
-      (int)fr.ax, (int)fr.ay, (int)fr.az, (int)fr.gx, (int)fr.gy, (int)fr.gz,
-      (unsigned)fr.flags, (unsigned)fr.vbat_mV, (unsigned)fr.soc_centiPct);
-    csv.println(line);
+  const uint16_t frame_ver = hdr.frame_ver;
+  const size_t frame_size = hdr.frame_size;
+  const bool has_imu_ts = (frame_ver >= 2 && frame_size >= sizeof(PdlFrameV2));
+
+  if (has_imu_ts) {
+    csv.println("sample_index,t_us,adc_mean,adc_peak,adc_min,force_mean_mN,force_peak_mN,force_min_mN,ax,ay,az,gx,gy,gz,flags,vbat_mV,soc_centiPct,imu_sample_t_us");
+  } else {
+    csv.println("sample_index,t_us,adc_mean,adc_peak,adc_min,force_mean_mN,force_peak_mN,force_min_mN,ax,ay,az,gx,gy,gz,flags,vbat_mV,soc_centiPct");
+  }
+
+  char line[200];
+  if (has_imu_ts) {
+    PdlFrameV2 fr;
+    while (bin.read((uint8_t*)&fr, sizeof(fr)) == sizeof(fr)) {
+      const PdlFrameV1& v = fr.v1;
+      snprintf(line, sizeof(line), "%u,%llu,%ld,%ld,%ld,%ld,%ld,%ld,%d,%d,%d,%d,%d,%d,%u,%u,%u,%llu",
+        (unsigned)v.sample_index, (unsigned long long)v.t_us,
+        (long)v.adc_mean, (long)v.adc_peak, (long)v.adc_min,
+        (long)v.force_mean_mN, (long)v.force_peak_mN, (long)v.force_min_mN,
+        (int)v.ax, (int)v.ay, (int)v.az, (int)v.gx, (int)v.gy, (int)v.gz,
+        (unsigned)v.flags, (unsigned)v.vbat_mV, (unsigned)v.soc_centiPct,
+        (unsigned long long)fr.imu_sample_t_us);
+      csv.println(line);
+    }
+  } else {
+    PdlFrameV1 fr;
+    while (bin.read((uint8_t*)&fr, frame_size) == frame_size) {
+      snprintf(line, sizeof(line), "%u,%llu,%ld,%ld,%ld,%ld,%ld,%ld,%d,%d,%d,%d,%d,%d,%u,%u,%u",
+        (unsigned)fr.sample_index, (unsigned long long)fr.t_us,
+        (long)fr.adc_mean, (long)fr.adc_peak, (long)fr.adc_min,
+        (long)fr.force_mean_mN, (long)fr.force_peak_mN, (long)fr.force_min_mN,
+        (int)fr.ax, (int)fr.ay, (int)fr.az, (int)fr.gx, (int)fr.gy, (int)fr.gz,
+        (unsigned)fr.flags, (unsigned)fr.vbat_mV, (unsigned)fr.soc_centiPct);
+      csv.println(line);
+    }
   }
   csv.flush();
   csv.close();

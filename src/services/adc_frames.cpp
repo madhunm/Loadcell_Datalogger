@@ -1,11 +1,13 @@
 #include <Arduino.h>
 #include <limits>
 
+#include "config.h"
 #include "drivers/max11270.h"
 #include "format/log_format.h"
 #include "format/pdl_flags.h"
 #include "services/frame_pipe.h"
 #include "services/aux_state.h"
+#include "services/sd_logger.h"
 
 static constexpr int ADC_HZ = 64000;
 static constexpr int FRAME_HZ = 500;
@@ -18,6 +20,22 @@ static float g_slope_mN_per_code = 1.0f;
 static float g_offset_mN = 0.0f;
 static int32_t g_tare_code = 0;
 
+static volatile bool s_tare_phase = false;
+static int64_t s_tare_sum = 0;
+static uint32_t s_tare_count = 0;
+
+static int32_t s_overload_mN = std::numeric_limits<int32_t>::max();
+static int32_t s_underload_mN = std::numeric_limits<int32_t>::min();
+static int32_t s_compression_mN = std::numeric_limits<int32_t>::max();
+
+void adc_frames_on_session_start(const PdlHeaderV1& hdr) {
+  s_tare_phase = true;
+  s_tare_sum = 0;
+  s_tare_count = 0;
+  s_overload_mN = hdr.overload_mN;
+  s_underload_mN = hdr.underload_mN;
+  s_compression_mN = hdr.compression_mN;
+}
 
 static inline int32_t code_to_force_mN(int32_t code) {
   float f = g_slope_mN_per_code * (float)(code - g_tare_code) + g_offset_mN;
@@ -68,29 +86,46 @@ static void adc_frame_task(void*) {
 
     const int32_t mean = (int32_t)(sum / DECIM);
 
-    PdlFrameV1 fr{};
-    fr.sample_index = frame_idx++;
-    fr.t_us = t_first;
+    if (s_tare_phase && logger_is_logging()) {
+      s_tare_sum += mean;
+      s_tare_count++;
+      if (s_tare_count >= TARE_N) {
+        g_tare_code = (int32_t)(s_tare_sum / (int64_t)TARE_N);
+        logger_set_tare_result((uint16_t)TARE_N, g_tare_code, (uint16_t)(TARE_N * 2));
+        s_tare_phase = false;
+      }
+    }
 
-    fr.adc_mean = mean;
-    fr.adc_peak = mx;
-    fr.adc_min  = mn;
+    PdlFrameV2 fr{};
+    fr.v1.sample_index = frame_idx++;
+    fr.v1.t_us = t_first;
 
-    fr.force_mean_mN = code_to_force_mN(mean);
-    fr.force_peak_mN = code_to_force_mN(mx);
-    fr.force_min_mN  = code_to_force_mN(mn);
+    fr.v1.adc_mean = mean;
+    fr.v1.adc_peak = mx;
+    fr.v1.adc_min  = mn;
+
+    fr.v1.force_mean_mN = code_to_force_mN(mean);
+    fr.v1.force_peak_mN = code_to_force_mN(mx);
+    fr.v1.force_min_mN  = code_to_force_mN(mn);
 
     AuxSnapshot snap = aux_get_snapshot();
-    fr.ax = snap.ax; fr.ay = snap.ay; fr.az = snap.az;
-    fr.gx = snap.gx; fr.gy = snap.gy; fr.gz = snap.gz;
-    fr.vbat_mV = snap.vbat_mV;
-    fr.soc_centiPct = snap.soc_centiPct;
+    fr.v1.ax = snap.ax; fr.v1.ay = snap.ay; fr.v1.az = snap.az;
+    fr.v1.gx = snap.gx; fr.v1.gy = snap.gy; fr.v1.gz = snap.gz;
+    fr.v1.vbat_mV = snap.vbat_mV;
+    fr.v1.soc_centiPct = snap.soc_centiPct;
 
-    fr.flags = 0;
-    if (frame_pipe_consume_mark_next()) fr.flags |= FLG_MARK;
+    fr.v1.flags = 0;
+    if (frame_pipe_consume_mark_next()) fr.v1.flags |= FLG_MARK;
     uint32_t now_ms = (uint32_t)(t_first / 1000);
-    if (frame_pipe_should_set_dropped(now_ms)) fr.flags |= FLG_DROPPED_FRAME;
-    fr.pad = 0;
+    if (frame_pipe_should_set_dropped(now_ms)) fr.v1.flags |= FLG_DROPPED_FRAME;
+    if (fr.v1.force_peak_mN > s_overload_mN) fr.v1.flags |= FLG_OVERLOAD;
+    if (fr.v1.force_mean_mN < s_underload_mN) fr.v1.flags |= FLG_UNDERLOAD;
+    if (fr.v1.force_min_mN < -s_compression_mN) fr.v1.flags |= FLG_COMPRESSION;
+    if (!snap.rtc_valid) fr.v1.flags |= FLG_RTC_INVALID;
+    if (snap.soc_centiPct < LOW_BATT_SOC_CENTI || snap.vbat_mV < LOW_BATT_MV) fr.v1.flags |= FLG_LOW_BATT;
+    fr.v1.pad = 0;
+
+    fr.imu_sample_t_us = snap.imu_sample_t_us;
 
     if (g_frame_q) {
       if (xQueueSend(g_frame_q, &fr, 0) != pdTRUE)
@@ -100,6 +135,6 @@ static void adc_frame_task(void*) {
 }
 
 void start_adc_frames() {
-  g_frame_q = xQueueCreate(600, sizeof(PdlFrameV1));
+  g_frame_q = xQueueCreate(600, sizeof(PdlFrameV2));
   xTaskCreatePinnedToCore(adc_frame_task, "adc_frame", 6144, nullptr, configMAX_PRIORITIES-2, nullptr, 1);
 }

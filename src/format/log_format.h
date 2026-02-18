@@ -64,7 +64,13 @@ struct PdlFrameV1 {
   uint16_t pad;            // keep struct at 56 bytes
 };
 
+struct PdlFrameV2 {
+  PdlFrameV1 v1;
+  uint64_t imu_sample_t_us;
+};
+
 #pragma pack(pop)
 
 static_assert(sizeof(PdlHeaderV1) == 256, "Header must be 256 bytes");
 static_assert(sizeof(PdlFrameV1) == 56, "Frame must be 56 bytes");
+static_assert(sizeof(PdlFrameV2) == 64, "Frame V2 must be 64 bytes");
