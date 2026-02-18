@@ -47,6 +47,15 @@ Restart-friendly parachute/load-cell data logger for ESP32-S3:
 - **EXPORTING:** Short = no-op (export runs to completion).
 - **FAULT:** Short = retry init (SD mount + sensors probe).
 
+## LED indicators
+
+Single WS2812; saturated colors only. Priority: fault > warning > state.
+
+- **Power on / armed / idle:** Red (pulse during boot, solid when IDLE_READY or after STOPPED double-blink).
+- **Logging:** Green heartbeat (1 Hz: 80 ms on, 920 ms off).
+- **Low battery:** Orange pulse (2 s period); overrides state when active.
+- **Faults:** Red coded blinks (N blinks = fault type, e.g. 2 = SD mount); not solid red so power-on stays distinct.
+
 ## Logging Format
 
 - **File:** One 256-byte header (`PdlHeaderV1`) then a stream of 64-byte frames (`PdlFrameV2`).

@@ -5,7 +5,7 @@
 // Priority: FAULT > WARNING > STATE. Call led_tick(now_ms) from loop/task; no delay().
 
 enum class LedColor : uint8_t {
-  OFF, RED, GREEN, BLUE, CYAN, YELLOW, MAGENTA, PURPLE
+  OFF, RED, GREEN, BLUE, CYAN, YELLOW, MAGENTA, PURPLE, ORANGE
 };
 
 enum class UiState : uint8_t {

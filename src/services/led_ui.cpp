@@ -27,6 +27,7 @@ static void get_color_rgb(LedColor c, uint8_t brightness, uint8_t* r, uint8_t* g
     case LedColor::YELLOW:*r=br; *g=br; *b=0; return;
     case LedColor::MAGENTA:*r=br;*g=0; *b=br; return;
     case LedColor::PURPLE:*r=br;*g=0; *b=(br*3/4); return; // saturated purple
+    case LedColor::ORANGE:*r=br; *g=(uint8_t)((60*(uint16_t)br)/255); *b=0; return; // saturated orange
     default: *r=0;*g=0;*b=0; return;
   }
 }
@@ -101,7 +102,7 @@ static void run_warning_pattern(uint32_t now_ms, LedColor col) {
       float t = (float)pos / period * 6.283185307f;
       uint8_t br = (uint8_t)(DEFAULT_BRIGHTNESS * (0.3f + 0.7f * (0.5f + 0.5f * sinf(t))));
       if (br < 10) br = 10;
-      uint8_t r,g,b; get_color_rgb(LedColor::YELLOW, br, &r,&g,&b); set_pixel(r,g,b);
+      uint8_t r,g,b; get_color_rgb(LedColor::ORANGE, br, &r,&g,&b); set_pixel(r,g,b);
       return;
     }
     case LedWarning::UNDERLOAD: {
@@ -141,22 +142,22 @@ static void run_state_pattern(uint32_t now_ms) {
       float t = (float)pos / period * 6.283185307f;
       uint8_t br = (uint8_t)(DEFAULT_BRIGHTNESS * (0.3f + 0.7f * (0.5f + 0.5f * sinf(t))));
       if (br < 10) br = 10;
-      uint8_t r,g,b; get_color_rgb(LedColor::BLUE, br, &r,&g,&b); set_pixel(r,g,b);
+      uint8_t r,g,b; get_color_rgb(LedColor::RED, br, &r,&g,&b); set_pixel(r,g,b);
       return;
     }
     case UiState::IDLE_READY: {
-      uint8_t r,g,b; get_color_rgb(LedColor::GREEN, DEFAULT_BRIGHTNESS, &r,&g,&b); set_pixel(r,g,b);
+      uint8_t r,g,b; get_color_rgb(LedColor::RED, DEFAULT_BRIGHTNESS, &r,&g,&b); set_pixel(r,g,b);
       return;
     }
     case UiState::LOGGING: {
       uint32_t pos = (now_ms - s_phase_start_ms) % 1000;
-      if (pos < 80) { uint8_t r,g,b; get_color_rgb(LedColor::CYAN, DEFAULT_BRIGHTNESS, &r,&g,&b); set_pixel(r,g,b); }
+      if (pos < 80) { uint8_t r,g,b; get_color_rgb(LedColor::GREEN, DEFAULT_BRIGHTNESS, &r,&g,&b); set_pixel(r,g,b); }
       else set_pixel(0,0,0);
       return;
     }
     case UiState::STOPPED: {
       if (s_stopped_double_done) {
-        uint8_t r,g,b; get_color_rgb(LedColor::GREEN, DEFAULT_BRIGHTNESS, &r,&g,&b); set_pixel(r,g,b);
+        uint8_t r,g,b; get_color_rgb(LedColor::RED, DEFAULT_BRIGHTNESS, &r,&g,&b); set_pixel(r,g,b);
         return;
       }
       const uint32_t on = 80, gap = 120, long_off = 1200;
