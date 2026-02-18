@@ -1,6 +1,8 @@
 #pragma once
 #include <cstdint>
+#include <Arduino.h>              
 #include "format/log_format.h"
+#include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 
 struct ScopeSample {

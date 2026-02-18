@@ -27,9 +27,8 @@
       while (true) {
         while (Serial.available()) {
           char c = (char)Serial.read();
-          if (c == '') continue;
-          if (c == '
-') {
+          if (c == ' ') continue;
+          if (c == ' ') {
             linebuf[linelen] = 0;
 
             if (strcmp(linebuf, "help") == 0) {
@@ -51,7 +50,7 @@
               }
             } else if (strcmp(linebuf, "startlog") == 0) {
               auto hdr = logger_make_default_header();
-              if (logger_start_session(hdr)) Serial.println("#log started");
+              if (logger_start_session(hdr, false, 0)) Serial.println("#log started");
               else Serial.println("#ERR: log start failed");
             } else if (strcmp(linebuf, "stoplog") == 0) {
               logger_stop_session();

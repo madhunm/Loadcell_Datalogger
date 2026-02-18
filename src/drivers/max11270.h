@@ -42,8 +42,18 @@ public:
   enum class DigitalGain : uint8_t { X1=0, X2=1, X4=2, X8=3 };
   enum class PowerDownMode : uint8_t { Standby, Sleep };
 
-  struct SpiPins { gpio_num_t mosi=GPIO_NUM_NC, miso=GPIO_NUM_NC, sclk=GPIO_NUM_NC, cs=GPIO_NUM_NC; };
-  struct GpioPins { gpio_num_t rdyb=GPIO_NUM_NC, rstb=GPIO_NUM_NC, sync=GPIO_NUM_NC; };
+  struct SpiPins {
+    gpio_num_t mosi = GPIO_NUM_NC;
+    gpio_num_t miso = GPIO_NUM_NC;
+    gpio_num_t sclk = GPIO_NUM_NC;
+    gpio_num_t cs   = GPIO_NUM_NC;
+  };
+
+  struct GpioPins {
+    gpio_num_t rdyb = GPIO_NUM_NC; // active-low
+    gpio_num_t rstb = GPIO_NUM_NC; // active-low
+    gpio_num_t sync = GPIO_NUM_NC;
+  };
 
   struct BusConfig {
     spi_host_device_t host = SPI2_HOST;
@@ -58,9 +68,9 @@ public:
     InputRange range = InputRange::Bipolar;
     BipolarFormat bipolar_format = BipolarFormat::TwosComplement;
 
-    bool continuous_conversion = true;
+    bool continuous_conversion = true; // SCYCLE=0
     bool data32 = true;
-    bool use_internal_clock = true;
+    bool use_internal_clock = true;    // ADC CLK pin to GND -> internal clock
 
     bool enable_buffer = false;
     bool enable_pga = true;
@@ -74,25 +84,44 @@ public:
     bool use_system_gain     = false;
   };
 
-  struct Sample { int32_t code=0; uint64_t t_us=0; };
-  struct Status { uint16_t raw=0; bool rdy=false, rderr=false, dor=false, aor=false, mstat=false; uint8_t rate=0; };
+  struct Sample {
+    int32_t code = 0;
+    uint64_t t_us = 0;
+  };
+
+  struct Status {
+    uint16_t raw = 0;
+    bool rdy = false;
+    bool rderr = false;
+    bool dor = false;
+    bool aor = false;
+    bool mstat = false;
+    uint8_t rate = 0;
+  };
 
   Max11270() = default;
   ~Max11270();
+
   Max11270(const Max11270&) = delete;
   Max11270& operator=(const Max11270&) = delete;
 
   esp_err_t begin(const BusConfig& bus_cfg, const SpiPins& spi_pins, const GpioPins& gpio_pins);
-  esp_err_t hardwareReset(uint32_t low_ms=2, uint32_t post_ms=5);
-  esp_err_t softwareReset(uint32_t post_ms=5);
+
+  esp_err_t hardwareReset(uint32_t low_ms = 2, uint32_t post_ms = 5);
+  esp_err_t softwareReset(uint32_t post_ms = 5);
 
   esp_err_t configure(const Settings& s);
+
+  // Starts conversions at the requested rate. (Updates internal stored rate too.)
   esp_err_t startConversions(Rate rate);
+
   esp_err_t stopAndPowerDown(PowerDownMode mode);
 
-  esp_err_t readSampleBlocking(Sample* out, uint32_t timeout_us=0);
+  // Wait for RDYB low then read 32-bit data (if configured). timeout_us==0 => wait forever.
+  esp_err_t readSampleBlocking(Sample* out, uint32_t timeout_us = 0);
+
   esp_err_t readStatus(Status* out);
-  esp_err_t selfCalibrate(uint32_t timeout_ms=500);
+  esp_err_t selfCalibrate(uint32_t timeout_ms = 500);
 
   static double codeToVoltsBipolarTwosComp32(int32_t code, double vref_volts);
   static double codeTo_uV_per_V(int32_t code, double vref_volts, double excitation_volts);
@@ -109,6 +138,7 @@ private:
 
   esp_err_t transmit(const uint8_t* tx, uint8_t* rx, size_t nbytes);
   esp_err_t configureGpios_();
+
   static uint64_t nowMicros_();
 
   BusConfig bus_cfg_{};

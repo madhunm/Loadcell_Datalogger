@@ -17,4 +17,5 @@ enum PdlFlags : uint16_t {
   FLG_LOW_BATT        = 1u << 9,
 
   FLG_DROPPED_FRAME   = 1u << 10,
+  FLG_MARK            = 1u << 11,
 };

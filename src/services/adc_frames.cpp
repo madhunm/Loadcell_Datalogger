@@ -5,6 +5,7 @@
 #include "format/log_format.h"
 #include "format/pdl_flags.h"
 #include "services/frame_pipe.h"
+#include "services/aux_state.h"
 
 static constexpr int ADC_HZ = 64000;
 static constexpr int FRAME_HZ = 500;
@@ -17,12 +18,6 @@ static float g_slope_mN_per_code = 1.0f;
 static float g_offset_mN = 0.0f;
 static int32_t g_tare_code = 0;
 
-struct LatestAux {
-  int16_t ax=0, ay=0, az=0, gx=0, gy=0, gz=0;
-  uint16_t vbat_mV=0;
-  uint16_t soc_centiPct=0;
-};
-static LatestAux g_aux;
 
 static inline int32_t code_to_force_mN(int32_t code) {
   float f = g_slope_mN_per_code * (float)(code - g_tare_code) + g_offset_mN;
@@ -85,15 +80,22 @@ static void adc_frame_task(void*) {
     fr.force_peak_mN = code_to_force_mN(mx);
     fr.force_min_mN  = code_to_force_mN(mn);
 
-    fr.ax = g_aux.ax; fr.ay = g_aux.ay; fr.az = g_aux.az;
-    fr.gx = g_aux.gx; fr.gy = g_aux.gy; fr.gz = g_aux.gz;
-    fr.vbat_mV = g_aux.vbat_mV;
-    fr.soc_centiPct = g_aux.soc_centiPct;
+    AuxSnapshot snap = aux_get_snapshot();
+    fr.ax = snap.ax; fr.ay = snap.ay; fr.az = snap.az;
+    fr.gx = snap.gx; fr.gy = snap.gy; fr.gz = snap.gz;
+    fr.vbat_mV = snap.vbat_mV;
+    fr.soc_centiPct = snap.soc_centiPct;
 
     fr.flags = 0;
+    if (frame_pipe_consume_mark_next()) fr.flags |= FLG_MARK;
+    uint32_t now_ms = (uint32_t)(t_first / 1000);
+    if (frame_pipe_should_set_dropped(now_ms)) fr.flags |= FLG_DROPPED_FRAME;
     fr.pad = 0;
 
-    if (g_frame_q) (void)xQueueSend(g_frame_q, &fr, 0);
+    if (g_frame_q) {
+      if (xQueueSend(g_frame_q, &fr, 0) != pdTRUE)
+        frame_pipe_notify_drop(now_ms);
+    }
   }
 }
 

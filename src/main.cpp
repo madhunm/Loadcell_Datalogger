@@ -4,13 +4,15 @@
 #include "services/sd_logger.h"
 #include "services/scope_stream.h"
 #include "services/serial_cli.h"
+#include "services/sensors_task.h"
+#include "services/ui_state.h"
 
 void setup() {
   Serial.begin(115200);
   delay(200);
   setCpuFrequencyMhz(240);
 
-  Serial.println("# Parachute Logger Template boot");
+  Serial.println("# Parachute Logger boot");
 
   scope_init();
   start_cli_task();
@@ -20,12 +22,14 @@ void setup() {
   }
   start_logger_task();
 
-  // Start ADC frame producer (64 ksps acquisition -> 500 Hz frames)
   start_adc_frames();
+  start_sensors_task();
 
+  ui_init();
   Serial.println("# Ready.");
 }
 
 void loop() {
-  vTaskDelay(pdMS_TO_TICKS(1000));
+  ui_tick(millis());
+  vTaskDelay(pdMS_TO_TICKS(10));
 }

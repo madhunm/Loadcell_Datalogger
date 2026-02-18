@@ -1,53 +1,40 @@
 #pragma once
 #include <Arduino.h>
-#include "i2c_dev.h"
+#include <Wire.h>
 
 class MAX17048 {
 public:
-  static constexpr uint8_t ADDR_7BIT = 0x36;
+  explicit MAX17048(uint8_t i2c_addr = 0x36) : _addr(i2c_addr) {}
 
-  explicit MAX17048(TwoWire& w = Wire) : dev(w, ADDR_7BIT) {}
+  bool begin(TwoWire& wire = Wire);
 
-  bool begin() {
-    // Basic presence check: read VERSION (0x08)
-    uint16_t ver = 0;
-    return dev.readU16BE(0x08, ver);
-  }
+  // Reads battery voltage in millivolts (rounded).
+  bool readVoltage_mV(uint16_t& mv);
 
-  // Battery voltage in volts
-  bool readVoltage(float& volts) {
-    uint16_t raw;
-    if (!dev.readU16BE(0x02, raw)) return false;
-    // VCELL LSB = 78.125uV (per datasheet register summary)
-    volts = float(raw) * 78.125e-6f;
-    return true;
-  }
+  // Reads SOC in centi-percent (e.g., 7543 = 75.43%).
+  bool readSOC_centiPercent(uint16_t& soc_centi);
 
-  // SOC in percent (0..100+)
-  bool readSoc(float& pct) {
-    uint16_t raw;
-    if (!dev.readU16BE(0x04, raw)) return false;
-    // SOC LSB = 1%/256
-    pct = float(raw) / 256.0f;
-    return true;
-  }
+  // Optional: charge/discharge rate in centi-%/hr (signed).
+  bool readCRate_centiPercentPerHour(int16_t& crate_centi);
 
-  // Optional: quick-start (MODE.QuickStart = 1). Datasheet shows QuickStart bit in MODE register. :contentReference[oaicite:5]{index=5}
-  bool quickStart() {
-    // MODE register bit layout is shown MSB->LSB as: X QuickStart EnSleep HibStat ...
-    // => QuickStart is bit14 => 0x4000
-    return dev.writeU16BE(0x06, 0x4000);
-  }
+  // Triggers a Quick-Start via MODE register (use cautiously).
+  bool quickStart();
 
-  // Full POR reset: write 0x5400 to CMD (0xFE). Datasheet warns it may not ACK afterward. :contentReference[oaicite:6]{index=6}
-  void resetPOR_noAckOK() {
-    dev.wire.beginTransmission(dev.addr);
-    dev.wire.write((uint8_t)0xFE);
-    dev.wire.write((uint8_t)0x54);
-    dev.wire.write((uint8_t)0x00);
-    (void)dev.wire.endTransmission(); // ignore result by design
-  }
+  bool readVersion(uint16_t& version);
 
 private:
-  I2CDev dev;
+  TwoWire* _wire = nullptr;
+  uint8_t _addr;
+
+  static constexpr uint8_t REG_VCELL   = 0x02;
+  static constexpr uint8_t REG_SOC     = 0x04;
+  static constexpr uint8_t REG_MODE    = 0x06;
+  static constexpr uint8_t REG_VERSION = 0x08;
+  static constexpr uint8_t REG_CRATE   = 0x16;
+
+  // MODE bits (from datasheet register format): bit14 QuickStart, bit13 EnSleep, bit12 HibStat(ro)
+  static constexpr uint16_t MODE_QUICKSTART = (1u << 14);
+
+  bool readWordBE(uint8_t reg, uint16_t& out);   // MSB @ reg, LSB @ reg+1
+  bool writeWordBE(uint8_t reg, uint16_t value); // MSB first
 };

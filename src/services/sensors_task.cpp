@@ -1,20 +1,33 @@
 #include <Arduino.h>
 #include <Wire.h>
+#include "esp_timer.h"
 
 #include "services/sensors_task.h"
 #include "services/aux_state.h"
-
-// include your drivers
 #include "drivers/max17048.h"
 #include "drivers/rx8900ce.h"
-#include "drivers/lsm6dsv320x.h"
+#include "drivers/lsm6dsv.h"
 
 static constexpr int I2C_SDA = 41;
 static constexpr int I2C_SCL = 42;
+static constexpr int IMU_INT1_GPIO = 39;
+static constexpr int RTC_INT_GPIO = 34;
 
-static MAX17048 fuel(Wire);
-static RX8900CE  rtc(Wire);
-static LSM6DSV320X imu(Wire);
+static MAX17048 fuel;
+static RX8900CE rtc;
+static LSM6DSV imu;
+
+static volatile uint32_t s_imu_irq_count = 0;
+static volatile bool s_rtc_pending = false;
+
+static void IRAM_ATTR imu_int1_isr() {
+  uint32_t c = s_imu_irq_count;
+  s_imu_irq_count = c + 1;
+}
+
+static void IRAM_ATTR rtc_int_isr() {
+  s_rtc_pending = true;
+}
 
 static bool isLeap(int y) { return (y % 4) == 0; } // valid for 2000..2099 usage
 
@@ -44,52 +57,49 @@ static void sensors_task(void*) {
 
   Wire.begin(I2C_SDA, I2C_SCL, 400000);
 
-  // Bring-up devices (don’t hard-fail the whole system on one missing device)
-  bool fuel_ok = fuel.begin();
-  bool rtc_ok  = rtc.begin();
-  bool imu_ok  = imu.begin(/*accelOdrBits*/0x09, /*gyroOdrBits*/0x09); // ~960Hz ODR, read at 500Hz
+  // Bring-up devices (donï¿½t hard-fail the whole system on one missing device)
+  bool fuel_ok = fuel.begin(Wire);
+  bool rtc_ok  = rtc.begin(Wire);
+  bool imu_ok  = imu.begin(Wire) && imu.configure(LSM6DSV::Odr::HZ_960, LSM6DSV::Odr::HZ_960);
 
-  (void)fuel_ok;
+  if (imu_ok) {
+    imu.setIntPinConfig(false, false);
+    imu.routeDrdyToInt1(true, true);
+    pinMode(IMU_INT1_GPIO, INPUT);
+    attachInterrupt(digitalPinToInterrupt(IMU_INT1_GPIO), imu_int1_isr, RISING);
+  }
+  if (rtc_ok) {
+    rtc.enableSecondUpdateInterrupt(true);
+    pinMode(RTC_INT_GPIO, INPUT);
+    attachInterrupt(digitalPinToInterrupt(RTC_INT_GPIO), rtc_int_isr, FALLING);
+  }
 
   uint32_t last_batt_ms = 0;
-  uint32_t last_rtc_ms  = 0;
+  uint32_t last_imu_count = 0;
 
-  const TickType_t period = pdMS_TO_TICKS(2); // 500Hz
+  const TickType_t period = pdMS_TO_TICKS(2);
   TickType_t last_wake = xTaskGetTickCount();
 
   while (true) {
     vTaskDelayUntil(&last_wake, period);
 
-    // IMU at 500Hz (reads latest registers; ODR ~960Hz keeps it fresh)
-    if (imu_ok) {
-      ImuSample s;
-      if (imu.readSample(s)) {
+    uint32_t now = millis();
+
+    if (imu_ok && s_imu_irq_count != last_imu_count) {
+      last_imu_count = s_imu_irq_count;
+      LSM6DSV::SampleRaw s;
+      if (imu.readRaw(s)) {
         aux_set_imu(s.ax, s.ay, s.az, s.gx, s.gy, s.gz);
       } else {
         aux_bump_i2c_err();
       }
     }
 
-    uint32_t now = millis();
-
-    // Fuel gauge at 1Hz (cache into frames)
-    if (fuel_ok && (now - last_batt_ms) >= 1000) {
-      last_batt_ms = now;
-      float v = 0, soc = 0;
-      if (fuel.readVoltage(v) && fuel.readSoc(soc)) {
-        uint16_t mv = (uint16_t)lroundf(v * 1000.0f);
-        uint16_t centi = (uint16_t)lroundf(soc * 100.0f); // % *100
-        aux_set_batt(mv, centi);
-      } else {
-        aux_bump_i2c_err();
-      }
-    }
-
-    // RTC at 2Hz (validity + epoch cache)
-    if (rtc_ok && (now - last_rtc_ms) >= 500) {
-      last_rtc_ms = now;
-      RtcDateTime t;
-      if (rtc.readTime(t)) {
+    if (s_rtc_pending && rtc_ok) {
+      s_rtc_pending = false;
+      rtc.clearFlags(RX8900CE::FLAG_UF);
+      RX8900CE::DateTime t;
+      if (rtc.readDateTime(t)) {
         uint32_t epoch = toEpoch2000To2099(t.year, t.month, t.day, t.hour, t.minute, t.second);
         aux_set_rtc(epoch, true);
       } else {
@@ -97,6 +107,17 @@ static void sensors_task(void*) {
         aux_bump_i2c_err();
       }
     }
+
+    if (fuel_ok && (now - last_batt_ms) >= 1000) {
+      last_batt_ms = now;
+      uint16_t mv = 0, centi = 0;
+      if (fuel.readVoltage_mV(mv) && fuel.readSOC_centiPercent(centi)) {
+        aux_set_batt(mv, centi);
+      } else {
+        aux_bump_i2c_err();
+      }
+    }
+
   }
 }
 
