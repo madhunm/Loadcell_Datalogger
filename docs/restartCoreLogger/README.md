@@ -105,8 +105,8 @@ Uses header magic and `frame_ver`/`frame_size` to support V1 (56-byte) or V2 (64
 
 ## Changes in This Pass
 
-- **adc_frames.cpp:** `adc_frames_on_session_start()` now copies header `slope_mN_per_code` and `offset_mN` into the calibration used for force conversion, and applies header `tare_adc_code` / `tare_frames` so existing tare is used when present (avoids re-tare when header already has tare).
-- **Includes:** Searched for malformed `#include` lines in `src/`; none found.
+- **adc_frames.cpp:** 64 ksps to 500 Hz decimation; header slope/offset/tare in `adc_frames_on_session_start()`. Removed C++14/20-only syntax (digit separators, designated initializers) for C++11 portability.
+- **sd_logger.cpp:** After writing tare into header reserved, added `g_file.seek(0, SeekEnd)` so frame writes always append. **max11270.h:** Default clock_hz 5000000 (no digit separator).
 - **lsm6dsv.cpp:** Verified no uncommented stray text; "Keep BDU=1, IF_INC=1." exists only inside a comment.
-- **Host tools:** Confirmed `scope_plot.py` and `bin2csv.py` compile with `python -m py_compile`; requirements (pyserial, matplotlib, numpy) documented in `tools/host/requirements.txt`.
-- **sensors_task:** Comment typo fixed (don't). **Guardrails:** `.gitattributes`, `.editorconfig`. **Documentation:** This file added; root `README.md` updated to link here and to correct the “IMU and fuel gauge stubbed” statement for this branch.
+- **Host tools:** scope_plot.py, bin2csv.py; requirements in tools/host/requirements.txt. **Repo cleanup:** .gitignore expanded; removed empty root artifact. **Docs:** PLAN updated to pins/LED; CHANGES.md rx8900ce.cpp.
+- **sensors_task:** Comment typo fixed (don't). **Guardrails:** .gitattributes, .editorconfig. **Documentation:** This file and root README; PLAN and CHANGES synced. For branch details see root README.

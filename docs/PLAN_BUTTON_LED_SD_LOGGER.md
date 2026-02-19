@@ -1,5 +1,7 @@
 # Button + LED UI + SD Logger — Implementation Plan
 
+**Authoritative branch doc:** See [docs/restartCoreLogger/README.md](restartCoreLogger/README.md) for current pin map, LED behavior, and usage. This plan is kept in sync with the implementation.
+
 ## Implementation summary (file changes)
 
 - **src/format/pdl_flags.h** — Added `FLG_MARK` for MARK_EVENT (next-frame flag).
@@ -8,7 +10,7 @@
 - **src/services/sd_logger.h, sd_logger.cpp** — 4-bit SD_MMC (`setPins(4,5,6,7,8,9)`, `begin("/sdcard", false)`); filename `PDL_YYYYMMDD_HHMMSS.TMP` (RTC) or `PDL_RUN####.TMP`; drain then rename to `.BIN`; block writes (256 frames); flush every 1 s or 256 KB; `logger_start_session(hdr, rtc_valid, rtc_epoch)`, `logger_has_last_bin()`, `logger_get_last_bin_path()`, `logger_export_latest_to_csv()`.
 - **src/services/frame_pipe.h, frame_pipe.cpp** — `frame_pipe_set_mark_next()`, `frame_pipe_consume_mark_next()`, `frame_pipe_notify_drop(now_ms)`, `frame_pipe_should_set_dropped(now_ms)` for FLG_MARK and sticky FLG_DROPPED_FRAME.
 - **src/services/adc_frames.cpp** — Uses `aux_get_snapshot()` for frame IMU/batt; applies FLG_MARK and FLG_DROPPED_FRAME; on queue full calls `frame_pipe_notify_drop()`.
-- **src/services/ui_state.h, ui_state.cpp** — New: UI state machine (BOOT/IDLE_READY/LOGGING/STOPPED/EXPORTING/FAULT); gesture mapping; `ui_init()`, `ui_tick(now_ms)`; button GPIO 0, LED GPIO 2.
+- **src/services/ui_state.h, ui_state.cpp** — New: UI state machine (BOOT/IDLE_READY/LOGGING/STOPPED/EXPORTING/FAULT); gesture mapping; `ui_init()`, `ui_tick(now_ms)`; **button GPIO 2 (IO2), NeoPixel LED GPIO 21 (IO21)** — see `src/pins.h`.
 - **src/main.cpp** — Calls `ui_init()` after logger/adc/sensors, `ui_tick(millis())` in loop with 10 ms delay; `start_sensors_task()`.
 - **src/services/serial_cli.cpp** — `logger_start_session(hdr, false, 0)` for CLI startlog.
 - **src/services/sensors_task.cpp** — Fixed driver API: object declarations (no parentheses), `begin(Wire)`, `imu.configure(Odr::HZ_960, Odr::HZ_960)`, `readRaw(SampleRaw)`, `readVoltage_mV`/`readSOC_centiPercent`, `readDateTime(DateTime)`.
@@ -58,11 +60,10 @@ Add single-button gesture UI and WS2812 LED state/warning/fault patterns, and co
 - **src/services/led_ui.cpp** — Single WS2812 driver (e.g. RMT or bit-bang), pattern state machine, no `delay()`.
 
 ### Hardware
-- One WS2812 on one GPIO (e.g. configurable, e.g. GPIO 2 or 48). Use ESP32 RMT or NeoPixelBus-style API if already in framework; otherwise minimal bit-bang or a small existing WS2812 lib (prefer built-in Arduino ESP32 support).
+- One WS2812 on **GPIO 21 (IO21)** — see `src/pins.h` (PIN_NEOPIXEL). Use ESP32 RMT or Adafruit NeoPixel. **Customer mandates:** saturated colors only (no pastels); **power/idle = RED**, **logging = GREEN**, **low battery = ORANGE**; faults = RED coded blinks (not solid red so power-on stays distinct).
 
 ### Colors (saturated)
-- RED, GREEN, BLUE, CYAN, YELLOW, MAGENTA, PURPLE (fixed HSV with S=255 or equivalent RGB).
-- Default brightness: 96/255; only brightness varies for PULSE, hue stays saturated.
+- RED, GREEN, BLUE, CYAN, YELLOW, MAGENTA, PURPLE, ORANGE (fixed saturated RGB). Default brightness: 96/255; only brightness varies for PULSE, hue stays saturated.
 
 ### Pattern primitives
 - **SOLID(color)** — Steady color.
@@ -74,17 +75,17 @@ Add single-button gesture UI and WS2812 LED state/warning/fault patterns, and co
 ### Priority
 - **FAULT** > **WARNING** > **STATE**. When a fault is active, show fault pattern; else warning; else state pattern.
 
-### State patterns (exact)
-- **BOOT**: PULSE(BLUE, 1200).
-- **IDLE_READY**: SOLID(GREEN).
-- **LOGGING**: BLINK(CYAN, 80, 920) — 1 Hz heartbeat.
-- **STOPPED**: DOUBLE_BLINK(GREEN, 80, 120, 80, 1200) then SOLID(GREEN).
+### State patterns (exact — matches src/services/led_ui.cpp)
+- **BOOT**: PULSE(RED, 1200) — power-on indicator.
+- **IDLE_READY**: SOLID(RED) — armed / power on.
+- **LOGGING**: BLINK(GREEN, 80, 920) — 1 Hz heartbeat.
+- **STOPPED**: DOUBLE_BLINK(GREEN, 80, 120, 80, 1200) then SOLID(RED).
 - **EXPORTING**: PULSE(PURPLE, 1000).
-- **FAULT**: (per-fault pattern below).
+- **FAULT**: RED N_BLINK codes (per-fault below); never SOLID(RED) for faults.
 
 ### Warnings (overlay; do not hide LOGGING heartbeat when logging)
 - RTC invalid: BLINK(YELLOW, 40, 1960) — yellow tick every 2 s.
-- Battery low: PULSE(YELLOW, 2000).
+- Battery low: **PULSE(ORANGE, 2000)** — customer mandate: low battery = ORANGE.
 - Underload/slack: BLINK(BLUE, 120, 380) while true.
 - Overload approaching: BLINK(YELLOW, 120, 120) while true.
 - Compression: BLINK(MAGENTA, 120, 380) while true.
@@ -120,9 +121,9 @@ Add single-button gesture UI and WS2812 LED state/warning/fault patterns, and co
   - Writer drains queue, flush(), close(), then rename `.TMP` → `.BIN` (use `SD_MMC.rename(old, new)` or equivalent).
 
 ### SD_MMC 4-bit (mandatory)
-- `SD_MMC.setPins(4, 5, 6, 7, 8, 9)` before first `begin`.
+- `SD_MMC.setPins(4, 5, 6, 7, 8, 9)` before first `begin` — pins from `src/pins.h` (CLK 4, CMD 5, D0–D3 6–9).
 - `SD_MMC.begin("/sdcard", false)` (mode1bit = false).
-- CD pin (e.g. 10) optional; do not rely on it.
+- **Optional SD card-detect pin IO10** — gated by `config.h` (e.g. SD_CD_ENABLED); if enabled, fail mount when card absent and stop logging safely if card removed. Do not rely on CD for normal operation.
 
 ### Buffering
 - **Producer**: Existing 500 Hz frame task pushes `PdlFrameV1` into a queue (current `g_frame_q`). Keep producer non-blocking: if queue full, drop frame and set a **sticky** `FLG_DROPPED_FRAME` in the **next** (or subsequent) frame(s) until a “cleared” policy (e.g. clear after 1 s of no drops). Dropped frames are not written; only the flag indicates loss.

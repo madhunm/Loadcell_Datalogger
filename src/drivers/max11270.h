@@ -58,7 +58,7 @@ public:
   struct BusConfig {
     spi_host_device_t host = SPI2_HOST;
     int dma_chan = SPI_DMA_CH_AUTO;
-    int clock_hz = 5'000'000;
+    int clock_hz = 5000000;
     bool init_bus = true;
     int queue_size = 1;
   };

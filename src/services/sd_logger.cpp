@@ -234,6 +234,7 @@ static void logger_task(void*) {
       g_file.seek(off_reserved, SeekSet);
       g_file.write((const uint8_t*)&tr.duration_ms, sizeof(tr.duration_ms));
       g_file.flush();
+      g_file.seek(0, SeekEnd);
     }
 
     PdlFrameV2 fr;

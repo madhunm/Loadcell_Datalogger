@@ -54,9 +54,23 @@ static inline int32_t code_to_force_mN(int32_t code) {
 }
 
 static void adc_frame_task(void*) {
-  Max11270::BusConfig bus { .host=SPI2_HOST, .dma_chan=SPI_DMA_CH_AUTO, .clock_hz=5'000'000, .init_bus=true, .queue_size=1 };
-  Max11270::SpiPins spi { .mosi=(gpio_num_t)PIN_ADC_MOSI, .miso=(gpio_num_t)PIN_ADC_MISO, .sclk=(gpio_num_t)PIN_ADC_SCK, .cs=(gpio_num_t)PIN_ADC_CS };
-  Max11270::GpioPins gp { .rdyb=(gpio_num_t)PIN_ADC_RDYB, .rstb=(gpio_num_t)PIN_ADC_RSTB, .sync=(gpio_num_t)PIN_ADC_SYNC };
+  Max11270::BusConfig bus;
+  bus.host = SPI2_HOST;
+  bus.dma_chan = SPI_DMA_CH_AUTO;
+  bus.clock_hz = 5000000;
+  bus.init_bus = true;
+  bus.queue_size = 1;
+
+  Max11270::SpiPins spi;
+  spi.mosi = (gpio_num_t)PIN_ADC_MOSI;
+  spi.miso = (gpio_num_t)PIN_ADC_MISO;
+  spi.sclk = (gpio_num_t)PIN_ADC_SCK;
+  spi.cs   = (gpio_num_t)PIN_ADC_CS;
+
+  Max11270::GpioPins gp;
+  gp.rdyb = (gpio_num_t)PIN_ADC_RDYB;
+  gp.rstb = (gpio_num_t)PIN_ADC_RSTB;
+  gp.sync = (gpio_num_t)PIN_ADC_SYNC;
 
   ESP_ERROR_CHECK(adc.begin(bus, spi, gp));
   ESP_ERROR_CHECK(adc.hardwareReset(2, 5));
