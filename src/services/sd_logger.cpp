@@ -7,6 +7,7 @@
 #include <SD_MMC.h>
 #include <cstddef>
 #include <cstring>
+#include "freertos/portmacro.h"
 
 #include "services/frame_pipe.h"
 #include "services/scope_stream.h"
@@ -24,14 +25,47 @@ static File g_file;
 static volatile bool g_logging = false;
 static volatile bool g_drain_requested = false;
 static volatile bool g_session_write_failed = false;
+static volatile bool g_session_opening = false;
 static char g_current_tmp_path[64] = "";
 static char g_last_bin_path[64] = "";
+static portMUX_TYPE g_logger_mux = portMUX_INITIALIZER_UNLOCKED;
+static void clear_session_opening() {
+  portENTER_CRITICAL(&g_logger_mux);
+  g_session_opening = false;
+  portEXIT_CRITICAL(&g_logger_mux);
+}
 
 static constexpr size_t FRAME_BUF_COUNT = 384;
 static constexpr size_t FRAME_BUF_BYTES = FRAME_BUF_COUNT * sizeof(PdlFrameV2);
 static constexpr size_t FLUSH_INTERVAL_BYTES = 256 * 1024;
 static constexpr const char* RUN_NUM_PATH = "/PDL_RUN.NUM";
 static constexpr const char* RUN_NUM_TMP_PATH = "/PDL_RUN.NEW";
+
+static bool recover_run_number_file() {
+  if (!SD_MMC.exists(RUN_NUM_TMP_PATH)) return true;
+
+  File f = SD_MMC.open(RUN_NUM_TMP_PATH, FILE_READ);
+  if (!f) {
+    Serial.println("#ERR: cannot inspect PDL_RUN.NEW");
+    return false;
+  }
+  const bool valid_tmp = f.available() >= 4;
+  f.close();
+  if (!valid_tmp) {
+    Serial.println("#WARN: removing incomplete PDL_RUN.NEW");
+    return !SD_MMC.exists(RUN_NUM_TMP_PATH) || SD_MMC.remove(RUN_NUM_TMP_PATH);
+  }
+  if (SD_MMC.exists(RUN_NUM_PATH) && !SD_MMC.remove(RUN_NUM_PATH)) {
+    Serial.println("#ERR: run counter recovery replace failed");
+    return false;
+  }
+  if (SD_MMC.rename(RUN_NUM_TMP_PATH, RUN_NUM_PATH)) {
+    Serial.println("#INFO: recovered run counter from PDL_RUN.NEW");
+    return true;
+  }
+  Serial.println("#ERR: run counter recovery failed");
+  return false;
+}
 
 static bool make_suffixed_path(const char* base_path, const char* ext, int suffix, char* out, size_t out_len) {
   if (!base_path || !ext || !out || out_len == 0) return false;
@@ -162,22 +196,25 @@ bool logger_begin() {
     system_status_set_fault(FaultCode::SD_MOUNT_FAIL);
     return false;
   }
-  if (SD_MMC.exists(RUN_NUM_TMP_PATH) && !SD_MMC.exists(RUN_NUM_PATH)) {
-    if (SD_MMC.rename(RUN_NUM_TMP_PATH, RUN_NUM_PATH)) {
-      Serial.println("#INFO: recovered run counter from PDL_RUN.NEW");
-    } else {
-      Serial.println("#ERR: run counter recovery failed");
-      system_status_set_fault(FaultCode::SD_WRITE_FAIL);
-    }
+  if (!recover_run_number_file()) {
+    system_status_set_fault(FaultCode::SD_WRITE_FAIL);
   }
   system_status_clear_fault(FaultCode::SD_MOUNT_FAIL);
   return true;
 }
 
-bool logger_is_logging() { return g_logging; }
+bool logger_is_logging() {
+  portENTER_CRITICAL(&g_logger_mux);
+  const bool logging = g_logging;
+  portEXIT_CRITICAL(&g_logger_mux);
+  return logging;
+}
 
 bool logger_is_busy() {
-  return g_logging || g_drain_requested;
+  portENTER_CRITICAL(&g_logger_mux);
+  const bool busy = g_logging || g_drain_requested || g_session_opening;
+  portEXIT_CRITICAL(&g_logger_mux);
+  return busy;
 }
 
 bool logger_can_start() {
@@ -185,17 +222,27 @@ bool logger_can_start() {
 }
 
 bool logger_start_session(const PdlHeaderV1& hdr, bool rtc_valid, uint32_t rtc_epoch) {
-  if (!logger_can_start()) return false;
+  portENTER_CRITICAL(&g_logger_mux);
+  if (g_logging || g_drain_requested || g_session_opening) {
+    portEXIT_CRITICAL(&g_logger_mux);
+    return false;
+  }
+  g_session_opening = true;
+  portEXIT_CRITICAL(&g_logger_mux);
 
   char base_tmp_path[64];
   make_tmp_filename(rtc_valid, rtc_epoch, g_current_tmp_path, sizeof(g_current_tmp_path));
   strncpy(base_tmp_path, g_current_tmp_path, sizeof(base_tmp_path) - 1);
   base_tmp_path[sizeof(base_tmp_path) - 1] = '\0';
   const size_t base_len = strlen(base_tmp_path);
-  if (base_len < 4 || strcmp(base_tmp_path + base_len - 4, ".TMP") != 0) return false;
+  if (base_len < 4 || strcmp(base_tmp_path + base_len - 4, ".TMP") != 0) {
+    clear_session_opening();
+    return false;
+  }
   base_tmp_path[base_len - 4] = '\0';
   for (int i = 0; i < 100; ++i) {
     if (!make_suffixed_path(base_tmp_path, ".TMP", i, g_current_tmp_path, sizeof(g_current_tmp_path))) {
+      clear_session_opening();
       return false;
     }
     if (!SD_MMC.exists(g_current_tmp_path)) break;
@@ -203,12 +250,14 @@ bool logger_start_session(const PdlHeaderV1& hdr, bool rtc_valid, uint32_t rtc_e
   if (SD_MMC.exists(g_current_tmp_path)) {
     Serial.println("#ERR: no available TMP filename");
     system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    clear_session_opening();
     return false;
   }
   g_file = SD_MMC.open(g_current_tmp_path, FILE_WRITE);
   if (!g_file) {
     Serial.println("#ERR: open log file failed");
     system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    clear_session_opening();
     return false;
   }
 
@@ -222,34 +271,47 @@ bool logger_start_session(const PdlHeaderV1& hdr, bool rtc_valid, uint32_t rtc_e
     Serial.println("#ERR: header write failed");
     g_file.close();
     system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    clear_session_opening();
     return false;
   }
   g_file.flush();
+  adc_frames_on_session_start(h);
+  portENTER_CRITICAL(&g_logger_mux);
   g_logging = true;
   g_drain_requested = false;
   g_session_write_failed = false;
-  adc_frames_on_session_start(h);
+  g_session_opening = false;
+  portEXIT_CRITICAL(&g_logger_mux);
   Serial.print("#LOGFILE: ");
   Serial.println(g_current_tmp_path);
   return true;
 }
 
 void logger_stop_session() {
-  if (g_drain_requested) return;  // already finalizing, idempotent
-  if (!g_logging) return;
+  portENTER_CRITICAL(&g_logger_mux);
+  if (g_session_opening || g_drain_requested || !g_logging) {
+    portEXIT_CRITICAL(&g_logger_mux);
+    return;
+  }
   g_logging = false;
   g_drain_requested = true;
+  portEXIT_CRITICAL(&g_logger_mux);
   Serial.println("#LOGSTOP: finalizing");
 }
 
 bool logger_has_last_bin() {
-  return g_last_bin_path[0] != '\0';
+  portENTER_CRITICAL(&g_logger_mux);
+  const bool has_last_bin = g_last_bin_path[0] != '\0';
+  portEXIT_CRITICAL(&g_logger_mux);
+  return has_last_bin;
 }
 
 bool logger_get_last_bin_path(char* buf, size_t len) {
   if (g_last_bin_path[0] == '\0' || !buf || len == 0) return false;
+  portENTER_CRITICAL(&g_logger_mux);
   strncpy(buf, g_last_bin_path, len - 1);
   buf[len - 1] = '\0';
+  portEXIT_CRITICAL(&g_logger_mux);
   return true;
 }
 
@@ -399,8 +461,10 @@ static void logger_task(void*) {
         do_rename_tmp_to_bin();
         Serial.println("#LOGSTOP: complete");
       }
+      portENTER_CRITICAL(&g_logger_mux);
       g_logging = false;
       g_drain_requested = false;
+      portEXIT_CRITICAL(&g_logger_mux);
     }
   }
 }

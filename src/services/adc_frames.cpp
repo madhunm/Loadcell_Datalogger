@@ -162,7 +162,7 @@ static void adc_frame_task(void*) {
 
     fr.imu_sample_t_us = snap.imu_sample_t_us;
 
-    if (g_frame_q) {
+    if (g_frame_q && logger_is_logging()) {
       UBaseType_t queued = uxQueueMessagesWaiting(g_frame_q);
       frame_pipe_note_queue_depth(now_ms, queued);
       if (queued >= FRAME_QUEUE_PRESSURE_WARN && (now_ms - s_last_queue_pressure_log_ms) >= 1000) {

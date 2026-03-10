@@ -108,6 +108,7 @@ static void sensors_task(void*) {
 
   uint32_t last_batt_ms = millis() - 1000;
   uint32_t last_imu_count = 0;
+  uint32_t rtc_retry_after_ms = 0;
 
   const TickType_t period = pdMS_TO_TICKS(2);
   TickType_t last_wake = xTaskGetTickCount();
@@ -181,29 +182,36 @@ static void sensors_task(void*) {
     }
 
     // RTC provides session start time and filename stamping only; per-frame timestamps are monotonic t_us.
-    if (s_rtc_pending && rtc_ok) {
+    if (s_rtc_pending && rtc_ok && now >= rtc_retry_after_ms) {
       uint8_t flags = 0;
       if (!rtc.readFlags(flags)) {
         aux_bump_i2c_err();
         system_status_set_warning(WarningCode::RTC_FAULT);
         aux_set_rtc(0, false);
+        rtc_retry_after_ms = now + 100;
       } else if (flags & RX8900CE::FLAG_VLF) {
         aux_set_rtc(0, false);
         system_status_set_warning(WarningCode::RTC_FAULT);
-        s_rtc_pending = false;
-        rtc.clearFlags(RX8900CE::FLAG_UF);
+        rtc_retry_after_ms = now + 250;
       } else {
         RX8900CE::DateTime t;
         if (rtc.readDateTime(t)) {
           uint32_t epoch = toEpoch2000To2099(t.year, t.month, t.day, t.hour, t.minute, t.second);
           aux_set_rtc(epoch, true);
           system_status_clear_warning(WarningCode::RTC_FAULT);
-          s_rtc_pending = false;
-          rtc.clearFlags(RX8900CE::FLAG_UF);
+          if (rtc.clearFlags(RX8900CE::FLAG_UF)) {
+            s_rtc_pending = false;
+            rtc_retry_after_ms = 0;
+          } else {
+            aux_bump_i2c_err();
+            system_status_set_warning(WarningCode::RTC_FAULT);
+            rtc_retry_after_ms = now + 100;
+          }
         } else {
           aux_set_rtc(0, false);
           aux_bump_i2c_err();
           system_status_set_warning(WarningCode::RTC_FAULT);
+          rtc_retry_after_ms = now + 100;
         }
       }
     }
