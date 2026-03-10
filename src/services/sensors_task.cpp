@@ -69,7 +69,7 @@ static void sensors_task(void*) {
     aux_set_imu_valid(false);
   }
   if (!imu_ok) system_status_set_fault(FaultCode::IMU_FAULT);
-  if (!fuel_ok) aux_set_batt(0, 0);
+  if (!fuel_ok) system_status_set_warning(WarningCode::BATT_WARN);
 
   if (imu_ok) {
     imu.setIntPinConfig(false, false);
@@ -153,7 +153,8 @@ static void sensors_task(void*) {
         aux_set_rtc(0, false);
         system_status_set_warning(WarningCode::RTC_FAULT);
       }
-      if (!fuel_ok) aux_set_batt(0, 0);
+      if (fuel_ok) system_status_clear_warning(WarningCode::BATT_WARN);
+      else system_status_set_warning(WarningCode::BATT_WARN);
       last_batt_ms = millis() - 1000;
     }
 
@@ -208,10 +209,10 @@ static void sensors_task(void*) {
       uint16_t mv = 0, centi = 0;
       if (fuel.readVoltage_mV(mv) && fuel.readSOC_centiPercent(centi)) {
         aux_set_batt(mv, centi);
+        system_status_clear_warning(WarningCode::BATT_WARN);
       } else {
         aux_bump_i2c_err();
-        aux_set_batt(0, 0);
-        system_status_set_warning(WarningCode::LOW_BATT);
+        system_status_set_warning(WarningCode::BATT_WARN);
       }
     }
 

@@ -105,6 +105,13 @@ static void run_warning_pattern(uint32_t now_ms, LedColor col) {
       uint8_t r,g,b; get_color_rgb(LedColor::ORANGE, br, &r,&g,&b); set_pixel(r,g,b);
       return;
     }
+    case LedWarning::BATT_WARN: {
+      uint32_t pos = (now_ms - s_phase_start_ms) % 1200;
+      if (pos < 120) { uint8_t r,g,b; get_color_rgb(LedColor::ORANGE, DEFAULT_BRIGHTNESS, &r,&g,&b); set_pixel(r,g,b); }
+      else if (pos >= 240 && pos < 360) { uint8_t r,g,b; get_color_rgb(LedColor::ORANGE, DEFAULT_BRIGHTNESS, &r,&g,&b); set_pixel(r,g,b); }
+      else set_pixel(0,0,0);
+      return;
+    }
     case LedWarning::UNDERLOAD: {
       uint32_t pos = (now_ms - s_phase_start_ms) % 500;
       if (pos < 120) { uint8_t r,g,b; get_color_rgb(LedColor::BLUE, DEFAULT_BRIGHTNESS, &r,&g,&b); set_pixel(r,g,b); }

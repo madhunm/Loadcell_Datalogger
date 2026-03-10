@@ -151,7 +151,7 @@ static void adc_frame_task(void*) {
     if (frame_pipe_consume_mark_next()) fr.v1.flags |= FLG_MARK;
     uint32_t now_ms = (uint32_t)(t_first / 1000);
     if (frame_pipe_should_set_dropped(now_ms)) fr.v1.flags |= FLG_DROPPED_FRAME;
-    if (frame_pipe_should_set_sd_warn(now_ms)) fr.v1.flags |= FLG_SD_WARN;
+    if (frame_pipe_should_set_sd_warn(now_ms)) fr.v1.flags |= FLG_SD_WARN;  // includes SD-path backpressure / queue pressure
     if (!snap.imu_valid) { fr.v1.flags |= FLG_IMU_FAULT; system_status_set_warning(WarningCode::IMU_WARN); } else { system_status_clear_warning(WarningCode::IMU_WARN); }
     if (fr.v1.force_peak_mN > s_overload_mN) { fr.v1.flags |= FLG_OVERLOAD; system_status_set_warning(WarningCode::OVERLOAD); } else { system_status_clear_warning(WarningCode::OVERLOAD); }
     if (fr.v1.force_mean_mN < s_underload_mN) { fr.v1.flags |= FLG_UNDERLOAD; system_status_set_warning(WarningCode::UNDERLOAD); } else { system_status_clear_warning(WarningCode::UNDERLOAD); }

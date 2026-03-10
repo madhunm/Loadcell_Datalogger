@@ -17,6 +17,7 @@ enum class WarningCode : uint32_t {
   OVERLOAD    = 1u << 4,
   COMPRESSION = 1u << 5,
   IMU_WARN    = 1u << 6,
+  BATT_WARN   = 1u << 7,
 };
 
 void system_status_set_fault(FaultCode c);

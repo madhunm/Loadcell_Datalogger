@@ -48,6 +48,7 @@ LedWarning system_status_get_led_warning() {
   if (m & (uint32_t)WarningCode::RTC_INVALID) return LedWarning::RTC_INVALID;
   if (m & (uint32_t)WarningCode::RTC_FAULT) return LedWarning::RTC_FAULT;
   if (m & (uint32_t)WarningCode::LOW_BATT) return LedWarning::LOW_BATT;
+  if (m & (uint32_t)WarningCode::BATT_WARN) return LedWarning::BATT_WARN;
   if (m & (uint32_t)WarningCode::UNDERLOAD) return LedWarning::UNDERLOAD;
   if (m & (uint32_t)WarningCode::OVERLOAD) return LedWarning::OVERLOAD;
   if (m & (uint32_t)WarningCode::COMPRESSION) return LedWarning::COMPRESSION;
