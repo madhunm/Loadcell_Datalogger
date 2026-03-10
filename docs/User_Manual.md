@@ -117,6 +117,7 @@ Export converts the **latest** binary log file on the SD card into a **CSV file*
 
 - If the real-time clock is set and valid at the start of a log, the file name uses date and time: **PDL_YYYYMMDD_HHMMSS** (e.g., `PDL_20250118_143022.BIN` and `PDL_20250118_143022.CSV`).
 - If the clock is not valid, the device uses a run number: **PDL_RUN####** (e.g., `PDL_RUN0001.BIN` and `PDL_RUN0001.CSV`).
+- To avoid overwriting existing logs, the device may add a suffix to either type of name when a file already exists (e.g. `PDL_20250118_143022_01.BIN` or `PDL_RUN0001_01.BIN`). If the run-number file cannot be updated (e.g. card full), the device still assigns a run-based name and uses a suffix when needed so existing files are not overwritten.
 
 The **latest** log (most recently stopped) is the one that gets exported when you long-press from idle.
 
