@@ -9,6 +9,10 @@ Restart-friendly scaffold for a parachute data logger:
 
 **Branch `restartCoreLogger`:** Full pin map, button/LED behavior, log format, and build/usage are in **[docs/restartCoreLogger/README.md](docs/restartCoreLogger/README.md)**. On this branch, IMU (LSM6DSV), RTC (RX8900CE), and fuel gauge (MAX17048) are implemented; pin source of truth is `src/pins.h`.
 
+## User Documentation
+
+**Field operators:** See **[docs/User_Manual.md](docs/User_Manual.md)** for how to operate the device (button, LED, starting/stopping logs, exporting data, troubleshooting). No firmware or code knowledge required.
+
 ## Hardware pins (as configured)
 Pin mapping is defined in **`src/pins.h`**. ADC (MAX11270): MISO 12, MOSI 13, SYNC 14, RSTB 15, RDYB 16, CS 17, SCK 18. ADC CLK tied to GND → internal clock (EXTCK=0). SD_MMC 4-bit: CLK 4, CMD 5, D0–D3 6–9. I2C 41/42; IMU INT 39/40; RTC 33/34.
 
