@@ -112,26 +112,45 @@ static bool is_candidate_bin_path(const char* path) {
   return len > 4 && strcmp(name + len - 4, ".BIN") == 0;
 }
 
-static bool read_bin_sort_key(const char* path, uint64_t* timestamp) {
-  if (!path || !timestamp) return false;
-  File f = SD_MMC.open(path, FILE_READ);
-  if (!f) return false;
-  PdlHeaderV1 hdr{};
-  const bool ok = f.read((uint8_t*)&hdr, sizeof(hdr)) == sizeof(hdr) &&
-                  hdr.magic == PDL_MAGIC &&
-                  hdr.header_ver == 1 &&
-                  hdr.header_size == sizeof(PdlHeaderV1);
-  f.close();
-  if (!ok) return false;
-  if (hdr.start_rtc_epoch > 0) {
-    *timestamp = hdr.start_rtc_epoch;
+static bool read_valid_pdl_header(File& f, PdlHeaderV1* hdr) {
+  if (!hdr) return false;
+  return f.read((uint8_t*)hdr, sizeof(*hdr)) == sizeof(*hdr) &&
+         hdr->magic == PDL_MAGIC &&
+         hdr->header_ver == 1 &&
+         hdr->header_size == sizeof(PdlHeaderV1);
+}
+
+static bool validate_export_header(const PdlHeaderV1& hdr, uint16_t* frame_ver, size_t* frame_size) {
+  if (hdr.magic != PDL_MAGIC ||
+      hdr.header_ver != 1 ||
+      hdr.header_size != sizeof(PdlHeaderV1) ||
+      !frame_ver || !frame_size) {
+    return false;
+  }
+  if (hdr.frame_ver == 1 && hdr.frame_size == sizeof(PdlFrameV1)) {
+    *frame_ver = hdr.frame_ver;
+    *frame_size = sizeof(PdlFrameV1);
     return true;
   }
-  if (hdr.start_mono_us > 0) {
-    *timestamp = hdr.start_mono_us;
+  if (hdr.frame_ver == 2 && hdr.frame_size == sizeof(PdlFrameV2)) {
+    *frame_ver = hdr.frame_ver;
+    *frame_size = sizeof(PdlFrameV2);
     return true;
   }
   return false;
+}
+
+static bool read_bin_header_times(const char* path, uint32_t* rtc_epoch, uint64_t* mono_us) {
+  if (!path || !rtc_epoch || !mono_us) return false;
+  File f = SD_MMC.open(path, FILE_READ);
+  if (!f) return false;
+  PdlHeaderV1 hdr{};
+  const bool ok = read_valid_pdl_header(f, &hdr);
+  f.close();
+  if (!ok) return false;
+  *rtc_epoch = hdr.start_rtc_epoch;
+  *mono_us = hdr.start_mono_us;
+  return true;
 }
 
 static bool find_latest_bin_on_disk(char* out, size_t out_len) {
@@ -142,9 +161,12 @@ static bool find_latest_bin_on_disk(char* out, size_t out_len) {
   if (!root) return false;
 
   char best_lex_path[64] = "";
-  char best_ts_path[64] = "";
-  uint64_t best_ts = 0;
-  bool have_ts = false;
+  char best_rtc_path[64] = "";
+  char best_nonrtc_path[64] = "";
+  uint32_t best_rtc_epoch = 0;
+  uint64_t best_nonrtc_mono = 0;
+  bool have_rtc = false;
+  bool have_nonrtc = false;
   File entry = root.openNextFile();
   while (entry) {
     if (!entry.isDirectory()) {
@@ -154,13 +176,22 @@ static bool find_latest_bin_on_disk(char* out, size_t out_len) {
           strncpy(best_lex_path, path, sizeof(best_lex_path) - 1);
           best_lex_path[sizeof(best_lex_path) - 1] = '\0';
         }
-        uint64_t timestamp = 0;
-        if (read_bin_sort_key(path, &timestamp)) {
-          if (!have_ts || timestamp > best_ts) {
-            best_ts = timestamp;
-            strncpy(best_ts_path, path, sizeof(best_ts_path) - 1);
-            best_ts_path[sizeof(best_ts_path) - 1] = '\0';
-            have_ts = true;
+        uint32_t rtc_epoch = 0;
+        uint64_t mono_us = 0;
+        if (read_bin_header_times(path, &rtc_epoch, &mono_us)) {
+          if (rtc_epoch > 0) {
+            if (!have_rtc || rtc_epoch > best_rtc_epoch) {
+              best_rtc_epoch = rtc_epoch;
+              strncpy(best_rtc_path, path, sizeof(best_rtc_path) - 1);
+              best_rtc_path[sizeof(best_rtc_path) - 1] = '\0';
+              have_rtc = true;
+            }
+          } else if (!have_nonrtc || mono_us > best_nonrtc_mono ||
+                     (mono_us == best_nonrtc_mono && strcmp(path, best_nonrtc_path) > 0)) {
+            best_nonrtc_mono = mono_us;
+            strncpy(best_nonrtc_path, path, sizeof(best_nonrtc_path) - 1);
+            best_nonrtc_path[sizeof(best_nonrtc_path) - 1] = '\0';
+            have_nonrtc = true;
           }
         }
       }
@@ -170,7 +201,7 @@ static bool find_latest_bin_on_disk(char* out, size_t out_len) {
   }
   root.close();
 
-  const char* selected_path = have_ts ? best_ts_path : best_lex_path;
+  const char* selected_path = have_rtc ? best_rtc_path : (have_nonrtc ? best_nonrtc_path : best_lex_path);
   if (selected_path[0] == '\0') return false;
   strncpy(out, selected_path, out_len - 1);
   out[out_len - 1] = '\0';
@@ -651,13 +682,16 @@ bool logger_export_latest_to_csv() {
   csv_created = true;
 
   PdlHeaderV1 hdr;
-  if (bin.read((uint8_t*)&hdr, sizeof(hdr)) != sizeof(hdr) || hdr.magic != PDL_MAGIC) {
-    return fail_export(nullptr);
+  if (!read_valid_pdl_header(bin, &hdr)) {
+    return fail_export("#ERR: invalid log header");
   }
 
-  const uint16_t frame_ver = hdr.frame_ver;
-  const size_t frame_size = hdr.frame_size;
-  const bool has_imu_ts = (frame_ver >= 2 && frame_size >= sizeof(PdlFrameV2));
+  uint16_t frame_ver = 0;
+  size_t frame_size = 0;
+  if (!validate_export_header(hdr, &frame_ver, &frame_size)) {
+    return fail_export("#ERR: unsupported log frame format");
+  }
+  const bool has_imu_ts = (frame_ver == 2);
 
   if (has_imu_ts) {
     if (!csv.println("sample_index,t_us,adc_mean,adc_peak,adc_min,force_mean_mN,force_peak_mN,force_min_mN,ax,ay,az,gx,gy,gz,flags,vbat_mV,soc_centiPct,imu_sample_t_us")) {
