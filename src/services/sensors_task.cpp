@@ -119,6 +119,7 @@ static void sensors_task(void*) {
   uint32_t last_good_rtc_ms = millis();
   uint32_t rtc_retry_after_ms = 0;
   uint8_t i2c_fail_streak = 0;
+  uint32_t next_i2c_recovery_ms = 0;
 
   const TickType_t period = pdMS_TO_TICKS(2);
   TickType_t last_wake = xTaskGetTickCount();
@@ -178,11 +179,13 @@ static void sensors_task(void*) {
     uint32_t now = millis();
     auto note_i2c_failure = [&]() {
       aux_bump_i2c_err();
-      if (++i2c_fail_streak >= 4) {
+      if (i2c_fail_streak < 4) i2c_fail_streak++;
+      if (i2c_fail_streak >= 4 && now >= next_i2c_recovery_ms) {
         Serial.println("#WARN: I2C bus recovery");
         init_i2c_bus();
         s_retry_requested = true;
         i2c_fail_streak = 0;
+        next_i2c_recovery_ms = now + 1000;
       }
     };
     auto note_i2c_success = [&]() {
