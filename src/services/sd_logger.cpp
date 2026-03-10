@@ -75,6 +75,64 @@ static void mark_sd_failure_and_finalize() {
   portEXIT_CRITICAL(&g_logger_mux);
 }
 
+static bool is_candidate_bin_path(const char* path) {
+  if (!path) return false;
+  const char* name = strrchr(path, '/');
+  name = name ? name + 1 : path;
+  if (strncmp(name, "PDL_", 4) != 0) return false;
+  const size_t len = strlen(name);
+  return len > 4 && strcmp(name + len - 4, ".BIN") == 0;
+}
+
+static bool find_latest_bin_on_disk(char* out, size_t out_len) {
+  if (!out || out_len == 0) return false;
+  out[0] = '\0';
+
+  File root = SD_MMC.open("/");
+  if (!root) return false;
+
+  char best_path[64] = "";
+  File entry = root.openNextFile();
+  while (entry) {
+    if (!entry.isDirectory()) {
+      const char* path = entry.name();
+      if (is_candidate_bin_path(path) && (best_path[0] == '\0' || strcmp(path, best_path) > 0)) {
+        strncpy(best_path, path, sizeof(best_path) - 1);
+        best_path[sizeof(best_path) - 1] = '\0';
+      }
+    }
+    entry.close();
+    entry = root.openNextFile();
+  }
+  root.close();
+
+  if (best_path[0] == '\0') return false;
+  strncpy(out, best_path, out_len - 1);
+  out[out_len - 1] = '\0';
+  return true;
+}
+
+static bool resolve_last_bin_path(char* out, size_t out_len) {
+  if (!out || out_len == 0) return false;
+
+  portENTER_CRITICAL(&g_logger_mux);
+  const bool have_cached = g_last_bin_path[0] != '\0';
+  if (have_cached) {
+    strncpy(out, g_last_bin_path, out_len - 1);
+    out[out_len - 1] = '\0';
+  }
+  portEXIT_CRITICAL(&g_logger_mux);
+
+  if (have_cached && SD_MMC.exists(out)) return true;
+  if (!find_latest_bin_on_disk(out, out_len)) return false;
+
+  portENTER_CRITICAL(&g_logger_mux);
+  strncpy(g_last_bin_path, out, sizeof(g_last_bin_path) - 1);
+  g_last_bin_path[sizeof(g_last_bin_path) - 1] = '\0';
+  portEXIT_CRITICAL(&g_logger_mux);
+  return true;
+}
+
 static bool make_suffixed_path(const char* base_path, const char* ext, int suffix, char* out, size_t out_len) {
   if (!base_path || !ext || !out || out_len == 0) return false;
   const int written = (suffix <= 0)
@@ -308,19 +366,12 @@ void logger_stop_session() {
 }
 
 bool logger_has_last_bin() {
-  portENTER_CRITICAL(&g_logger_mux);
-  const bool has_last_bin = g_last_bin_path[0] != '\0';
-  portEXIT_CRITICAL(&g_logger_mux);
-  return has_last_bin;
+  char path[64];
+  return resolve_last_bin_path(path, sizeof(path));
 }
 
 bool logger_get_last_bin_path(char* buf, size_t len) {
-  if (g_last_bin_path[0] == '\0' || !buf || len == 0) return false;
-  portENTER_CRITICAL(&g_logger_mux);
-  strncpy(buf, g_last_bin_path, len - 1);
-  buf[len - 1] = '\0';
-  portEXIT_CRITICAL(&g_logger_mux);
-  return true;
+  return resolve_last_bin_path(buf, len);
 }
 
 static void do_rename_tmp_to_bin() {
@@ -403,13 +454,17 @@ static void logger_task(void*) {
         memcpy(frame_buf + frame_buf_n * sizeof(PdlFrameV2), &fr, sizeof(fr));
         frame_buf_n++;
         scope_feed_frame(fr.v1);
-      } else if (g_drain_requested && g_file) {
+      } else if (g_drain_requested && g_file && !g_session_write_failed) {
         memcpy(frame_buf + frame_buf_n * sizeof(PdlFrameV2), &fr, sizeof(fr));
         frame_buf_n++;
       }
     }
 
-    if (frame_buf_n >= FRAME_BUF_COUNT && g_file) {
+    if (g_session_write_failed) {
+      frame_buf_n = 0;
+    }
+
+    if (frame_buf_n >= FRAME_BUF_COUNT && g_file && !g_session_write_failed) {
       size_t to_write = frame_buf_n * sizeof(PdlFrameV2);
       size_t n = g_file.write(frame_buf, to_write);
       if (n != to_write) {
@@ -422,7 +477,8 @@ static void logger_task(void*) {
     }
 
     uint32_t now = millis();
-    if (g_file && (bytes_since_flush >= FLUSH_INTERVAL_BYTES || (now - last_flush_ms >= 1000))) {
+    if (g_file && !g_session_write_failed &&
+        (bytes_since_flush >= FLUSH_INTERVAL_BYTES || (now - last_flush_ms >= 1000))) {
       g_file.flush();
       last_flush_ms = now;
       bytes_since_flush = 0;
@@ -430,8 +486,10 @@ static void logger_task(void*) {
 
     if (g_drain_requested && g_file) {
       Serial.println("#LOGSTOP: drain/close in progress");
-      bool drain_ok = true;
+      bool drain_ok = !g_session_write_failed;
+      if (!drain_ok) frame_buf_n = 0;
       while (g_frame_q && xQueueReceive(g_frame_q, &fr, 0) == pdTRUE) {
+        if (!drain_ok) continue;
         memcpy(frame_buf + frame_buf_n * sizeof(PdlFrameV2), &fr, sizeof(fr));
         frame_buf_n++;
         if (frame_buf_n >= FRAME_BUF_COUNT) {
@@ -455,7 +513,7 @@ static void logger_task(void*) {
         }
         frame_buf_n = 0;
       }
-      g_file.flush();
+      if (!g_session_write_failed) g_file.flush();
       g_file.close();
       if (g_session_write_failed) {
         Serial.println("#ERR: finalize failed (TMP left for recovery)");
@@ -490,32 +548,46 @@ bool logger_export_latest_to_csv() {
     Serial.println("#ERR: logger busy (finalizing previous session)");
     return false;
   }
-  if (g_last_bin_path[0] == '\0') return false;
-  File bin = SD_MMC.open(g_last_bin_path, FILE_READ);
-  if (!bin) { system_status_set_fault(FaultCode::SD_WRITE_FAIL); return false; }
-  size_t l = strlen(g_last_bin_path);
+  char bin_path[64];
+  if (!resolve_last_bin_path(bin_path, sizeof(bin_path))) return false;
+
   char csv_path[64];
-  strncpy(csv_path, g_last_bin_path, sizeof(csv_path) - 1);
+  strncpy(csv_path, bin_path, sizeof(csv_path) - 1);
   csv_path[sizeof(csv_path) - 1] = '\0';
   char* last_dot = strrchr(csv_path, '.');
   if (last_dot && (size_t)(last_dot - csv_path) + 5 <= sizeof(csv_path))
     strcpy(last_dot, ".CSV");
-  else if (l + 4 < sizeof(csv_path))
+  else if (strlen(bin_path) + 4 < sizeof(csv_path))
     strcat(csv_path, ".CSV");
+  else
+    return false;
+
+  File bin;
+  File csv;
+  bool csv_created = false;
+  auto fail_export = [&](const char* msg) {
+    if (msg) Serial.println(msg);
+    if (csv) csv.close();
+    if (bin) bin.close();
+    if (csv_created) SD_MMC.remove(csv_path);
+    system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    return false;
+  };
+
+  bin = SD_MMC.open(bin_path, FILE_READ);
+  if (!bin) return fail_export(nullptr);
   if (SD_MMC.exists(csv_path)) {
     if (!SD_MMC.remove(csv_path)) {
-      Serial.println("#ERR: cannot remove existing CSV for export");
-      bin.close();
-      system_status_set_fault(FaultCode::SD_WRITE_FAIL);
-      return false;
+      return fail_export("#ERR: cannot remove existing CSV for export");
     }
   }
-  File csv = SD_MMC.open(csv_path, FILE_WRITE);
-  if (!csv) { bin.close(); system_status_set_fault(FaultCode::SD_WRITE_FAIL); return false; }
+  csv = SD_MMC.open(csv_path, FILE_WRITE);
+  if (!csv) return fail_export(nullptr);
+  csv_created = true;
 
   PdlHeaderV1 hdr;
   if (bin.read((uint8_t*)&hdr, sizeof(hdr)) != sizeof(hdr) || hdr.magic != PDL_MAGIC) {
-    bin.close(); csv.close(); system_status_set_fault(FaultCode::SD_WRITE_FAIL); return false;
+    return fail_export(nullptr);
   }
 
   const uint16_t frame_ver = hdr.frame_ver;
@@ -523,9 +595,13 @@ bool logger_export_latest_to_csv() {
   const bool has_imu_ts = (frame_ver >= 2 && frame_size >= sizeof(PdlFrameV2));
 
   if (has_imu_ts) {
-    csv.println("sample_index,t_us,adc_mean,adc_peak,adc_min,force_mean_mN,force_peak_mN,force_min_mN,ax,ay,az,gx,gy,gz,flags,vbat_mV,soc_centiPct,imu_sample_t_us");
+    if (!csv.println("sample_index,t_us,adc_mean,adc_peak,adc_min,force_mean_mN,force_peak_mN,force_min_mN,ax,ay,az,gx,gy,gz,flags,vbat_mV,soc_centiPct,imu_sample_t_us")) {
+      return fail_export(nullptr);
+    }
   } else {
-    csv.println("sample_index,t_us,adc_mean,adc_peak,adc_min,force_mean_mN,force_peak_mN,force_min_mN,ax,ay,az,gx,gy,gz,flags,vbat_mV,soc_centiPct");
+    if (!csv.println("sample_index,t_us,adc_mean,adc_peak,adc_min,force_mean_mN,force_peak_mN,force_min_mN,ax,ay,az,gx,gy,gz,flags,vbat_mV,soc_centiPct")) {
+      return fail_export(nullptr);
+    }
   }
 
   char line[200];
@@ -540,7 +616,7 @@ bool logger_export_latest_to_csv() {
         (int)v.ax, (int)v.ay, (int)v.az, (int)v.gx, (int)v.gy, (int)v.gz,
         (unsigned)v.flags, (unsigned)v.vbat_mV, (unsigned)v.soc_centiPct,
         (unsigned long long)fr.imu_sample_t_us);
-      csv.println(line);
+      if (!csv.println(line)) return fail_export(nullptr);
     }
   } else {
     PdlFrameV1 fr;
@@ -551,7 +627,7 @@ bool logger_export_latest_to_csv() {
         (long)fr.force_mean_mN, (long)fr.force_peak_mN, (long)fr.force_min_mN,
         (int)fr.ax, (int)fr.ay, (int)fr.az, (int)fr.gx, (int)fr.gy, (int)fr.gz,
         (unsigned)fr.flags, (unsigned)fr.vbat_mV, (unsigned)fr.soc_centiPct);
-      csv.println(line);
+      if (!csv.println(line)) return fail_export(nullptr);
     }
   }
   csv.flush();
