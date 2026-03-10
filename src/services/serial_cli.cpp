@@ -3,6 +3,7 @@
     #include <Arduino.h>
     #include <cstring>
 
+    #include "services/aux_state.h"
     #include "services/sd_logger.h"
     #include "services/scope_stream.h"
 
@@ -49,8 +50,9 @@
                 Serial.printf("#scope started %d Hz\n", hz);
               }
             } else if (strcmp(linebuf, "startlog") == 0) {
+              AuxSnapshot snap = aux_get_snapshot();
               auto hdr = logger_make_default_header();
-              if (logger_start_session(hdr, false, 0)) Serial.println("#log started");
+              if (logger_start_session(hdr, snap.rtc_valid, snap.rtc_epoch)) Serial.println("#log started");
               else Serial.println("#ERR: log start failed");
             } else if (strcmp(linebuf, "stoplog") == 0) {
               logger_stop_session();

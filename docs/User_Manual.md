@@ -120,6 +120,10 @@ Export converts the **latest** binary log file on the SD card into a **CSV file*
 
 The **latest** log (most recently stopped) is the one that gets exported when you long-press from idle.
 
+### RTC and time in logs
+
+The real-time clock (RTC) is used only for **session start**: the filename (when valid) and the header field `start_rtc_epoch`. Each frame’s time is a **monotonic timestamp** (`t_us`), not wall-clock. If the RTC is invalid or not set at session start, filenames use a run number (e.g. `PDL_RUN0001`) and the header marks RTC as invalid.
+
 ### CSV columns (summary)
 
 Typical columns you will see after export (exact names may vary slightly):

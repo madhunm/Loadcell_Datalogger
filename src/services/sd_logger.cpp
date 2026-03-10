@@ -6,6 +6,7 @@
 #include <FS.h>
 #include <SD_MMC.h>
 #include <cstddef>
+#include <cstring>
 
 #include "services/frame_pipe.h"
 #include "services/scope_stream.h"
@@ -22,6 +23,7 @@ static QueueHandle_t g_tare_result_q = nullptr;
 static File g_file;
 static volatile bool g_logging = false;
 static volatile bool g_drain_requested = false;
+static volatile bool g_session_write_failed = false;
 static char g_current_tmp_path[64] = "";
 static char g_last_bin_path[64] = "";
 
@@ -69,6 +71,7 @@ static void epoch_to_ymdhmss(uint32_t epoch, int* y, int* mo, int* d, int* h, in
   *s = (int)(sec % 60);
 }
 
+// Frame timestamps (t_us) are monotonic; RTC is used for start_rtc_epoch and filename when valid.
 static void make_tmp_filename(bool rtc_valid, uint32_t rtc_epoch, char* buf, size_t len) {
   if (rtc_valid && rtc_epoch > 0) {
     int y, mo, d, h, mi, s;
@@ -141,6 +144,18 @@ bool logger_start_session(const PdlHeaderV1& hdr, bool rtc_valid, uint32_t rtc_e
   if (g_logging) return false;
 
   make_tmp_filename(rtc_valid, rtc_epoch, g_current_tmp_path, sizeof(g_current_tmp_path));
+  if (rtc_valid && rtc_epoch > 0) {
+    for (int i = 1; i < 100 && SD_MMC.exists(g_current_tmp_path); i++) {
+      size_t l = strlen(g_current_tmp_path);
+      if (l >= 4 && strcmp(g_current_tmp_path + l - 4, ".TMP") == 0 &&
+          (size_t)(l + 3) < sizeof(g_current_tmp_path)) {
+        g_current_tmp_path[l - 4] = '\0';
+        snprintf(g_current_tmp_path + l - 4, sizeof(g_current_tmp_path) - (l - 4), "_%02d.TMP", i);
+      } else {
+        break;
+      }
+    }
+  }
   g_file = SD_MMC.open(g_current_tmp_path, FILE_WRITE);
   if (!g_file) {
     Serial.println("#ERR: open log file failed");
@@ -163,6 +178,7 @@ bool logger_start_session(const PdlHeaderV1& hdr, bool rtc_valid, uint32_t rtc_e
   g_file.flush();
   g_logging = true;
   g_drain_requested = false;
+  g_session_write_failed = false;
   adc_frames_on_session_start(h);
   Serial.print("#LOGFILE: ");
   Serial.println(g_current_tmp_path);
@@ -193,17 +209,25 @@ static void do_rename_tmp_to_bin() {
   strncpy(bin_path, g_current_tmp_path, sizeof(bin_path) - 1);
   bin_path[sizeof(bin_path)-1] = '\0';
   strcpy(bin_path + l - 3, "BIN");
-  if (SD_MMC.exists(bin_path)) SD_MMC.remove(bin_path);
+  for (int i = 0; i < 100; i++) {
+    if (i > 0) {
+      bin_path[l - 4] = '\0';
+      snprintf(bin_path + l - 4, sizeof(bin_path) - (l - 4), "_%02d.BIN", i);
+    }
+    if (!SD_MMC.exists(bin_path))
+      break;
+  }
   if (SD_MMC.rename(g_current_tmp_path, bin_path)) {
     strncpy(g_last_bin_path, bin_path, sizeof(g_last_bin_path) - 1);
     g_last_bin_path[sizeof(g_last_bin_path)-1] = '\0';
     Serial.print("#LOGSAVED: ");
     Serial.println(bin_path);
+    g_current_tmp_path[0] = '\0';
   } else {
     Serial.println("#ERR: rename TMP to BIN failed");
     system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    /* leave g_current_tmp_path set so .TMP remains identifiable for recovery */
   }
-  g_current_tmp_path[0] = '\0';
 }
 
 static void logger_task(void*) {
@@ -221,20 +245,28 @@ static void logger_task(void*) {
   while (true) {
     if (SD_CD_ENABLED && g_logging && !g_drain_requested && !sd_card_detect_present()) {
       system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+      g_session_write_failed = true;
       g_drain_requested = true;
     }
 
     TareResult tr;
-    if (g_tare_result_q && xQueueReceive(g_tare_result_q, &tr, 0) == pdTRUE && g_file) {
+    if (g_tare_result_q && xQueueReceive(g_tare_result_q, &tr, 0) == pdTRUE && g_file && !g_session_write_failed) {
       const size_t off_tare = offsetof(PdlHeaderV1, tare_frames);
-      g_file.seek(off_tare, SeekSet);
-      g_file.write((const uint8_t*)&tr.frames, sizeof(tr.frames));
-      g_file.write((const uint8_t*)&tr.adc_code, sizeof(tr.adc_code));
+      bool tare_ok = g_file.seek(off_tare, SeekSet);
+      if (tare_ok) tare_ok = (g_file.write((const uint8_t*)&tr.frames, sizeof(tr.frames)) == sizeof(tr.frames));
+      if (tare_ok) tare_ok = (g_file.write((const uint8_t*)&tr.adc_code, sizeof(tr.adc_code)) == sizeof(tr.adc_code));
       const size_t off_reserved = offsetof(PdlHeaderV1, reserved);
-      g_file.seek(off_reserved, SeekSet);
-      g_file.write((const uint8_t*)&tr.duration_ms, sizeof(tr.duration_ms));
-      g_file.flush();
-      g_file.seek(0, SeekEnd);
+      if (tare_ok) tare_ok = g_file.seek(off_reserved, SeekSet);
+      if (tare_ok) tare_ok = (g_file.write((const uint8_t*)&tr.duration_ms, sizeof(tr.duration_ms)) == sizeof(tr.duration_ms));
+      if (tare_ok) {
+        g_file.flush();
+        g_file.seek(0, SeekEnd);
+      } else {
+        Serial.println("#ERR: tare header patch failed");
+        system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+        g_session_write_failed = true;
+        g_drain_requested = true;
+      }
     }
 
     PdlFrameV2 fr;
@@ -258,6 +290,7 @@ static void logger_task(void*) {
       if (n != to_write) {
         Serial.println("#ERR: SD write failed");
         system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+        g_session_write_failed = true;
         g_drain_requested = true;
       }
       bytes_since_flush += n;
@@ -272,22 +305,39 @@ static void logger_task(void*) {
     }
 
     if (g_drain_requested && g_file) {
+      bool drain_ok = true;
       while (g_frame_q && xQueueReceive(g_frame_q, &fr, 0) == pdTRUE) {
         memcpy(frame_buf + frame_buf_n * sizeof(PdlFrameV2), &fr, sizeof(fr));
         frame_buf_n++;
         if (frame_buf_n >= FRAME_BUF_COUNT) {
           size_t to_write = frame_buf_n * sizeof(PdlFrameV2);
-          g_file.write(frame_buf, to_write);
+          size_t n = g_file.write(frame_buf, to_write);
+          if (n != to_write) {
+            drain_ok = false;
+            g_session_write_failed = true;
+            system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+          }
           frame_buf_n = 0;
         }
       }
-      if (frame_buf_n > 0) {
-        g_file.write(frame_buf, frame_buf_n * sizeof(PdlFrameV2));
+      if (frame_buf_n > 0 && drain_ok) {
+        size_t to_write = frame_buf_n * sizeof(PdlFrameV2);
+        size_t n = g_file.write(frame_buf, to_write);
+        if (n != to_write) {
+          drain_ok = false;
+          g_session_write_failed = true;
+          system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+        }
         frame_buf_n = 0;
       }
       g_file.flush();
       g_file.close();
-      do_rename_tmp_to_bin();
+      if (g_session_write_failed) {
+        Serial.println("#ERR: SD write failed during drain; .TMP left for recovery");
+        g_current_tmp_path[0] = '\0';
+      } else {
+        do_rename_tmp_to_bin();
+      }
       g_logging = false;
       g_drain_requested = false;
       Serial.println("#LOGSTOP");

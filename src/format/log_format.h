@@ -9,8 +9,8 @@ struct PdlHeaderV1 {
   uint32_t magic;          // PDL_MAGIC
   uint16_t header_ver;     // 1
   uint16_t header_size;    // sizeof(PdlHeaderV1)
-  uint16_t frame_ver;      // 1
-  uint16_t frame_size;     // sizeof(PdlFrameV1)
+  uint16_t frame_ver;      // 1 or 2; 2 when IMU sample time present (PdlFrameV2)
+  uint16_t frame_size;     // sizeof(PdlFrameV1) or sizeof(PdlFrameV2)
   uint32_t build_id;       // optional
 
   uint32_t adc_rate_hz;    // 64000
