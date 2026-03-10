@@ -28,6 +28,13 @@ static void IRAM_ATTR rtc_int_isr() {
   s_rtc_pending = true;
 }
 
+static void init_i2c_bus() {
+  Wire.end();
+  delay(1);
+  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000);
+  Wire.setTimeOut(20);
+}
+
 static bool isLeap(int y) { return (y % 4) == 0; } // valid for 2000..2099 usage
 
 static uint32_t toEpoch2000To2099(uint16_t year, uint8_t mon, uint8_t day,
@@ -54,7 +61,7 @@ static uint32_t toEpoch2000To2099(uint16_t year, uint8_t mon, uint8_t day,
 static void sensors_task(void*) {
   aux_init();
 
-  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000);
+  init_i2c_bus();
 
   // Bring-up devices (don't hard-fail the whole system on one missing device)
   bool fuel_ok = fuel.begin(Wire);
@@ -108,7 +115,10 @@ static void sensors_task(void*) {
 
   uint32_t last_batt_ms = millis() - 1000;
   uint32_t last_imu_count = 0;
+  uint32_t last_good_imu_ms = millis();
+  uint32_t last_good_rtc_ms = millis();
   uint32_t rtc_retry_after_ms = 0;
+  uint8_t i2c_fail_streak = 0;
 
   const TickType_t period = pdMS_TO_TICKS(2);
   TickType_t last_wake = xTaskGetTickCount();
@@ -166,6 +176,18 @@ static void sensors_task(void*) {
     }
 
     uint32_t now = millis();
+    auto note_i2c_failure = [&]() {
+      aux_bump_i2c_err();
+      if (++i2c_fail_streak >= 4) {
+        Serial.println("#WARN: I2C bus recovery");
+        init_i2c_bus();
+        s_retry_requested = true;
+        i2c_fail_streak = 0;
+      }
+    };
+    auto note_i2c_success = [&]() {
+      i2c_fail_streak = 0;
+    };
 
     if (imu_ok && s_imu_irq_count != last_imu_count) {
       last_imu_count = s_imu_irq_count;
@@ -174,18 +196,24 @@ static void sensors_task(void*) {
         uint64_t t_us = (uint64_t)esp_timer_get_time();
         aux_set_imu(s.ax, s.ay, s.az, s.gx, s.gy, s.gz, t_us);
         system_status_clear_warning(WarningCode::IMU_WARN);
+        last_good_imu_ms = now;
+        note_i2c_success();
       } else {
-        aux_bump_i2c_err();
+        note_i2c_failure();
         aux_set_imu_valid(false);
         system_status_set_warning(WarningCode::IMU_WARN);
       }
+    }
+    if (imu_ok && (now - last_good_imu_ms) >= 100) {
+      aux_set_imu_valid(false);
+      system_status_set_warning(WarningCode::IMU_WARN);
     }
 
     // RTC provides session start time and filename stamping only; per-frame timestamps are monotonic t_us.
     if (s_rtc_pending && rtc_ok && now >= rtc_retry_after_ms) {
       uint8_t flags = 0;
       if (!rtc.readFlags(flags)) {
-        aux_bump_i2c_err();
+        note_i2c_failure();
         system_status_set_warning(WarningCode::RTC_FAULT);
         aux_set_rtc(0, false);
         rtc_retry_after_ms = now + 100;
@@ -199,21 +227,29 @@ static void sensors_task(void*) {
           uint32_t epoch = toEpoch2000To2099(t.year, t.month, t.day, t.hour, t.minute, t.second);
           aux_set_rtc(epoch, true);
           system_status_clear_warning(WarningCode::RTC_FAULT);
+          last_good_rtc_ms = now;
+          note_i2c_success();
           if (rtc.clearFlags(RX8900CE::FLAG_UF)) {
             s_rtc_pending = false;
             rtc_retry_after_ms = 0;
           } else {
-            aux_bump_i2c_err();
+            note_i2c_failure();
             system_status_set_warning(WarningCode::RTC_FAULT);
             rtc_retry_after_ms = now + 100;
           }
         } else {
           aux_set_rtc(0, false);
-          aux_bump_i2c_err();
+          note_i2c_failure();
           system_status_set_warning(WarningCode::RTC_FAULT);
           rtc_retry_after_ms = now + 100;
         }
       }
+    }
+    if (rtc_ok && !s_rtc_pending && (now - last_good_rtc_ms) >= 2000) {
+      aux_set_rtc(0, false);
+      system_status_set_warning(WarningCode::RTC_FAULT);
+      s_rtc_pending = true;
+      rtc_retry_after_ms = now;
     }
 
     if (fuel_ok && (now - last_batt_ms) >= 1000) {
@@ -222,8 +258,9 @@ static void sensors_task(void*) {
       if (fuel.readVoltage_mV(mv) && fuel.readSOC_centiPercent(centi)) {
         aux_set_batt(mv, centi);
         system_status_clear_warning(WarningCode::BATT_WARN);
+        note_i2c_success();
       } else {
-        aux_bump_i2c_err();
+        note_i2c_failure();
         aux_set_batt_invalid();
         system_status_set_warning(WarningCode::BATT_WARN);
       }

@@ -22,7 +22,11 @@ void aux_set_imu(int16_t ax, int16_t ay, int16_t az, int16_t gx, int16_t gy, int
 void aux_set_imu_valid(bool valid) {
   portENTER_CRITICAL(&g_aux_mux);
   g_aux.imu_valid = valid;
-  if (!valid) g_aux.imu_sample_t_us = 0;
+  if (!valid) {
+    g_aux.ax = 0; g_aux.ay = 0; g_aux.az = 0;
+    g_aux.gx = 0; g_aux.gy = 0; g_aux.gz = 0;
+    g_aux.imu_sample_t_us = 0;
+  }
   portEXIT_CRITICAL(&g_aux_mux);
 }
 

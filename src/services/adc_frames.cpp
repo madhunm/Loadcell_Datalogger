@@ -14,6 +14,7 @@
 static constexpr int ADC_HZ = 64000;
 static constexpr int FRAME_HZ = 500;
 static constexpr int DECIM = ADC_HZ / FRAME_HZ; // 128
+static constexpr uint32_t ADC_SAMPLE_TIMEOUT_US = 2000;
 
 static Max11270 adc;
 
@@ -31,6 +32,23 @@ static uint32_t s_last_queue_drop_log_ms = 0;
 static int32_t s_overload_mN = std::numeric_limits<int32_t>::max();
 static int32_t s_underload_mN = std::numeric_limits<int32_t>::min();
 static int32_t s_compression_mN = std::numeric_limits<int32_t>::max();
+
+static bool restart_adc_stream() {
+  Max11270::Settings s;
+  s.rate = Max11270::Rate::R_64000SPS;
+  s.use_internal_clock = true;
+  s.continuous_conversion = true;
+  s.data32 = true;
+  s.enable_pga = true;
+  s.pga_gain = Max11270::PgaGain::X128;
+
+  if (adc.hardwareReset(2, 5) != ESP_OK) return false;
+  if (adc.softwareReset(5) != ESP_OK) return false;
+  if (adc.configure(s) != ESP_OK) return false;
+  if (adc.selfCalibrate() != ESP_OK) return false;
+  if (adc.startConversions(s.rate) != ESP_OK) return false;
+  return true;
+}
 
 void adc_frames_on_session_start(const PdlHeaderV1& hdr) {
   g_slope_mN_per_code = hdr.slope_mN_per_code;
@@ -101,7 +119,7 @@ static void adc_frame_task(void*) {
 
     for (int i=0; i<DECIM; i++) {
       Max11270::Sample smp;
-      esp_err_t err = adc.readSampleBlocking(&smp, 0);
+      esp_err_t err = adc.readSampleBlocking(&smp, ADC_SAMPLE_TIMEOUT_US);
       if (err != ESP_OK) {
         system_status_set_fault(FaultCode::ADC_FAULT);
         adc_error = true;
@@ -115,7 +133,11 @@ static void adc_frame_task(void*) {
       if (code > mx) mx = code;
     }
 
-    if (adc_error) continue;
+    if (adc_error) {
+      if (restart_adc_stream()) system_status_clear_fault(FaultCode::ADC_FAULT);
+      else vTaskDelay(pdMS_TO_TICKS(10));
+      continue;
+    }
 
     const int32_t mean = (int32_t)(sum / DECIM);
 

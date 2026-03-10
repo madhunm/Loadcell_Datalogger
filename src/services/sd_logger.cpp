@@ -67,6 +67,14 @@ static bool recover_run_number_file() {
   return false;
 }
 
+static void mark_sd_failure_and_finalize() {
+  portENTER_CRITICAL(&g_logger_mux);
+  g_logging = false;
+  g_session_write_failed = true;
+  g_drain_requested = true;
+  portEXIT_CRITICAL(&g_logger_mux);
+}
+
 static bool make_suffixed_path(const char* base_path, const char* ext, int suffix, char* out, size_t out_len) {
   if (!base_path || !ext || !out || out_len == 0) return false;
   const int written = (suffix <= 0)
@@ -364,8 +372,7 @@ static void logger_task(void*) {
   while (true) {
     if (SD_CD_ENABLED && g_logging && !g_drain_requested && !sd_card_detect_present()) {
       system_status_set_fault(FaultCode::SD_WRITE_FAIL);
-      g_session_write_failed = true;
-      g_drain_requested = true;
+      mark_sd_failure_and_finalize();
     }
 
     TareResult tr;
@@ -383,8 +390,7 @@ static void logger_task(void*) {
       } else {
         Serial.println("#ERR: tare header patch failed");
         system_status_set_fault(FaultCode::SD_WRITE_FAIL);
-        g_session_write_failed = true;
-        g_drain_requested = true;
+        mark_sd_failure_and_finalize();
       }
     }
 
@@ -409,8 +415,7 @@ static void logger_task(void*) {
       if (n != to_write) {
         Serial.println("#ERR: SD write failed");
         system_status_set_fault(FaultCode::SD_WRITE_FAIL);
-        g_session_write_failed = true;
-        g_drain_requested = true;
+        mark_sd_failure_and_finalize();
       }
       bytes_since_flush += n;
       frame_buf_n = 0;
