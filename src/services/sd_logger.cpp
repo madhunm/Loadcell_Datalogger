@@ -46,6 +46,7 @@ static constexpr size_t LATEST_BIN_PATH_MAX = 63;
 
 static bool is_candidate_bin_path(const char* path);
 static bool read_valid_pdl_header(File& f, PdlHeaderV1* hdr);
+static bool validate_bin_path(const char* path);
 
 static bool write_latest_bin_path(const char* path) {
   if (!path || path[0] == '\0') return false;
@@ -84,14 +85,7 @@ static bool read_latest_bin_path(char* out, size_t out_len) {
   out[n] = '\0';
   const void* nul = memchr(out, '\0', n);
   if (!nul || ((const char*)nul - out) != (ptrdiff_t)(n - 1)) return false;
-  if (!is_candidate_bin_path(out)) return false;
-  File bin = SD_MMC.open(out, FILE_READ);
-  if (!bin) return false;
-  PdlHeaderV1 hdr{};
-  const bool ok = read_valid_pdl_header(bin, &hdr);
-  bin.close();
-  if (!ok) return false;
-  return true;
+  return validate_bin_path(out);
 }
 
 static bool read_run_counter_file(const char* path, uint32_t* value) {
@@ -163,6 +157,19 @@ static bool is_candidate_bin_path(const char* path) {
   if (strncmp(name, "PDL_", 4) != 0) return false;
   const size_t len = strlen(name);
   return len > 4 && strcmp(name + len - 4, ".BIN") == 0;
+}
+
+static bool validate_bin_path(const char* path) {
+  if (!path || path[0] == '\0') return false;
+  if (!is_candidate_bin_path(path)) return false;
+  if (!SD_MMC.exists(path)) return false;
+  File f = SD_MMC.open(path, FILE_READ);
+  if (!f) return false;
+  const bool size_ok = f.size() >= sizeof(PdlHeaderV1);
+  PdlHeaderV1 hdr{};
+  const bool hdr_ok = size_ok && read_valid_pdl_header(f, &hdr);
+  f.close();
+  return size_ok && hdr_ok;
 }
 
 static bool read_valid_pdl_header(File& f, PdlHeaderV1* hdr) {
@@ -272,7 +279,7 @@ static bool resolve_last_bin_path(char* out, size_t out_len) {
   }
   portEXIT_CRITICAL(&g_logger_mux);
 
-  if (have_cached && SD_MMC.exists(out)) return true;
+  if (have_cached && validate_bin_path(out)) return true;
   if (read_latest_bin_path(out, out_len)) {
     portENTER_CRITICAL(&g_logger_mux);
     strncpy(g_last_bin_path, out, sizeof(g_last_bin_path) - 1);
@@ -281,11 +288,13 @@ static bool resolve_last_bin_path(char* out, size_t out_len) {
     return true;
   }
   if (!find_latest_bin_on_disk(out, out_len)) return false;
+  if (!validate_bin_path(out)) return false;
 
   portENTER_CRITICAL(&g_logger_mux);
   strncpy(g_last_bin_path, out, sizeof(g_last_bin_path) - 1);
   g_last_bin_path[sizeof(g_last_bin_path) - 1] = '\0';
   portEXIT_CRITICAL(&g_logger_mux);
+  write_latest_bin_path(out);
   return true;
 }
 
