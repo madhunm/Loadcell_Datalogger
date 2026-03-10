@@ -69,7 +69,10 @@ static void sensors_task(void*) {
     aux_set_imu_valid(false);
   }
   if (!imu_ok) system_status_set_fault(FaultCode::IMU_FAULT);
-  if (!fuel_ok) system_status_set_warning(WarningCode::BATT_WARN);
+  if (!fuel_ok) {
+    aux_set_batt_invalid();
+    system_status_set_warning(WarningCode::BATT_WARN);
+  }
 
   if (imu_ok) {
     imu.setIntPinConfig(false, false);
@@ -154,7 +157,10 @@ static void sensors_task(void*) {
         system_status_set_warning(WarningCode::RTC_FAULT);
       }
       if (fuel_ok) system_status_clear_warning(WarningCode::BATT_WARN);
-      else system_status_set_warning(WarningCode::BATT_WARN);
+      else {
+        aux_set_batt_invalid();
+        system_status_set_warning(WarningCode::BATT_WARN);
+      }
       last_batt_ms = millis() - 1000;
     }
 
@@ -181,8 +187,6 @@ static void sensors_task(void*) {
         aux_bump_i2c_err();
         system_status_set_warning(WarningCode::RTC_FAULT);
         aux_set_rtc(0, false);
-        s_rtc_pending = false;
-        rtc.clearFlags(RX8900CE::FLAG_UF);
       } else if (flags & RX8900CE::FLAG_VLF) {
         aux_set_rtc(0, false);
         system_status_set_warning(WarningCode::RTC_FAULT);
@@ -194,13 +198,13 @@ static void sensors_task(void*) {
           uint32_t epoch = toEpoch2000To2099(t.year, t.month, t.day, t.hour, t.minute, t.second);
           aux_set_rtc(epoch, true);
           system_status_clear_warning(WarningCode::RTC_FAULT);
+          s_rtc_pending = false;
+          rtc.clearFlags(RX8900CE::FLAG_UF);
         } else {
           aux_set_rtc(0, false);
           aux_bump_i2c_err();
           system_status_set_warning(WarningCode::RTC_FAULT);
         }
-        s_rtc_pending = false;
-        rtc.clearFlags(RX8900CE::FLAG_UF);
       }
     }
 
@@ -212,6 +216,7 @@ static void sensors_task(void*) {
         system_status_clear_warning(WarningCode::BATT_WARN);
       } else {
         aux_bump_i2c_err();
+        aux_set_batt_invalid();
         system_status_set_warning(WarningCode::BATT_WARN);
       }
     }

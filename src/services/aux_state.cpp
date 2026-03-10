@@ -30,6 +30,15 @@ void aux_set_batt(uint16_t vbat_mV, uint16_t soc_centiPct) {
   portENTER_CRITICAL(&g_aux_mux);
   g_aux.vbat_mV = vbat_mV;
   g_aux.soc_centiPct = soc_centiPct;
+  g_aux.battery_valid = true;
+  portEXIT_CRITICAL(&g_aux_mux);
+}
+
+void aux_set_batt_invalid() {
+  portENTER_CRITICAL(&g_aux_mux);
+  g_aux.vbat_mV = 0;
+  g_aux.soc_centiPct = 0;
+  g_aux.battery_valid = false;
   portEXIT_CRITICAL(&g_aux_mux);
 }
 

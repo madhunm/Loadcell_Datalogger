@@ -44,8 +44,8 @@ static void do_start_log() {
 
 static void do_stop_log() {
   logger_stop_session();
-  s_ui_state = UiState::STOPPED;
-  led_set_state(UiState::STOPPED);
+  s_ui_state = UiState::FINALIZING;
+  led_set_state(UiState::FINALIZING);
 }
 
 static void do_export_latest() {
@@ -95,6 +95,8 @@ void ui_tick(uint32_t now_ms) {
         if (ev == ButtonEvent::LONG_PRESS) do_stop_log();
         else if (ev == ButtonEvent::SHORT_PRESS) frame_pipe_set_mark_next();
         break;
+      case UiState::FINALIZING:
+        break;
       case UiState::STOPPED:
         if (ev == ButtonEvent::SHORT_PRESS) do_start_log();
         else if (ev == ButtonEvent::LONG_PRESS) do_export_latest();
@@ -116,6 +118,10 @@ void ui_tick(uint32_t now_ms) {
     else led_set_custom1(0, 0, 0);
   } else {
     s_warning_blink_until_ms = 0;
+    if (s_ui_state == UiState::FINALIZING && !logger_is_busy()) {
+      s_ui_state = UiState::STOPPED;
+      led_set_state(UiState::STOPPED);
+    }
     LedFault f = system_status_get_led_fault();
     LedWarning w = system_status_get_led_warning();
     if (f != LedFault::NONE) {

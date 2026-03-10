@@ -12,6 +12,7 @@ enum class UiState : uint8_t {
   BOOT,
   IDLE_READY,
   LOGGING,
+  FINALIZING,
   STOPPED,
   EXPORTING,
   FAULT,

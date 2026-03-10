@@ -162,6 +162,14 @@ bool logger_begin() {
     system_status_set_fault(FaultCode::SD_MOUNT_FAIL);
     return false;
   }
+  if (SD_MMC.exists(RUN_NUM_TMP_PATH) && !SD_MMC.exists(RUN_NUM_PATH)) {
+    if (SD_MMC.rename(RUN_NUM_TMP_PATH, RUN_NUM_PATH)) {
+      Serial.println("#INFO: recovered run counter from PDL_RUN.NEW");
+    } else {
+      Serial.println("#ERR: run counter recovery failed");
+      system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    }
+  }
   system_status_clear_fault(FaultCode::SD_MOUNT_FAIL);
   return true;
 }
@@ -395,7 +403,6 @@ static void logger_task(void*) {
       g_drain_requested = false;
     }
   }
-  free(frame_buf);
 }
 
 void logger_set_tare_result(uint16_t tare_frames, int32_t tare_adc_code, uint16_t tare_duration_ms) {

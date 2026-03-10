@@ -157,7 +157,7 @@ static void adc_frame_task(void*) {
     if (fr.v1.force_mean_mN < s_underload_mN) { fr.v1.flags |= FLG_UNDERLOAD; system_status_set_warning(WarningCode::UNDERLOAD); } else { system_status_clear_warning(WarningCode::UNDERLOAD); }
     if (fr.v1.force_min_mN < -s_compression_mN) { fr.v1.flags |= FLG_COMPRESSION; system_status_set_warning(WarningCode::COMPRESSION); } else { system_status_clear_warning(WarningCode::COMPRESSION); }
     if (!snap.rtc_valid) { fr.v1.flags |= FLG_RTC_INVALID; system_status_set_warning(WarningCode::RTC_INVALID); } else { system_status_clear_warning(WarningCode::RTC_INVALID); }
-    if (snap.soc_centiPct < LOW_BATT_SOC_CENTI || snap.vbat_mV < LOW_BATT_MV) { fr.v1.flags |= FLG_LOW_BATT; system_status_set_warning(WarningCode::LOW_BATT); } else { system_status_clear_warning(WarningCode::LOW_BATT); }
+    if (snap.battery_valid && (snap.soc_centiPct < LOW_BATT_SOC_CENTI || snap.vbat_mV < LOW_BATT_MV)) { fr.v1.flags |= FLG_LOW_BATT; system_status_set_warning(WarningCode::LOW_BATT); } else { system_status_clear_warning(WarningCode::LOW_BATT); }
     fr.v1.pad = 0;
 
     fr.imu_sample_t_us = snap.imu_sample_t_us;
