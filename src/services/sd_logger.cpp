@@ -144,8 +144,12 @@ bool logger_begin() {
 
 bool logger_is_logging() { return g_logging; }
 
+bool logger_can_start() {
+  return !g_logging && !g_drain_requested;
+}
+
 bool logger_start_session(const PdlHeaderV1& hdr, bool rtc_valid, uint32_t rtc_epoch) {
-  if (g_logging) return false;
+  if (!logger_can_start()) return false;
 
   make_tmp_filename(rtc_valid, rtc_epoch, g_current_tmp_path, sizeof(g_current_tmp_path));
   for (int i = 1; i < 100 && SD_MMC.exists(g_current_tmp_path); i++) {
@@ -188,9 +192,11 @@ bool logger_start_session(const PdlHeaderV1& hdr, bool rtc_valid, uint32_t rtc_e
 }
 
 void logger_stop_session() {
+  if (g_drain_requested) return;  // already finalizing, idempotent
   if (!g_logging) return;
   g_logging = false;
   g_drain_requested = true;
+  Serial.println("# stop requested; finalizing when drain completes");
 }
 
 bool logger_has_last_bin() {
@@ -307,6 +313,7 @@ static void logger_task(void*) {
     }
 
     if (g_drain_requested && g_file) {
+      Serial.println("# finalizing (drain/flush/close)");
       bool drain_ok = true;
       while (g_frame_q && xQueueReceive(g_frame_q, &fr, 0) == pdTRUE) {
         memcpy(frame_buf + frame_buf_n * sizeof(PdlFrameV2), &fr, sizeof(fr));
@@ -335,14 +342,16 @@ static void logger_task(void*) {
       g_file.flush();
       g_file.close();
       if (g_session_write_failed) {
-        Serial.println("#ERR: SD write failed during drain; .TMP left for recovery");
-        g_current_tmp_path[0] = '\0';
+        Serial.println("#ERR: finalize failed (write/drain); .TMP left for recovery");
+        Serial.print("# recovery TMP: ");
+        Serial.println(g_current_tmp_path);
+        /* keep g_current_tmp_path so recovery context remains until next successful start */
       } else {
         do_rename_tmp_to_bin();
+        Serial.println("#LOGSTOP");
       }
       g_logging = false;
       g_drain_requested = false;
-      Serial.println("#LOGSTOP");
     }
   }
   free(frame_buf);
@@ -372,6 +381,14 @@ bool logger_export_latest_to_csv() {
     strcpy(last_dot, ".CSV");
   else if (l + 4 < sizeof(csv_path))
     strcat(csv_path, ".CSV");
+  if (SD_MMC.exists(csv_path)) {
+    if (!SD_MMC.remove(csv_path)) {
+      Serial.println("#ERR: cannot remove existing CSV for export");
+      bin.close();
+      system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+      return false;
+    }
+  }
   File csv = SD_MMC.open(csv_path, FILE_WRITE);
   if (!csv) { bin.close(); system_status_set_fault(FaultCode::SD_WRITE_FAIL); return false; }
 

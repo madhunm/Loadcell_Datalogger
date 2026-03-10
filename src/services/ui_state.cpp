@@ -37,6 +37,8 @@ static void do_start_log() {
   if (logger_start_session(hdr, snap.rtc_valid, snap.rtc_epoch)) {
     s_ui_state = UiState::LOGGING;
     led_set_state(UiState::LOGGING);
+  } else if (!logger_can_start()) {
+    s_warning_blink_until_ms = millis() + 600;
   }
 }
 

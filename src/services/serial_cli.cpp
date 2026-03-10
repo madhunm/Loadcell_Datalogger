@@ -53,7 +53,7 @@
               AuxSnapshot snap = aux_get_snapshot();
               auto hdr = logger_make_default_header();
               if (logger_start_session(hdr, snap.rtc_valid, snap.rtc_epoch)) Serial.println("#log started");
-              else Serial.println("#ERR: log start failed");
+              else Serial.println("#ERR: log start failed (logger busy or finalizing)");
             } else if (strcmp(linebuf, "stoplog") == 0) {
               logger_stop_session();
             } else if (linelen != 0) {

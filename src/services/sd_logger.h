@@ -9,6 +9,8 @@ void start_logger_task();
 bool logger_start_session(const PdlHeaderV1& hdr, bool rtc_valid, uint32_t rtc_epoch);
 void logger_stop_session();
 bool logger_is_logging();
+/** True if no session is active and no drain/finalization is in progress (safe to start). */
+bool logger_can_start();
 
 bool logger_has_last_bin();
 bool logger_get_last_bin_path(char* buf, size_t len);
