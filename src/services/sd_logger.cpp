@@ -112,8 +112,8 @@ static bool is_candidate_bin_path(const char* path) {
   return len > 4 && strcmp(name + len - 4, ".BIN") == 0;
 }
 
-static bool read_bin_sort_key(const char* path, bool* has_rtc, uint64_t* timestamp) {
-  if (!path || !has_rtc || !timestamp) return false;
+static bool read_bin_sort_key(const char* path, uint64_t* timestamp) {
+  if (!path || !timestamp) return false;
   File f = SD_MMC.open(path, FILE_READ);
   if (!f) return false;
   PdlHeaderV1 hdr{};
@@ -124,12 +124,10 @@ static bool read_bin_sort_key(const char* path, bool* has_rtc, uint64_t* timesta
   f.close();
   if (!ok) return false;
   if (hdr.start_rtc_epoch > 0) {
-    *has_rtc = true;
     *timestamp = hdr.start_rtc_epoch;
     return true;
   }
   if (hdr.start_mono_us > 0) {
-    *has_rtc = false;
     *timestamp = hdr.start_mono_us;
     return true;
   }
@@ -144,12 +142,9 @@ static bool find_latest_bin_on_disk(char* out, size_t out_len) {
   if (!root) return false;
 
   char best_lex_path[64] = "";
-  char best_rtc_path[64] = "";
-  char best_mono_path[64] = "";
-  uint64_t best_rtc_ts = 0;
-  uint64_t best_mono_ts = 0;
-  bool have_rtc = false;
-  bool have_mono = false;
+  char best_ts_path[64] = "";
+  uint64_t best_ts = 0;
+  bool have_ts = false;
   File entry = root.openNextFile();
   while (entry) {
     if (!entry.isDirectory()) {
@@ -159,21 +154,13 @@ static bool find_latest_bin_on_disk(char* out, size_t out_len) {
           strncpy(best_lex_path, path, sizeof(best_lex_path) - 1);
           best_lex_path[sizeof(best_lex_path) - 1] = '\0';
         }
-        bool has_rtc = false;
         uint64_t timestamp = 0;
-        if (read_bin_sort_key(path, &has_rtc, &timestamp)) {
-          if (has_rtc) {
-            if (!have_rtc || timestamp > best_rtc_ts) {
-              best_rtc_ts = timestamp;
-              strncpy(best_rtc_path, path, sizeof(best_rtc_path) - 1);
-              best_rtc_path[sizeof(best_rtc_path) - 1] = '\0';
-              have_rtc = true;
-            }
-          } else if (!have_mono || timestamp > best_mono_ts) {
-            best_mono_ts = timestamp;
-            strncpy(best_mono_path, path, sizeof(best_mono_path) - 1);
-            best_mono_path[sizeof(best_mono_path) - 1] = '\0';
-            have_mono = true;
+        if (read_bin_sort_key(path, &timestamp)) {
+          if (!have_ts || timestamp > best_ts) {
+            best_ts = timestamp;
+            strncpy(best_ts_path, path, sizeof(best_ts_path) - 1);
+            best_ts_path[sizeof(best_ts_path) - 1] = '\0';
+            have_ts = true;
           }
         }
       }
@@ -183,7 +170,7 @@ static bool find_latest_bin_on_disk(char* out, size_t out_len) {
   }
   root.close();
 
-  const char* selected_path = have_rtc ? best_rtc_path : (have_mono ? best_mono_path : best_lex_path);
+  const char* selected_path = have_ts ? best_ts_path : best_lex_path;
   if (selected_path[0] == '\0') return false;
   strncpy(out, selected_path, out_len - 1);
   out[out_len - 1] = '\0';
