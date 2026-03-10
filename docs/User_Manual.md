@@ -122,7 +122,7 @@ The **latest** log (most recently stopped) is the one that gets exported when yo
 
 ### RTC and time in logs
 
-The real-time clock (RTC) is used only for **session start**: the filename (when valid) and the header field `start_rtc_epoch`. Each frame’s time is a **monotonic timestamp** (`t_us`), not wall-clock. If the RTC is invalid or not set at session start, filenames use a run number (e.g. `PDL_RUN0001`) and the header marks RTC as invalid.
+The real-time clock (RTC) is used only for **session start**: the filename (when valid) and the header field `start_rtc_epoch`. Each frame’s time is a **monotonic timestamp** (`t_us`), not wall-clock. If the RTC is invalid or not set at session start, filenames use a run number (e.g. `PDL_RUN0001`) and the header marks RTC as invalid. Serial CLI command `startlog` also uses the RTC when valid (same as button start).
 
 ### CSV columns (summary)
 
