@@ -49,6 +49,10 @@ static void do_stop_log() {
 }
 
 static void do_export_latest() {
+  if (logger_is_busy()) {
+    s_warning_blink_until_ms = millis() + 800;
+    return;
+  }
   if (!logger_has_last_bin()) {
     s_warning_blink_until_ms = millis() + 800;
     return;

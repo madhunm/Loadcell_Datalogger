@@ -9,6 +9,7 @@ void start_logger_task();
 bool logger_start_session(const PdlHeaderV1& hdr, bool rtc_valid, uint32_t rtc_epoch);
 void logger_stop_session();
 bool logger_is_logging();
+bool logger_is_busy();
 /** True if no session is active and no drain/finalization is in progress (safe to start). */
 bool logger_can_start();
 

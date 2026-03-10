@@ -69,6 +69,10 @@ static void sensors_task(void*) {
     pinMode(PIN_IMU_INT1, INPUT);
     attachInterrupt(digitalPinToInterrupt(PIN_IMU_INT1), imu_int1_isr, RISING);
   }
+  if (!rtc_ok) {
+    aux_set_rtc(0, false);
+    system_status_set_warning(WarningCode::RTC_FAULT);
+  }
   if (rtc_ok) {
     rtc.enableSecondUpdateInterrupt(true);
     pinMode(PIN_RTC_INT, INPUT_PULLUP);
@@ -102,6 +106,7 @@ static void sensors_task(void*) {
 
     if (s_retry_requested) {
       s_retry_requested = false;
+      if (!fuel_ok) fuel_ok = fuel.begin(Wire);
       imu_ok = imu.begin(Wire) && imu.configure(LSM6DSV::Odr::HZ_960, LSM6DSV::Odr::HZ_960);
       rtc_ok = rtc.begin(Wire);
       if (imu_ok) {
@@ -131,6 +136,10 @@ static void sensors_task(void*) {
           aux_set_rtc(0, false);
           system_status_set_warning(WarningCode::RTC_FAULT);
         }
+      }
+      if (!rtc_ok) {
+        aux_set_rtc(0, false);
+        system_status_set_warning(WarningCode::RTC_FAULT);
       }
     }
 

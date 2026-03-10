@@ -30,10 +30,20 @@ static char g_last_bin_path[64] = "";
 static constexpr size_t FRAME_BUF_COUNT = 256;
 static constexpr size_t FRAME_BUF_BYTES = FRAME_BUF_COUNT * sizeof(PdlFrameV2);
 static constexpr size_t FLUSH_INTERVAL_BYTES = 256 * 1024;
+static constexpr const char* RUN_NUM_PATH = "/PDL_RUN.NUM";
+static constexpr const char* RUN_NUM_TMP_PATH = "/PDL_RUN.NEW";
+
+static bool make_suffixed_path(const char* base_path, const char* ext, int suffix, char* out, size_t out_len) {
+  if (!base_path || !ext || !out || out_len == 0) return false;
+  const int written = (suffix <= 0)
+    ? snprintf(out, out_len, "%s%s", base_path, ext)
+    : snprintf(out, out_len, "%s_%02d%s", base_path, suffix, ext);
+  return written > 0 && (size_t)written < out_len;
+}
 
 static uint32_t next_run_number() {
   uint32_t n = 0;
-  File f = SD_MMC.open("/PDL_RUN.NUM", FILE_READ);
+  File f = SD_MMC.open(RUN_NUM_PATH, FILE_READ);
   if (f && f.available() >= 4) {
     uint8_t b[4];
     f.read(b, 4);
@@ -43,8 +53,12 @@ static uint32_t next_run_number() {
     f.close();
   }
   n++;
-  SD_MMC.remove("/PDL_RUN.NUM");
-  f = SD_MMC.open("/PDL_RUN.NUM", FILE_WRITE);
+  if (SD_MMC.exists(RUN_NUM_TMP_PATH) && !SD_MMC.remove(RUN_NUM_TMP_PATH)) {
+    Serial.println("#ERR: stale run number temp file remove failed");
+    system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    return n;
+  }
+  f = SD_MMC.open(RUN_NUM_TMP_PATH, FILE_WRITE);
   if (f) {
     uint8_t b[4] = { (uint8_t)(n & 0xFF), (uint8_t)((n >> 8) & 0xFF), (uint8_t)((n >> 16) & 0xFF), (uint8_t)((n >> 24) & 0xFF) };
     size_t written = f.write(b, 4);
@@ -52,7 +66,12 @@ static uint32_t next_run_number() {
       Serial.println("#ERR: run number file write failed");
       system_status_set_fault(FaultCode::SD_WRITE_FAIL);
     }
+    f.flush();
     f.close();
+    if (written == 4 && !SD_MMC.rename(RUN_NUM_TMP_PATH, RUN_NUM_PATH)) {
+      Serial.println("#ERR: run number file rename failed");
+      system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    }
   }
   return n;
 }
@@ -144,23 +163,34 @@ bool logger_begin() {
 
 bool logger_is_logging() { return g_logging; }
 
+bool logger_is_busy() {
+  return g_logging || g_drain_requested;
+}
+
 bool logger_can_start() {
-  return !g_logging && !g_drain_requested;
+  return !logger_is_busy();
 }
 
 bool logger_start_session(const PdlHeaderV1& hdr, bool rtc_valid, uint32_t rtc_epoch) {
   if (!logger_can_start()) return false;
 
+  char base_tmp_path[64];
   make_tmp_filename(rtc_valid, rtc_epoch, g_current_tmp_path, sizeof(g_current_tmp_path));
-  for (int i = 1; i < 100 && SD_MMC.exists(g_current_tmp_path); i++) {
-    size_t l = strlen(g_current_tmp_path);
-    if (l >= 4 && strcmp(g_current_tmp_path + l - 4, ".TMP") == 0 &&
-        (size_t)(l + 3) < sizeof(g_current_tmp_path)) {
-      g_current_tmp_path[l - 4] = '\0';
-      snprintf(g_current_tmp_path + l - 4, sizeof(g_current_tmp_path) - (l - 4), "_%02d.TMP", i);
-    } else {
-      break;
+  strncpy(base_tmp_path, g_current_tmp_path, sizeof(base_tmp_path) - 1);
+  base_tmp_path[sizeof(base_tmp_path) - 1] = '\0';
+  const size_t base_len = strlen(base_tmp_path);
+  if (base_len < 4 || strcmp(base_tmp_path + base_len - 4, ".TMP") != 0) return false;
+  base_tmp_path[base_len - 4] = '\0';
+  for (int i = 0; i < 100; ++i) {
+    if (!make_suffixed_path(base_tmp_path, ".TMP", i, g_current_tmp_path, sizeof(g_current_tmp_path))) {
+      return false;
     }
+    if (!SD_MMC.exists(g_current_tmp_path)) break;
+  }
+  if (SD_MMC.exists(g_current_tmp_path)) {
+    Serial.println("#ERR: no available TMP filename");
+    system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    return false;
   }
   g_file = SD_MMC.open(g_current_tmp_path, FILE_WRITE);
   if (!g_file) {
@@ -196,7 +226,7 @@ void logger_stop_session() {
   if (!g_logging) return;
   g_logging = false;
   g_drain_requested = true;
-  Serial.println("# stop requested; finalizing when drain completes");
+  Serial.println("#LOGSTOP: finalizing");
 }
 
 bool logger_has_last_bin() {
@@ -213,17 +243,23 @@ bool logger_get_last_bin_path(char* buf, size_t len) {
 static void do_rename_tmp_to_bin() {
   size_t l = strlen(g_current_tmp_path);
   if (l < 5) return;
+  char base_bin_path[64];
   char bin_path[64];
-  strncpy(bin_path, g_current_tmp_path, sizeof(bin_path) - 1);
-  bin_path[sizeof(bin_path)-1] = '\0';
-  strcpy(bin_path + l - 3, "BIN");
-  for (int i = 0; i < 100; i++) {
-    if (i > 0) {
-      bin_path[l - 4] = '\0';
-      snprintf(bin_path + l - 4, sizeof(bin_path) - (l - 4), "_%02d.BIN", i);
+  strncpy(base_bin_path, g_current_tmp_path, sizeof(base_bin_path) - 1);
+  base_bin_path[sizeof(base_bin_path)-1] = '\0';
+  base_bin_path[l - 4] = '\0';
+  for (int i = 0; i < 100; ++i) {
+    if (!make_suffixed_path(base_bin_path, ".BIN", i, bin_path, sizeof(bin_path))) {
+      Serial.println("#ERR: BIN filename generation failed");
+      system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+      return;
     }
-    if (!SD_MMC.exists(bin_path))
-      break;
+    if (!SD_MMC.exists(bin_path)) break;
+  }
+  if (SD_MMC.exists(bin_path)) {
+    Serial.println("#ERR: no available BIN filename");
+    system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    return;
   }
   if (SD_MMC.rename(g_current_tmp_path, bin_path)) {
     strncpy(g_last_bin_path, bin_path, sizeof(g_last_bin_path) - 1);
@@ -313,7 +349,6 @@ static void logger_task(void*) {
     }
 
     if (g_drain_requested && g_file) {
-      Serial.println("# finalizing (drain/flush/close)");
       bool drain_ok = true;
       while (g_frame_q && xQueueReceive(g_frame_q, &fr, 0) == pdTRUE) {
         memcpy(frame_buf + frame_buf_n * sizeof(PdlFrameV2), &fr, sizeof(fr));
@@ -342,13 +377,13 @@ static void logger_task(void*) {
       g_file.flush();
       g_file.close();
       if (g_session_write_failed) {
-        Serial.println("#ERR: finalize failed (write/drain); .TMP left for recovery");
+        Serial.println("#ERR: finalize failed (TMP left for recovery)");
         Serial.print("# recovery TMP: ");
         Serial.println(g_current_tmp_path);
         /* keep g_current_tmp_path so recovery context remains until next successful start */
       } else {
         do_rename_tmp_to_bin();
-        Serial.println("#LOGSTOP");
+        Serial.println("#LOGSTOP: complete");
       }
       g_logging = false;
       g_drain_requested = false;
@@ -369,6 +404,10 @@ void start_logger_task() {
 }
 
 bool logger_export_latest_to_csv() {
+  if (logger_is_busy()) {
+    Serial.println("#ERR: logger busy (finalizing previous session)");
+    return false;
+  }
   if (g_last_bin_path[0] == '\0') return false;
   File bin = SD_MMC.open(g_last_bin_path, FILE_READ);
   if (!bin) { system_status_set_fault(FaultCode::SD_WRITE_FAIL); return false; }
