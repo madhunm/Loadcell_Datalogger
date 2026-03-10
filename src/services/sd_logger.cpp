@@ -41,20 +41,35 @@ static constexpr size_t FLUSH_INTERVAL_BYTES = 256 * 1024;
 static constexpr const char* RUN_NUM_PATH = "/PDL_RUN.NUM";
 static constexpr const char* RUN_NUM_TMP_PATH = "/PDL_RUN.NEW";
 static constexpr const char* LATEST_BIN_PATH = "/PDL_LATEST.TXT";
+static constexpr const char* LATEST_BIN_TMP_PATH = "/PDL_LATEST.NEW";
 static constexpr size_t LATEST_BIN_PATH_MAX = 63;
 
 static bool is_candidate_bin_path(const char* path);
+static bool read_valid_pdl_header(File& f, PdlHeaderV1* hdr);
 
 static bool write_latest_bin_path(const char* path) {
   if (!path || path[0] == '\0') return false;
   size_t len = strnlen(path, LATEST_BIN_PATH_MAX + 1);
   if (len == 0 || len > LATEST_BIN_PATH_MAX) return false;
-  File f = SD_MMC.open(LATEST_BIN_PATH, FILE_WRITE);
+  if (SD_MMC.exists(LATEST_BIN_TMP_PATH) && !SD_MMC.remove(LATEST_BIN_TMP_PATH)) return false;
+  File f = SD_MMC.open(LATEST_BIN_TMP_PATH, FILE_WRITE);
   if (!f) return false;
   size_t n = f.write((const uint8_t*)path, len + 1);
   f.flush();
   f.close();
-  return n == len + 1;
+  if (n != len + 1) {
+    SD_MMC.remove(LATEST_BIN_TMP_PATH);
+    return false;
+  }
+  if (SD_MMC.exists(LATEST_BIN_PATH) && !SD_MMC.remove(LATEST_BIN_PATH)) {
+    SD_MMC.remove(LATEST_BIN_TMP_PATH);
+    return false;
+  }
+  if (!SD_MMC.rename(LATEST_BIN_TMP_PATH, LATEST_BIN_PATH)) {
+    SD_MMC.remove(LATEST_BIN_TMP_PATH);
+    return false;
+  }
+  return true;
 }
 
 static bool read_latest_bin_path(char* out, size_t out_len) {
@@ -67,7 +82,15 @@ static bool read_latest_bin_path(char* out, size_t out_len) {
   f.close();
   if (n == 0 || n >= out_len) return false;
   out[n] = '\0';
-  if (!is_candidate_bin_path(out) || !SD_MMC.exists(out)) return false;
+  const void* nul = memchr(out, '\0', n);
+  if (!nul || ((const char*)nul - out) != (ptrdiff_t)(n - 1)) return false;
+  if (!is_candidate_bin_path(out)) return false;
+  File bin = SD_MMC.open(out, FILE_READ);
+  if (!bin) return false;
+  PdlHeaderV1 hdr{};
+  const bool ok = read_valid_pdl_header(bin, &hdr);
+  bin.close();
+  if (!ok) return false;
   return true;
 }
 
