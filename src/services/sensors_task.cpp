@@ -4,6 +4,7 @@
 
 #include "services/sensors_task.h"
 #include "services/aux_state.h"
+#include "services/scope_stream.h"
 #include "services/system_status.h"
 #include "drivers/max17048.h"
 #include "drivers/rx8900ce.h"
@@ -60,8 +61,15 @@ static void sensors_task(void*) {
   static bool rtc_ok = rtc.begin(Wire);
   static bool imu_ok = imu.begin(Wire) && imu.configure(LSM6DSV::Odr::HZ_960, LSM6DSV::Odr::HZ_960);
 
-  if (imu_ok) aux_set_imu_scales(imu.accel_g_per_lsb(), imu.gyro_dps_per_lsb());
+  if (imu_ok) {
+    aux_set_imu_scales(imu.accel_g_per_lsb(), imu.gyro_dps_per_lsb());
+    aux_set_imu_valid(true);
+    scope_set_accel_scale(0.000488f);
+  } else {
+    aux_set_imu_valid(false);
+  }
   if (!imu_ok) system_status_set_fault(FaultCode::IMU_FAULT);
+  if (!fuel_ok) aux_set_batt(0, 0);
 
   if (imu_ok) {
     imu.setIntPinConfig(false, false);
@@ -95,7 +103,7 @@ static void sensors_task(void*) {
     }
   }
 
-  uint32_t last_batt_ms = 0;
+  uint32_t last_batt_ms = millis() - 1000;
   uint32_t last_imu_count = 0;
 
   const TickType_t period = pdMS_TO_TICKS(2);
@@ -112,10 +120,14 @@ static void sensors_task(void*) {
       if (imu_ok) {
         system_status_clear_fault(FaultCode::IMU_FAULT);
         aux_set_imu_scales(imu.accel_g_per_lsb(), imu.gyro_dps_per_lsb());
+        aux_set_imu_valid(true);
+        scope_set_accel_scale(0.000488f);
         imu.setIntPinConfig(false, false);
         imu.routeDrdyToInt1(true, true);
         pinMode(PIN_IMU_INT1, INPUT);
         attachInterrupt(digitalPinToInterrupt(PIN_IMU_INT1), imu_int1_isr, RISING);
+      } else {
+        aux_set_imu_valid(false);
       }
       if (rtc_ok) {
         system_status_clear_warning(WarningCode::RTC_FAULT);
@@ -141,6 +153,8 @@ static void sensors_task(void*) {
         aux_set_rtc(0, false);
         system_status_set_warning(WarningCode::RTC_FAULT);
       }
+      if (!fuel_ok) aux_set_batt(0, 0);
+      last_batt_ms = millis() - 1000;
     }
 
     uint32_t now = millis();
@@ -151,8 +165,11 @@ static void sensors_task(void*) {
       if (imu.readRaw(s)) {
         uint64_t t_us = (uint64_t)esp_timer_get_time();
         aux_set_imu(s.ax, s.ay, s.az, s.gx, s.gy, s.gz, t_us);
+        system_status_clear_warning(WarningCode::IMU_WARN);
       } else {
         aux_bump_i2c_err();
+        aux_set_imu_valid(false);
+        system_status_set_warning(WarningCode::IMU_WARN);
       }
     }
 
@@ -193,6 +210,8 @@ static void sensors_task(void*) {
         aux_set_batt(mv, centi);
       } else {
         aux_bump_i2c_err();
+        aux_set_batt(0, 0);
+        system_status_set_warning(WarningCode::LOW_BATT);
       }
     }
 

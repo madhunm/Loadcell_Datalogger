@@ -25,6 +25,8 @@ static int32_t g_tare_code = 0;
 static volatile bool s_tare_phase = false;
 static int64_t s_tare_sum = 0;
 static uint32_t s_tare_count = 0;
+static uint32_t s_last_queue_pressure_log_ms = 0;
+static uint32_t s_last_queue_drop_log_ms = 0;
 
 static int32_t s_overload_mN = std::numeric_limits<int32_t>::max();
 static int32_t s_underload_mN = std::numeric_limits<int32_t>::min();
@@ -149,6 +151,8 @@ static void adc_frame_task(void*) {
     if (frame_pipe_consume_mark_next()) fr.v1.flags |= FLG_MARK;
     uint32_t now_ms = (uint32_t)(t_first / 1000);
     if (frame_pipe_should_set_dropped(now_ms)) fr.v1.flags |= FLG_DROPPED_FRAME;
+    if (frame_pipe_should_set_sd_warn(now_ms)) fr.v1.flags |= FLG_SD_WARN;
+    if (!snap.imu_valid) { fr.v1.flags |= FLG_IMU_FAULT; system_status_set_warning(WarningCode::IMU_WARN); } else { system_status_clear_warning(WarningCode::IMU_WARN); }
     if (fr.v1.force_peak_mN > s_overload_mN) { fr.v1.flags |= FLG_OVERLOAD; system_status_set_warning(WarningCode::OVERLOAD); } else { system_status_clear_warning(WarningCode::OVERLOAD); }
     if (fr.v1.force_mean_mN < s_underload_mN) { fr.v1.flags |= FLG_UNDERLOAD; system_status_set_warning(WarningCode::UNDERLOAD); } else { system_status_clear_warning(WarningCode::UNDERLOAD); }
     if (fr.v1.force_min_mN < -s_compression_mN) { fr.v1.flags |= FLG_COMPRESSION; system_status_set_warning(WarningCode::COMPRESSION); } else { system_status_clear_warning(WarningCode::COMPRESSION); }
@@ -159,13 +163,31 @@ static void adc_frame_task(void*) {
     fr.imu_sample_t_us = snap.imu_sample_t_us;
 
     if (g_frame_q) {
-      if (xQueueSend(g_frame_q, &fr, 0) != pdTRUE)
+      UBaseType_t queued = uxQueueMessagesWaiting(g_frame_q);
+      frame_pipe_note_queue_depth(now_ms, queued);
+      if (queued >= FRAME_QUEUE_PRESSURE_WARN && (now_ms - s_last_queue_pressure_log_ms) >= 1000) {
+        s_last_queue_pressure_log_ms = now_ms;
+        Serial.printf("#WARN: frame queue pressure depth=%u max=%u drops=%lu\n",
+                      (unsigned)queued,
+                      (unsigned)frame_pipe_get_max_queue_depth(),
+                      (unsigned long)frame_pipe_get_drop_count());
+      }
+      if (xQueueSend(g_frame_q, &fr, 0) != pdTRUE) {
         frame_pipe_notify_drop(now_ms);
+        if ((now_ms - s_last_queue_drop_log_ms) >= 1000) {
+          s_last_queue_drop_log_ms = now_ms;
+          Serial.printf("#ERR: frame queue full drops=%lu max=%u\n",
+                        (unsigned long)frame_pipe_get_drop_count(),
+                        (unsigned)frame_pipe_get_max_queue_depth());
+        }
+      } else {
+        frame_pipe_note_queue_depth(now_ms, uxQueueMessagesWaiting(g_frame_q));
+      }
     }
   }
 }
 
 void start_adc_frames() {
-  g_frame_q = xQueueCreate(600, sizeof(PdlFrameV2));
+  g_frame_q = xQueueCreate(FRAME_QUEUE_DEPTH, sizeof(PdlFrameV2));
   xTaskCreatePinnedToCore(adc_frame_task, "adc_frame", 6144, nullptr, configMAX_PRIORITIES-2, nullptr, 1);
 }

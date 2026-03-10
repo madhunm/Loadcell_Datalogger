@@ -27,7 +27,7 @@ static volatile bool g_session_write_failed = false;
 static char g_current_tmp_path[64] = "";
 static char g_last_bin_path[64] = "";
 
-static constexpr size_t FRAME_BUF_COUNT = 256;
+static constexpr size_t FRAME_BUF_COUNT = 384;
 static constexpr size_t FRAME_BUF_BYTES = FRAME_BUF_COUNT * sizeof(PdlFrameV2);
 static constexpr size_t FLUSH_INTERVAL_BYTES = 256 * 1024;
 static constexpr const char* RUN_NUM_PATH = "/PDL_RUN.NUM";
@@ -68,9 +68,14 @@ static uint32_t next_run_number() {
     }
     f.flush();
     f.close();
-    if (written == 4 && !SD_MMC.rename(RUN_NUM_TMP_PATH, RUN_NUM_PATH)) {
-      Serial.println("#ERR: run number file rename failed");
-      system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    if (written == 4) {
+      if (SD_MMC.exists(RUN_NUM_PATH) && !SD_MMC.remove(RUN_NUM_PATH)) {
+        Serial.println("#ERR: run number file replace failed");
+        system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+      } else if (!SD_MMC.rename(RUN_NUM_TMP_PATH, RUN_NUM_PATH)) {
+        Serial.println("#ERR: run number file rename failed");
+        system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+      }
     }
   }
   return n;
@@ -349,6 +354,7 @@ static void logger_task(void*) {
     }
 
     if (g_drain_requested && g_file) {
+      Serial.println("#LOGSTOP: drain/close in progress");
       bool drain_ok = true;
       while (g_frame_q && xQueueReceive(g_frame_q, &fr, 0) == pdTRUE) {
         memcpy(frame_buf + frame_buf_n * sizeof(PdlFrameV2), &fr, sizeof(fr));
