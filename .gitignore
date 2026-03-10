@@ -1,2 +1,13 @@
 .pio
 .vscode/*
+
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.BIN
+*.CSV
+*.TMP
+scope_capture.csv
+tools/host/*.csv
+.DS_Store

@@ -1,203 +1,40 @@
-/**
- * @file max17048.h
- * @brief MAX17048 Fuel Gauge Driver
- * 
- * Features:
- * - I2C communication at 400kHz (address 0x36)
- * - Battery voltage measurement
- * - State of charge (SOC) percentage
- * - Charge/discharge rate monitoring
- * - Low battery alert capability
- */
-
-#ifndef MAX17048_H
-#define MAX17048_H
-
+#pragma once
 #include <Arduino.h>
+#include <Wire.h>
 
-namespace MAX17048 {
+class MAX17048 {
+public:
+  explicit MAX17048(uint8_t i2c_addr = 0x36) : _addr(i2c_addr) {}
 
-// ============================================================================
-// Device Constants
-// ============================================================================
+  bool begin(TwoWire& wire = Wire);
 
-constexpr uint8_t I2C_ADDRESS = 0x36;
+  // Reads battery voltage in millivolts (rounded).
+  bool readVoltage_mV(uint16_t& mv);
 
-// ============================================================================
-// Register Definitions
-// ============================================================================
+  // Reads SOC in centi-percent (e.g., 7543 = 75.43%).
+  bool readSOC_centiPercent(uint16_t& soc_centi);
 
-namespace Reg {
-    constexpr uint8_t VCELL    = 0x02;  // Battery voltage (78.125µV/bit)
-    constexpr uint8_t SOC      = 0x04;  // State of charge (1/256% per bit)
-    constexpr uint8_t MODE     = 0x06;  // Operating mode
-    constexpr uint8_t VERSION  = 0x08;  // IC version
-    constexpr uint8_t HIBRT    = 0x0A;  // Hibernate threshold
-    constexpr uint8_t CONFIG   = 0x0C;  // Configuration
-    constexpr uint8_t VALRT    = 0x14;  // Voltage alert thresholds
-    constexpr uint8_t CRATE    = 0x16;  // Charge/discharge rate (%/hr)
-    constexpr uint8_t VRESET   = 0x18;  // Voltage reset threshold
-    constexpr uint8_t STATUS   = 0x1A;  // Alert status
-    constexpr uint8_t CMD      = 0xFE;  // Command register
-}
+  // Optional: charge/discharge rate in centi-%/hr (signed).
+  bool readCRate_centiPercentPerHour(int16_t& crate_centi);
 
-// ============================================================================
-// Status Register Bits (address 0x1A)
-// ============================================================================
+  // Triggers a Quick-Start via MODE register (use cautiously).
+  bool quickStart();
 
-namespace StatusBits {
-    constexpr uint16_t RI    = 0x0100;  // Reset indicator (bit 8, in MSB)
-    constexpr uint16_t VH    = 0x0200;  // Voltage high alert
-    constexpr uint16_t VL    = 0x0400;  // Voltage low alert
-    constexpr uint16_t VR    = 0x0800;  // Voltage reset alert
-    constexpr uint16_t HD    = 0x1000;  // SOC 1% change alert
-    constexpr uint16_t SC    = 0x2000;  // SOC change alert
-    constexpr uint16_t ENVR  = 0x4000;  // Enable voltage reset alert
-    
-    // Mask for all clearable alert bits
-    constexpr uint16_t ALERT_MASK = VH | VL | VR | HD | SC;
-}
+  bool readVersion(uint16_t& version);
 
-// ============================================================================
-// CONFIG Register Bits (address 0x0C)
-// ============================================================================
+private:
+  TwoWire* _wire = nullptr;
+  uint8_t _addr;
 
-namespace ConfigBits {
-    constexpr uint16_t SLEEP       = 0x0080;  // Sleep mode enable (bit 7 of LSB)
-    constexpr uint16_t ALSC        = 0x0040;  // Alert on SOC change
-    constexpr uint16_t ALRT        = 0x0020;  // Alert status (read-only)
-    constexpr uint16_t ATHD_MASK   = 0x001F;  // Alert threshold mask (bits 4:0)
-}
+  static constexpr uint8_t REG_VCELL   = 0x02;
+  static constexpr uint8_t REG_SOC     = 0x04;
+  static constexpr uint8_t REG_MODE    = 0x06;
+  static constexpr uint8_t REG_VERSION = 0x08;
+  static constexpr uint8_t REG_CRATE   = 0x16;
 
-// ============================================================================
-// MODE Register Commands (address 0x06)
-// ============================================================================
+  // MODE bits (from datasheet register format): bit14 QuickStart, bit13 EnSleep, bit12 HibStat(ro)
+  static constexpr uint16_t MODE_QUICKSTART = (1u << 14);
 
-namespace ModeCmd {
-    constexpr uint16_t QUICK_START = 0x4000;  // Trigger quick-start algorithm
-    constexpr uint16_t ENSLEEP     = 0x2000;  // Enable sleep mode
-}
-
-// ============================================================================
-// Data Structures
-// ============================================================================
-
-struct BatteryData {
-    float voltage;          // Battery voltage in volts
-    float socPercent;       // State of charge (0-100%)
-    float chargeRate;       // Charge rate in %/hour (negative = discharging)
-    bool alertActive;       // True if any alert is active
-    uint8_t statusFlags;    // Raw status register
+  bool readWordBE(uint8_t reg, uint16_t& out);   // MSB @ reg, LSB @ reg+1
+  bool writeWordBE(uint8_t reg, uint16_t value); // MSB first
 };
-
-// ============================================================================
-// Public API
-// ============================================================================
-
-/**
- * @brief Initialize the MAX17048 driver
- * @return true if device found and initialized
- * @note Wire must be initialized before calling this
- */
-bool init();
-
-/**
- * @brief Check if MAX17048 is present on I2C bus
- * @return true if device responds
- */
-bool isPresent();
-
-/**
- * @brief Get the IC version
- * @return Version number (production = 0x0011 or 0x0012)
- */
-uint16_t getVersion();
-
-/**
- * @brief Read battery voltage
- * @return Voltage in volts (e.g., 3.85)
- */
-float getVoltage();
-
-/**
- * @brief Read state of charge
- * @return SOC percentage (0-100%)
- */
-float getSOC();
-
-/**
- * @brief Read charge/discharge rate
- * @return Rate in %/hour (negative = discharging)
- */
-float getChargeRate();
-
-/**
- * @brief Read all battery data at once
- * @param data Pointer to BatteryData struct to fill
- * @return true on success
- */
-bool getBatteryData(BatteryData* data);
-
-/**
- * @brief Get raw status register
- * @return Status byte
- */
-uint8_t getStatus();
-
-/**
- * @brief Clear status alerts
- */
-void clearAlerts();
-
-/**
- * @brief Force a quick-start (recalibrate SOC)
- */
-void quickStart();
-
-/**
- * @brief Put device into sleep mode
- */
-void sleep();
-
-/**
- * @brief Wake device from sleep
- */
-void wake();
-
-/**
- * @brief Set voltage alert thresholds
- * @param minV Minimum voltage (triggers alert below this)
- * @param maxV Maximum voltage (triggers alert above this)
- */
-void setVoltageAlert(float minV, float maxV);
-
-/**
- * @brief Set low SOC alert threshold
- * @param percent SOC percentage to trigger alert (1-32%)
- */
-void setSOCAlert(uint8_t percent);
-
-// ============================================================================
-// Low-level Register Access
-// ============================================================================
-
-/**
- * @brief Read a 16-bit register
- * @param reg Register address
- * @param value Pointer to store result
- * @return true on success
- */
-bool readRegister(uint8_t reg, uint16_t* value);
-
-/**
- * @brief Write a 16-bit register
- * @param reg Register address
- * @param value Value to write
- * @return true on success
- */
-bool writeRegister(uint8_t reg, uint16_t value);
-
-} // namespace MAX17048
-
-#endif // MAX17048_H
-
