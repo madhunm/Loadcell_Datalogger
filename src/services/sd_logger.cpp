@@ -28,6 +28,7 @@ static volatile bool g_session_write_failed = false;
 static volatile bool g_session_opening = false;
 static char g_current_tmp_path[64] = "";
 static char g_last_bin_path[64] = "";
+static char g_pending_auto_export_path[64] = "";
 static portMUX_TYPE g_logger_mux = portMUX_INITIALIZER_UNLOCKED;
 static void clear_session_opening() {
   portENTER_CRITICAL(&g_logger_mux);
@@ -47,6 +48,7 @@ static constexpr size_t LATEST_BIN_PATH_MAX = 63;
 static bool is_candidate_bin_path(const char* path);
 static bool read_valid_pdl_header(File& f, PdlHeaderV1* hdr);
 static bool validate_bin_path(const char* path);
+static bool export_bin_to_csv_impl(const char* bin_path, bool set_fault);
 
 static bool write_latest_bin_path(const char* path) {
   if (!path || path[0] == '\0') return false;
@@ -512,6 +514,7 @@ bool logger_start_session(const PdlHeaderV1& hdr, bool rtc_valid, uint32_t rtc_e
   g_drain_requested = false;
   g_session_write_failed = false;
   g_session_opening = false;
+  g_pending_auto_export_path[0] = '\0';
   portEXIT_CRITICAL(&g_logger_mux);
   Serial.print("#LOGFILE: ");
   Serial.println(g_current_tmp_path);
@@ -539,6 +542,19 @@ bool logger_get_last_bin_path(char* buf, size_t len) {
   return resolve_last_bin_path(buf, len);
 }
 
+bool logger_take_pending_auto_export_path(char* buf, size_t len) {
+  if (!buf || len == 0) return false;
+  portENTER_CRITICAL(&g_logger_mux);
+  const bool have_pending = g_pending_auto_export_path[0] != '\0';
+  if (have_pending) {
+    strncpy(buf, g_pending_auto_export_path, len - 1);
+    buf[len - 1] = '\0';
+    g_pending_auto_export_path[0] = '\0';
+  }
+  portEXIT_CRITICAL(&g_logger_mux);
+  return have_pending;
+}
+
 static void do_rename_tmp_to_bin() {
   size_t l = strlen(g_current_tmp_path);
   if (l < 5) return;
@@ -561,8 +577,12 @@ static void do_rename_tmp_to_bin() {
     return;
   }
   if (SD_MMC.rename(g_current_tmp_path, bin_path)) {
+    portENTER_CRITICAL(&g_logger_mux);
     strncpy(g_last_bin_path, bin_path, sizeof(g_last_bin_path) - 1);
     g_last_bin_path[sizeof(g_last_bin_path)-1] = '\0';
+    strncpy(g_pending_auto_export_path, bin_path, sizeof(g_pending_auto_export_path) - 1);
+    g_pending_auto_export_path[sizeof(g_pending_auto_export_path) - 1] = '\0';
+    portEXIT_CRITICAL(&g_logger_mux);
     write_latest_bin_path(bin_path);
     Serial.print("#LOGSAVED: ");
     Serial.println(bin_path);
@@ -709,14 +729,11 @@ void start_logger_task() {
   xTaskCreatePinnedToCore(logger_task, "sd_logger", 6144, nullptr, configMAX_PRIORITIES - 4, nullptr, 0);
 }
 
-bool logger_export_latest_to_csv() {
-  if (logger_is_busy()) {
-    Serial.println("#ERR: logger busy (finalizing previous session)");
+static bool export_bin_to_csv_impl(const char* bin_path, bool set_fault) {
+  if (!validate_bin_path(bin_path)) {
+    if (set_fault) system_status_set_fault(FaultCode::SD_WRITE_FAIL);
     return false;
   }
-  char bin_path[64];
-  if (!resolve_last_bin_path(bin_path, sizeof(bin_path))) return false;
-
   char csv_path[64];
   strncpy(csv_path, bin_path, sizeof(csv_path) - 1);
   csv_path[sizeof(csv_path) - 1] = '\0';
@@ -736,7 +753,7 @@ bool logger_export_latest_to_csv() {
     if (csv) csv.close();
     if (bin) bin.close();
     if (csv_created) SD_MMC.remove(csv_path);
-    system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    if (set_fault) system_status_set_fault(FaultCode::SD_WRITE_FAIL);
     return false;
   };
 
@@ -805,4 +822,18 @@ bool logger_export_latest_to_csv() {
   Serial.print("#EXPORT: ");
   Serial.println(csv_path);
   return true;
+}
+
+bool logger_export_bin_to_csv(const char* bin_path) {
+  return export_bin_to_csv_impl(bin_path, false);
+}
+
+bool logger_export_latest_to_csv() {
+  if (logger_is_busy()) {
+    Serial.println("#ERR: logger busy (finalizing previous session)");
+    return false;
+  }
+  char bin_path[64];
+  if (!resolve_last_bin_path(bin_path, sizeof(bin_path))) return false;
+  return export_bin_to_csv_impl(bin_path, true);
 }

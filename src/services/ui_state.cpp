@@ -119,6 +119,14 @@ void ui_tick(uint32_t now_ms) {
   } else {
     s_warning_blink_until_ms = 0;
     if (s_ui_state == UiState::FINALIZING && !logger_is_busy()) {
+      char bin_path[64];
+      if (logger_take_pending_auto_export_path(bin_path, sizeof(bin_path))) {
+        s_ui_state = UiState::EXPORTING;
+        led_set_state(UiState::EXPORTING);
+        if (!logger_export_bin_to_csv(bin_path)) {
+          s_warning_blink_until_ms = now_ms + 800;
+        }
+      }
       s_ui_state = UiState::STOPPED;
       led_set_state(UiState::STOPPED);
     }

@@ -15,7 +15,9 @@ bool logger_can_start();
 
 bool logger_has_last_bin();
 bool logger_get_last_bin_path(char* buf, size_t len);
+bool logger_take_pending_auto_export_path(char* buf, size_t len);
 
+bool logger_export_bin_to_csv(const char* bin_path);
 bool logger_export_latest_to_csv();
 
 PdlHeaderV1 logger_make_default_header();
