@@ -47,7 +47,11 @@ static uint32_t next_run_number() {
   f = SD_MMC.open("/PDL_RUN.NUM", FILE_WRITE);
   if (f) {
     uint8_t b[4] = { (uint8_t)(n & 0xFF), (uint8_t)((n >> 8) & 0xFF), (uint8_t)((n >> 16) & 0xFF), (uint8_t)((n >> 24) & 0xFF) };
-    f.write(b, 4);
+    size_t written = f.write(b, 4);
+    if (written != 4) {
+      Serial.println("#ERR: run number file write failed");
+      system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    }
     f.close();
   }
   return n;
@@ -144,16 +148,14 @@ bool logger_start_session(const PdlHeaderV1& hdr, bool rtc_valid, uint32_t rtc_e
   if (g_logging) return false;
 
   make_tmp_filename(rtc_valid, rtc_epoch, g_current_tmp_path, sizeof(g_current_tmp_path));
-  if (rtc_valid && rtc_epoch > 0) {
-    for (int i = 1; i < 100 && SD_MMC.exists(g_current_tmp_path); i++) {
-      size_t l = strlen(g_current_tmp_path);
-      if (l >= 4 && strcmp(g_current_tmp_path + l - 4, ".TMP") == 0 &&
-          (size_t)(l + 3) < sizeof(g_current_tmp_path)) {
-        g_current_tmp_path[l - 4] = '\0';
-        snprintf(g_current_tmp_path + l - 4, sizeof(g_current_tmp_path) - (l - 4), "_%02d.TMP", i);
-      } else {
-        break;
-      }
+  for (int i = 1; i < 100 && SD_MMC.exists(g_current_tmp_path); i++) {
+    size_t l = strlen(g_current_tmp_path);
+    if (l >= 4 && strcmp(g_current_tmp_path + l - 4, ".TMP") == 0 &&
+        (size_t)(l + 3) < sizeof(g_current_tmp_path)) {
+      g_current_tmp_path[l - 4] = '\0';
+      snprintf(g_current_tmp_path + l - 4, sizeof(g_current_tmp_path) - (l - 4), "_%02d.TMP", i);
+    } else {
+      break;
     }
   }
   g_file = SD_MMC.open(g_current_tmp_path, FILE_WRITE);
