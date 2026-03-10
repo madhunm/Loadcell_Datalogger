@@ -7,6 +7,7 @@
 #include <SD_MMC.h>
 #include <cstddef>
 #include <cstring>
+#include "freertos/portmacro.h"
 
 #include "services/frame_pipe.h"
 #include "services/scope_stream.h"
@@ -24,16 +25,292 @@ static File g_file;
 static volatile bool g_logging = false;
 static volatile bool g_drain_requested = false;
 static volatile bool g_session_write_failed = false;
+static volatile bool g_session_opening = false;
 static char g_current_tmp_path[64] = "";
 static char g_last_bin_path[64] = "";
+static char g_pending_auto_export_path[64] = "";
+static portMUX_TYPE g_logger_mux = portMUX_INITIALIZER_UNLOCKED;
+static void clear_session_opening() {
+  portENTER_CRITICAL(&g_logger_mux);
+  g_session_opening = false;
+  portEXIT_CRITICAL(&g_logger_mux);
+}
 
-static constexpr size_t FRAME_BUF_COUNT = 256;
+static constexpr size_t FRAME_BUF_COUNT = 384;
 static constexpr size_t FRAME_BUF_BYTES = FRAME_BUF_COUNT * sizeof(PdlFrameV2);
 static constexpr size_t FLUSH_INTERVAL_BYTES = 256 * 1024;
+static constexpr const char* RUN_NUM_PATH = "/PDL_RUN.NUM";
+static constexpr const char* RUN_NUM_TMP_PATH = "/PDL_RUN.NEW";
+static constexpr const char* LATEST_BIN_PATH = "/PDL_LATEST.TXT";
+static constexpr const char* LATEST_BIN_TMP_PATH = "/PDL_LATEST.NEW";
+static constexpr size_t LATEST_BIN_PATH_MAX = 63;
+
+static bool is_candidate_bin_path(const char* path);
+static bool read_valid_pdl_header(File& f, PdlHeaderV1* hdr);
+static bool validate_bin_path(const char* path);
+static bool export_bin_to_csv_impl(const char* bin_path, bool set_fault);
+
+static bool write_latest_bin_path(const char* path) {
+  if (!path || path[0] == '\0') return false;
+  size_t len = strnlen(path, LATEST_BIN_PATH_MAX + 1);
+  if (len == 0 || len > LATEST_BIN_PATH_MAX) return false;
+  if (SD_MMC.exists(LATEST_BIN_TMP_PATH) && !SD_MMC.remove(LATEST_BIN_TMP_PATH)) return false;
+  File f = SD_MMC.open(LATEST_BIN_TMP_PATH, FILE_WRITE);
+  if (!f) return false;
+  size_t n = f.write((const uint8_t*)path, len + 1);
+  f.flush();
+  f.close();
+  if (n != len + 1) {
+    SD_MMC.remove(LATEST_BIN_TMP_PATH);
+    return false;
+  }
+  if (SD_MMC.exists(LATEST_BIN_PATH) && !SD_MMC.remove(LATEST_BIN_PATH)) {
+    SD_MMC.remove(LATEST_BIN_TMP_PATH);
+    return false;
+  }
+  if (!SD_MMC.rename(LATEST_BIN_TMP_PATH, LATEST_BIN_PATH)) {
+    SD_MMC.remove(LATEST_BIN_TMP_PATH);
+    return false;
+  }
+  return true;
+}
+
+static bool read_latest_bin_path(char* out, size_t out_len) {
+  if (!out || out_len == 0) return false;
+  out[0] = '\0';
+  if (!SD_MMC.exists(LATEST_BIN_PATH)) return false;
+  File f = SD_MMC.open(LATEST_BIN_PATH, FILE_READ);
+  if (!f) return false;
+  size_t n = f.read((uint8_t*)out, out_len - 1);
+  f.close();
+  if (n == 0 || n >= out_len) return false;
+  out[n] = '\0';
+  const void* nul = memchr(out, '\0', n);
+  if (!nul || ((const char*)nul - out) != (ptrdiff_t)(n - 1)) return false;
+  return validate_bin_path(out);
+}
+
+static bool read_run_counter_file(const char* path, uint32_t* value) {
+  if (!path || !value) return false;
+  File f = SD_MMC.open(path, FILE_READ);
+  if (!f) return false;
+  uint8_t b[4];
+  const bool ok = f.read(b, sizeof(b)) == sizeof(b);
+  f.close();
+  if (!ok) return false;
+  *value = (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+  return true;
+}
+
+static bool recover_run_number_file() {
+  if (!SD_MMC.exists(RUN_NUM_TMP_PATH)) return true;
+
+  uint32_t tmp_value = 0;
+  if (!read_run_counter_file(RUN_NUM_TMP_PATH, &tmp_value)) {
+    Serial.println("#WARN: removing incomplete PDL_RUN.NEW");
+    return !SD_MMC.exists(RUN_NUM_TMP_PATH) || SD_MMC.remove(RUN_NUM_TMP_PATH);
+  }
+
+  const bool have_num = SD_MMC.exists(RUN_NUM_PATH);
+  uint32_t num_value = 0;
+  const bool valid_num = have_num && read_run_counter_file(RUN_NUM_PATH, &num_value);
+
+  if (!have_num || !valid_num) {
+    if (have_num && !SD_MMC.remove(RUN_NUM_PATH)) {
+      Serial.println("#ERR: run counter recovery replace failed");
+      return false;
+    }
+    if (SD_MMC.rename(RUN_NUM_TMP_PATH, RUN_NUM_PATH)) {
+      Serial.println("#INFO: recovered run counter from PDL_RUN.NEW");
+      return true;
+    }
+    Serial.println("#ERR: run counter recovery failed");
+    return false;
+  }
+
+  if (tmp_value > num_value) {
+    if (!SD_MMC.remove(RUN_NUM_PATH)) {
+      Serial.println("#ERR: run counter recovery replace failed");
+      return false;
+    }
+    if (SD_MMC.rename(RUN_NUM_TMP_PATH, RUN_NUM_PATH)) {
+      Serial.println("#INFO: recovered newer run counter from PDL_RUN.NEW");
+      return true;
+    }
+    Serial.println("#ERR: run counter recovery failed");
+    return false;
+  }
+
+  return !SD_MMC.exists(RUN_NUM_TMP_PATH) || SD_MMC.remove(RUN_NUM_TMP_PATH);
+}
+
+static void mark_sd_failure_and_finalize() {
+  portENTER_CRITICAL(&g_logger_mux);
+  g_logging = false;
+  g_session_write_failed = true;
+  g_drain_requested = true;
+  portEXIT_CRITICAL(&g_logger_mux);
+}
+
+static bool is_candidate_bin_path(const char* path) {
+  if (!path) return false;
+  const char* name = strrchr(path, '/');
+  name = name ? name + 1 : path;
+  if (strncmp(name, "PDL_", 4) != 0) return false;
+  const size_t len = strlen(name);
+  return len > 4 && strcmp(name + len - 4, ".BIN") == 0;
+}
+
+static bool validate_bin_path(const char* path) {
+  if (!path || path[0] == '\0') return false;
+  if (!is_candidate_bin_path(path)) return false;
+  if (!SD_MMC.exists(path)) return false;
+  File f = SD_MMC.open(path, FILE_READ);
+  if (!f) return false;
+  const bool size_ok = f.size() >= sizeof(PdlHeaderV1);
+  PdlHeaderV1 hdr{};
+  const bool hdr_ok = size_ok && read_valid_pdl_header(f, &hdr);
+  f.close();
+  return size_ok && hdr_ok;
+}
+
+static bool read_valid_pdl_header(File& f, PdlHeaderV1* hdr) {
+  if (!hdr) return false;
+  return f.read((uint8_t*)hdr, sizeof(*hdr)) == sizeof(*hdr) &&
+         hdr->magic == PDL_MAGIC &&
+         hdr->header_ver == 1 &&
+         hdr->header_size == sizeof(PdlHeaderV1);
+}
+
+static bool validate_export_header(const PdlHeaderV1& hdr, uint16_t* frame_ver, size_t* frame_size) {
+  if (hdr.magic != PDL_MAGIC ||
+      hdr.header_ver != 1 ||
+      hdr.header_size != sizeof(PdlHeaderV1) ||
+      !frame_ver || !frame_size) {
+    return false;
+  }
+  if (hdr.frame_ver == 1 && hdr.frame_size == sizeof(PdlFrameV1)) {
+    *frame_ver = hdr.frame_ver;
+    *frame_size = sizeof(PdlFrameV1);
+    return true;
+  }
+  if (hdr.frame_ver == 2 && hdr.frame_size == sizeof(PdlFrameV2)) {
+    *frame_ver = hdr.frame_ver;
+    *frame_size = sizeof(PdlFrameV2);
+    return true;
+  }
+  return false;
+}
+
+static bool read_bin_header_times(const char* path, uint32_t* rtc_epoch, uint64_t* mono_us) {
+  if (!path || !rtc_epoch || !mono_us) return false;
+  File f = SD_MMC.open(path, FILE_READ);
+  if (!f) return false;
+  PdlHeaderV1 hdr{};
+  const bool ok = read_valid_pdl_header(f, &hdr);
+  f.close();
+  if (!ok) return false;
+  *rtc_epoch = hdr.start_rtc_epoch;
+  *mono_us = hdr.start_mono_us;
+  return true;
+}
+
+static bool find_latest_bin_on_disk(char* out, size_t out_len) {
+  if (!out || out_len == 0) return false;
+  out[0] = '\0';
+
+  File root = SD_MMC.open("/");
+  if (!root) return false;
+
+  char best_lex_path[64] = "";
+  char best_rtc_path[64] = "";
+  char best_nonrtc_path[64] = "";
+  uint32_t best_rtc_epoch = 0;
+  bool have_rtc = false;
+  bool have_nonrtc = false;
+  File entry = root.openNextFile();
+  while (entry) {
+    if (!entry.isDirectory()) {
+      const char* path = entry.name();
+      if (is_candidate_bin_path(path)) {
+        if (best_lex_path[0] == '\0' || strcmp(path, best_lex_path) > 0) {
+          strncpy(best_lex_path, path, sizeof(best_lex_path) - 1);
+          best_lex_path[sizeof(best_lex_path) - 1] = '\0';
+        }
+        uint32_t rtc_epoch = 0;
+        uint64_t mono_us = 0;
+        if (read_bin_header_times(path, &rtc_epoch, &mono_us)) {
+          if (rtc_epoch > 0) {
+            if (!have_rtc || rtc_epoch > best_rtc_epoch) {
+              best_rtc_epoch = rtc_epoch;
+              strncpy(best_rtc_path, path, sizeof(best_rtc_path) - 1);
+              best_rtc_path[sizeof(best_rtc_path) - 1] = '\0';
+              have_rtc = true;
+            }
+          } else {
+            if (!have_nonrtc || strcmp(path, best_nonrtc_path) > 0) {
+              strncpy(best_nonrtc_path, path, sizeof(best_nonrtc_path) - 1);
+              best_nonrtc_path[sizeof(best_nonrtc_path) - 1] = '\0';
+              have_nonrtc = true;
+            }
+          }
+        }
+      }
+    }
+    entry.close();
+    entry = root.openNextFile();
+  }
+  root.close();
+
+  const char* selected_path = have_rtc ? best_rtc_path : (have_nonrtc ? best_nonrtc_path : best_lex_path);
+  if (selected_path[0] == '\0') return false;
+  strncpy(out, selected_path, out_len - 1);
+  out[out_len - 1] = '\0';
+  return true;
+}
+
+static bool resolve_last_bin_path(char* out, size_t out_len) {
+  if (!out || out_len == 0) return false;
+  out[0] = '\0';
+
+  portENTER_CRITICAL(&g_logger_mux);
+  const bool have_cached = g_last_bin_path[0] != '\0';
+  if (have_cached) {
+    strncpy(out, g_last_bin_path, out_len - 1);
+    out[out_len - 1] = '\0';
+  }
+  portEXIT_CRITICAL(&g_logger_mux);
+
+  if (have_cached && validate_bin_path(out)) return true;
+  if (read_latest_bin_path(out, out_len)) {
+    portENTER_CRITICAL(&g_logger_mux);
+    strncpy(g_last_bin_path, out, sizeof(g_last_bin_path) - 1);
+    g_last_bin_path[sizeof(g_last_bin_path) - 1] = '\0';
+    portEXIT_CRITICAL(&g_logger_mux);
+    return true;
+  }
+  if (!find_latest_bin_on_disk(out, out_len)) return false;
+  if (!validate_bin_path(out)) return false;
+
+  portENTER_CRITICAL(&g_logger_mux);
+  strncpy(g_last_bin_path, out, sizeof(g_last_bin_path) - 1);
+  g_last_bin_path[sizeof(g_last_bin_path) - 1] = '\0';
+  portEXIT_CRITICAL(&g_logger_mux);
+  write_latest_bin_path(out);
+  return true;
+}
+
+static bool make_suffixed_path(const char* base_path, const char* ext, int suffix, char* out, size_t out_len) {
+  if (!base_path || !ext || !out || out_len == 0) return false;
+  const int written = (suffix <= 0)
+    ? snprintf(out, out_len, "%s%s", base_path, ext)
+    : snprintf(out, out_len, "%s_%02d%s", base_path, suffix, ext);
+  return written > 0 && (size_t)written < out_len;
+}
 
 static uint32_t next_run_number() {
   uint32_t n = 0;
-  File f = SD_MMC.open("/PDL_RUN.NUM", FILE_READ);
+  File f = SD_MMC.open(RUN_NUM_PATH, FILE_READ);
   if (f && f.available() >= 4) {
     uint8_t b[4];
     f.read(b, 4);
@@ -43,12 +320,30 @@ static uint32_t next_run_number() {
     f.close();
   }
   n++;
-  SD_MMC.remove("/PDL_RUN.NUM");
-  f = SD_MMC.open("/PDL_RUN.NUM", FILE_WRITE);
+  if (SD_MMC.exists(RUN_NUM_TMP_PATH) && !SD_MMC.remove(RUN_NUM_TMP_PATH)) {
+    Serial.println("#ERR: stale run number temp file remove failed");
+    system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    return n;
+  }
+  f = SD_MMC.open(RUN_NUM_TMP_PATH, FILE_WRITE);
   if (f) {
     uint8_t b[4] = { (uint8_t)(n & 0xFF), (uint8_t)((n >> 8) & 0xFF), (uint8_t)((n >> 16) & 0xFF), (uint8_t)((n >> 24) & 0xFF) };
-    f.write(b, 4);
+    size_t written = f.write(b, 4);
+    if (written != 4) {
+      Serial.println("#ERR: run number file write failed");
+      system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    }
+    f.flush();
     f.close();
+    if (written == 4) {
+      if (SD_MMC.exists(RUN_NUM_PATH) && !SD_MMC.remove(RUN_NUM_PATH)) {
+        Serial.println("#ERR: run number file replace failed");
+        system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+      } else if (!SD_MMC.rename(RUN_NUM_TMP_PATH, RUN_NUM_PATH)) {
+        Serial.println("#ERR: run number file rename failed");
+        system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+      }
+    }
   }
   return n;
 }
@@ -134,32 +429,68 @@ bool logger_begin() {
     system_status_set_fault(FaultCode::SD_MOUNT_FAIL);
     return false;
   }
+  if (!recover_run_number_file()) {
+    system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+  }
   system_status_clear_fault(FaultCode::SD_MOUNT_FAIL);
   return true;
 }
 
-bool logger_is_logging() { return g_logging; }
+bool logger_is_logging() {
+  portENTER_CRITICAL(&g_logger_mux);
+  const bool logging = g_logging;
+  portEXIT_CRITICAL(&g_logger_mux);
+  return logging;
+}
+
+bool logger_is_busy() {
+  portENTER_CRITICAL(&g_logger_mux);
+  const bool busy = g_logging || g_drain_requested || g_session_opening;
+  portEXIT_CRITICAL(&g_logger_mux);
+  return busy;
+}
+
+bool logger_can_start() {
+  return !logger_is_busy();
+}
 
 bool logger_start_session(const PdlHeaderV1& hdr, bool rtc_valid, uint32_t rtc_epoch) {
-  if (g_logging) return false;
+  portENTER_CRITICAL(&g_logger_mux);
+  if (g_logging || g_drain_requested || g_session_opening) {
+    portEXIT_CRITICAL(&g_logger_mux);
+    return false;
+  }
+  g_session_opening = true;
+  portEXIT_CRITICAL(&g_logger_mux);
 
+  char base_tmp_path[64];
   make_tmp_filename(rtc_valid, rtc_epoch, g_current_tmp_path, sizeof(g_current_tmp_path));
-  if (rtc_valid && rtc_epoch > 0) {
-    for (int i = 1; i < 100 && SD_MMC.exists(g_current_tmp_path); i++) {
-      size_t l = strlen(g_current_tmp_path);
-      if (l >= 4 && strcmp(g_current_tmp_path + l - 4, ".TMP") == 0 &&
-          (size_t)(l + 3) < sizeof(g_current_tmp_path)) {
-        g_current_tmp_path[l - 4] = '\0';
-        snprintf(g_current_tmp_path + l - 4, sizeof(g_current_tmp_path) - (l - 4), "_%02d.TMP", i);
-      } else {
-        break;
-      }
+  strncpy(base_tmp_path, g_current_tmp_path, sizeof(base_tmp_path) - 1);
+  base_tmp_path[sizeof(base_tmp_path) - 1] = '\0';
+  const size_t base_len = strlen(base_tmp_path);
+  if (base_len < 4 || strcmp(base_tmp_path + base_len - 4, ".TMP") != 0) {
+    clear_session_opening();
+    return false;
+  }
+  base_tmp_path[base_len - 4] = '\0';
+  for (int i = 0; i < 100; ++i) {
+    if (!make_suffixed_path(base_tmp_path, ".TMP", i, g_current_tmp_path, sizeof(g_current_tmp_path))) {
+      clear_session_opening();
+      return false;
     }
+    if (!SD_MMC.exists(g_current_tmp_path)) break;
+  }
+  if (SD_MMC.exists(g_current_tmp_path)) {
+    Serial.println("#ERR: no available TMP filename");
+    system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    clear_session_opening();
+    return false;
   }
   g_file = SD_MMC.open(g_current_tmp_path, FILE_WRITE);
   if (!g_file) {
     Serial.println("#ERR: open log file failed");
     system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    clear_session_opening();
     return false;
   }
 
@@ -173,53 +504,86 @@ bool logger_start_session(const PdlHeaderV1& hdr, bool rtc_valid, uint32_t rtc_e
     Serial.println("#ERR: header write failed");
     g_file.close();
     system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    clear_session_opening();
     return false;
   }
   g_file.flush();
+  adc_frames_on_session_start(h);
+  portENTER_CRITICAL(&g_logger_mux);
   g_logging = true;
   g_drain_requested = false;
   g_session_write_failed = false;
-  adc_frames_on_session_start(h);
+  g_session_opening = false;
+  g_pending_auto_export_path[0] = '\0';
+  portEXIT_CRITICAL(&g_logger_mux);
   Serial.print("#LOGFILE: ");
   Serial.println(g_current_tmp_path);
   return true;
 }
 
 void logger_stop_session() {
-  if (!g_logging) return;
+  portENTER_CRITICAL(&g_logger_mux);
+  if (g_session_opening || g_drain_requested || !g_logging) {
+    portEXIT_CRITICAL(&g_logger_mux);
+    return;
+  }
   g_logging = false;
   g_drain_requested = true;
+  portEXIT_CRITICAL(&g_logger_mux);
+  Serial.println("#LOGSTOP: finalizing");
 }
 
 bool logger_has_last_bin() {
-  return g_last_bin_path[0] != '\0';
+  char path[64];
+  return resolve_last_bin_path(path, sizeof(path));
 }
 
 bool logger_get_last_bin_path(char* buf, size_t len) {
-  if (g_last_bin_path[0] == '\0' || !buf || len == 0) return false;
-  strncpy(buf, g_last_bin_path, len - 1);
-  buf[len - 1] = '\0';
-  return true;
+  return resolve_last_bin_path(buf, len);
+}
+
+bool logger_take_pending_auto_export_path(char* buf, size_t len) {
+  if (!buf || len == 0) return false;
+  portENTER_CRITICAL(&g_logger_mux);
+  const bool have_pending = g_pending_auto_export_path[0] != '\0';
+  if (have_pending) {
+    strncpy(buf, g_pending_auto_export_path, len - 1);
+    buf[len - 1] = '\0';
+    g_pending_auto_export_path[0] = '\0';
+  }
+  portEXIT_CRITICAL(&g_logger_mux);
+  return have_pending;
 }
 
 static void do_rename_tmp_to_bin() {
   size_t l = strlen(g_current_tmp_path);
   if (l < 5) return;
+  char base_bin_path[64];
   char bin_path[64];
-  strncpy(bin_path, g_current_tmp_path, sizeof(bin_path) - 1);
-  bin_path[sizeof(bin_path)-1] = '\0';
-  strcpy(bin_path + l - 3, "BIN");
-  for (int i = 0; i < 100; i++) {
-    if (i > 0) {
-      bin_path[l - 4] = '\0';
-      snprintf(bin_path + l - 4, sizeof(bin_path) - (l - 4), "_%02d.BIN", i);
+  strncpy(base_bin_path, g_current_tmp_path, sizeof(base_bin_path) - 1);
+  base_bin_path[sizeof(base_bin_path)-1] = '\0';
+  base_bin_path[l - 4] = '\0';
+  for (int i = 0; i < 100; ++i) {
+    if (!make_suffixed_path(base_bin_path, ".BIN", i, bin_path, sizeof(bin_path))) {
+      Serial.println("#ERR: BIN filename generation failed");
+      system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+      return;
     }
-    if (!SD_MMC.exists(bin_path))
-      break;
+    if (!SD_MMC.exists(bin_path)) break;
+  }
+  if (SD_MMC.exists(bin_path)) {
+    Serial.println("#ERR: no available BIN filename");
+    system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    return;
   }
   if (SD_MMC.rename(g_current_tmp_path, bin_path)) {
+    portENTER_CRITICAL(&g_logger_mux);
     strncpy(g_last_bin_path, bin_path, sizeof(g_last_bin_path) - 1);
     g_last_bin_path[sizeof(g_last_bin_path)-1] = '\0';
+    strncpy(g_pending_auto_export_path, bin_path, sizeof(g_pending_auto_export_path) - 1);
+    g_pending_auto_export_path[sizeof(g_pending_auto_export_path) - 1] = '\0';
+    portEXIT_CRITICAL(&g_logger_mux);
+    write_latest_bin_path(bin_path);
     Serial.print("#LOGSAVED: ");
     Serial.println(bin_path);
     g_current_tmp_path[0] = '\0';
@@ -245,8 +609,7 @@ static void logger_task(void*) {
   while (true) {
     if (SD_CD_ENABLED && g_logging && !g_drain_requested && !sd_card_detect_present()) {
       system_status_set_fault(FaultCode::SD_WRITE_FAIL);
-      g_session_write_failed = true;
-      g_drain_requested = true;
+      mark_sd_failure_and_finalize();
     }
 
     TareResult tr;
@@ -264,8 +627,7 @@ static void logger_task(void*) {
       } else {
         Serial.println("#ERR: tare header patch failed");
         system_status_set_fault(FaultCode::SD_WRITE_FAIL);
-        g_session_write_failed = true;
-        g_drain_requested = true;
+        mark_sd_failure_and_finalize();
       }
     }
 
@@ -278,35 +640,42 @@ static void logger_task(void*) {
         memcpy(frame_buf + frame_buf_n * sizeof(PdlFrameV2), &fr, sizeof(fr));
         frame_buf_n++;
         scope_feed_frame(fr.v1);
-      } else if (g_drain_requested && g_file) {
+      } else if (g_drain_requested && g_file && !g_session_write_failed) {
         memcpy(frame_buf + frame_buf_n * sizeof(PdlFrameV2), &fr, sizeof(fr));
         frame_buf_n++;
       }
     }
 
-    if (frame_buf_n >= FRAME_BUF_COUNT && g_file) {
+    if (g_session_write_failed) {
+      frame_buf_n = 0;
+    }
+
+    if (frame_buf_n >= FRAME_BUF_COUNT && g_file && !g_session_write_failed) {
       size_t to_write = frame_buf_n * sizeof(PdlFrameV2);
       size_t n = g_file.write(frame_buf, to_write);
       if (n != to_write) {
         Serial.println("#ERR: SD write failed");
         system_status_set_fault(FaultCode::SD_WRITE_FAIL);
-        g_session_write_failed = true;
-        g_drain_requested = true;
+        mark_sd_failure_and_finalize();
       }
       bytes_since_flush += n;
       frame_buf_n = 0;
     }
 
     uint32_t now = millis();
-    if (g_file && (bytes_since_flush >= FLUSH_INTERVAL_BYTES || (now - last_flush_ms >= 1000))) {
+    if (g_file && !g_session_write_failed &&
+        (bytes_since_flush >= FLUSH_INTERVAL_BYTES || (now - last_flush_ms >= 1000))) {
       g_file.flush();
       last_flush_ms = now;
       bytes_since_flush = 0;
     }
 
     if (g_drain_requested && g_file) {
-      bool drain_ok = true;
+      Serial.println("#LOGSTOP: drain/close in progress");
+      bool drain_ok = !g_session_write_failed;
+      if (!drain_ok) frame_buf_n = 0;
       while (g_frame_q && xQueueReceive(g_frame_q, &fr, 0) == pdTRUE) {
+        if (!drain_ok) continue;
         memcpy(frame_buf + frame_buf_n * sizeof(PdlFrameV2), &fr, sizeof(fr));
         frame_buf_n++;
         if (frame_buf_n >= FRAME_BUF_COUNT) {
@@ -330,20 +699,23 @@ static void logger_task(void*) {
         }
         frame_buf_n = 0;
       }
-      g_file.flush();
+      if (!g_session_write_failed) g_file.flush();
       g_file.close();
       if (g_session_write_failed) {
-        Serial.println("#ERR: SD write failed during drain; .TMP left for recovery");
-        g_current_tmp_path[0] = '\0';
+        Serial.println("#ERR: finalize failed (TMP left for recovery)");
+        Serial.print("# recovery TMP: ");
+        Serial.println(g_current_tmp_path);
+        /* keep g_current_tmp_path so recovery context remains until next successful start */
       } else {
         do_rename_tmp_to_bin();
+        Serial.println("#LOGSTOP: complete");
       }
+      portENTER_CRITICAL(&g_logger_mux);
       g_logging = false;
       g_drain_requested = false;
-      Serial.println("#LOGSTOP");
+      portEXIT_CRITICAL(&g_logger_mux);
     }
   }
-  free(frame_buf);
 }
 
 void logger_set_tare_result(uint16_t tare_frames, int32_t tare_adc_code, uint16_t tare_duration_ms) {
@@ -357,35 +729,65 @@ void start_logger_task() {
   xTaskCreatePinnedToCore(logger_task, "sd_logger", 6144, nullptr, configMAX_PRIORITIES - 4, nullptr, 0);
 }
 
-bool logger_export_latest_to_csv() {
-  if (g_last_bin_path[0] == '\0') return false;
-  File bin = SD_MMC.open(g_last_bin_path, FILE_READ);
-  if (!bin) { system_status_set_fault(FaultCode::SD_WRITE_FAIL); return false; }
-  size_t l = strlen(g_last_bin_path);
+static bool export_bin_to_csv_impl(const char* bin_path, bool set_fault) {
+  if (!validate_bin_path(bin_path)) {
+    if (set_fault) system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    return false;
+  }
   char csv_path[64];
-  strncpy(csv_path, g_last_bin_path, sizeof(csv_path) - 1);
+  strncpy(csv_path, bin_path, sizeof(csv_path) - 1);
   csv_path[sizeof(csv_path) - 1] = '\0';
   char* last_dot = strrchr(csv_path, '.');
   if (last_dot && (size_t)(last_dot - csv_path) + 5 <= sizeof(csv_path))
     strcpy(last_dot, ".CSV");
-  else if (l + 4 < sizeof(csv_path))
+  else if (strlen(bin_path) + 4 < sizeof(csv_path))
     strcat(csv_path, ".CSV");
-  File csv = SD_MMC.open(csv_path, FILE_WRITE);
-  if (!csv) { bin.close(); system_status_set_fault(FaultCode::SD_WRITE_FAIL); return false; }
+  else
+    return false;
+
+  File bin;
+  File csv;
+  bool csv_created = false;
+  auto fail_export = [&](const char* msg) {
+    if (msg) Serial.println(msg);
+    if (csv) csv.close();
+    if (bin) bin.close();
+    if (csv_created) SD_MMC.remove(csv_path);
+    if (set_fault) system_status_set_fault(FaultCode::SD_WRITE_FAIL);
+    return false;
+  };
+
+  bin = SD_MMC.open(bin_path, FILE_READ);
+  if (!bin) return fail_export(nullptr);
+  if (SD_MMC.exists(csv_path)) {
+    if (!SD_MMC.remove(csv_path)) {
+      return fail_export("#ERR: cannot remove existing CSV for export");
+    }
+  }
+  csv = SD_MMC.open(csv_path, FILE_WRITE);
+  if (!csv) return fail_export(nullptr);
+  csv_created = true;
 
   PdlHeaderV1 hdr;
-  if (bin.read((uint8_t*)&hdr, sizeof(hdr)) != sizeof(hdr) || hdr.magic != PDL_MAGIC) {
-    bin.close(); csv.close(); system_status_set_fault(FaultCode::SD_WRITE_FAIL); return false;
+  if (!read_valid_pdl_header(bin, &hdr)) {
+    return fail_export("#ERR: invalid log header");
   }
 
-  const uint16_t frame_ver = hdr.frame_ver;
-  const size_t frame_size = hdr.frame_size;
-  const bool has_imu_ts = (frame_ver >= 2 && frame_size >= sizeof(PdlFrameV2));
+  uint16_t frame_ver = 0;
+  size_t frame_size = 0;
+  if (!validate_export_header(hdr, &frame_ver, &frame_size)) {
+    return fail_export("#ERR: unsupported log frame format");
+  }
+  const bool has_imu_ts = (frame_ver == 2);
 
   if (has_imu_ts) {
-    csv.println("sample_index,t_us,adc_mean,adc_peak,adc_min,force_mean_mN,force_peak_mN,force_min_mN,ax,ay,az,gx,gy,gz,flags,vbat_mV,soc_centiPct,imu_sample_t_us");
+    if (!csv.println("sample_index,t_us,adc_mean,adc_peak,adc_min,force_mean_mN,force_peak_mN,force_min_mN,ax,ay,az,gx,gy,gz,flags,vbat_mV,soc_centiPct,imu_sample_t_us")) {
+      return fail_export(nullptr);
+    }
   } else {
-    csv.println("sample_index,t_us,adc_mean,adc_peak,adc_min,force_mean_mN,force_peak_mN,force_min_mN,ax,ay,az,gx,gy,gz,flags,vbat_mV,soc_centiPct");
+    if (!csv.println("sample_index,t_us,adc_mean,adc_peak,adc_min,force_mean_mN,force_peak_mN,force_min_mN,ax,ay,az,gx,gy,gz,flags,vbat_mV,soc_centiPct")) {
+      return fail_export(nullptr);
+    }
   }
 
   char line[200];
@@ -400,7 +802,7 @@ bool logger_export_latest_to_csv() {
         (int)v.ax, (int)v.ay, (int)v.az, (int)v.gx, (int)v.gy, (int)v.gz,
         (unsigned)v.flags, (unsigned)v.vbat_mV, (unsigned)v.soc_centiPct,
         (unsigned long long)fr.imu_sample_t_us);
-      csv.println(line);
+      if (!csv.println(line)) return fail_export(nullptr);
     }
   } else {
     PdlFrameV1 fr;
@@ -411,7 +813,7 @@ bool logger_export_latest_to_csv() {
         (long)fr.force_mean_mN, (long)fr.force_peak_mN, (long)fr.force_min_mN,
         (int)fr.ax, (int)fr.ay, (int)fr.az, (int)fr.gx, (int)fr.gy, (int)fr.gz,
         (unsigned)fr.flags, (unsigned)fr.vbat_mV, (unsigned)fr.soc_centiPct);
-      csv.println(line);
+      if (!csv.println(line)) return fail_export(nullptr);
     }
   }
   csv.flush();
@@ -420,4 +822,18 @@ bool logger_export_latest_to_csv() {
   Serial.print("#EXPORT: ");
   Serial.println(csv_path);
   return true;
+}
+
+bool logger_export_bin_to_csv(const char* bin_path) {
+  return export_bin_to_csv_impl(bin_path, false);
+}
+
+bool logger_export_latest_to_csv() {
+  if (logger_is_busy()) {
+    Serial.println("#ERR: logger busy (finalizing previous session)");
+    return false;
+  }
+  char bin_path[64];
+  if (!resolve_last_bin_path(bin_path, sizeof(bin_path))) return false;
+  return export_bin_to_csv_impl(bin_path, true);
 }

@@ -12,6 +12,7 @@ enum class UiState : uint8_t {
   BOOT,
   IDLE_READY,
   LOGGING,
+  FINALIZING,
   STOPPED,
   EXPORTING,
   FAULT,
@@ -31,6 +32,7 @@ enum class LedWarning : uint8_t {
   RTC_INVALID,
   RTC_FAULT,   // RTC read failed
   LOW_BATT,
+  BATT_WARN,
   UNDERLOAD,
   OVERLOAD,
   COMPRESSION,

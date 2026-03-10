@@ -37,16 +37,22 @@ static void do_start_log() {
   if (logger_start_session(hdr, snap.rtc_valid, snap.rtc_epoch)) {
     s_ui_state = UiState::LOGGING;
     led_set_state(UiState::LOGGING);
+  } else if (!logger_can_start()) {
+    s_warning_blink_until_ms = millis() + 600;
   }
 }
 
 static void do_stop_log() {
   logger_stop_session();
-  s_ui_state = UiState::STOPPED;
-  led_set_state(UiState::STOPPED);
+  s_ui_state = UiState::FINALIZING;
+  led_set_state(UiState::FINALIZING);
 }
 
 static void do_export_latest() {
+  if (logger_is_busy()) {
+    s_warning_blink_until_ms = millis() + 800;
+    return;
+  }
   if (!logger_has_last_bin()) {
     s_warning_blink_until_ms = millis() + 800;
     return;
@@ -89,6 +95,8 @@ void ui_tick(uint32_t now_ms) {
         if (ev == ButtonEvent::LONG_PRESS) do_stop_log();
         else if (ev == ButtonEvent::SHORT_PRESS) frame_pipe_set_mark_next();
         break;
+      case UiState::FINALIZING:
+        break;
       case UiState::STOPPED:
         if (ev == ButtonEvent::SHORT_PRESS) do_start_log();
         else if (ev == ButtonEvent::LONG_PRESS) do_export_latest();
@@ -110,6 +118,18 @@ void ui_tick(uint32_t now_ms) {
     else led_set_custom1(0, 0, 0);
   } else {
     s_warning_blink_until_ms = 0;
+    if (s_ui_state == UiState::FINALIZING && !logger_is_busy()) {
+      char bin_path[64];
+      if (logger_take_pending_auto_export_path(bin_path, sizeof(bin_path))) {
+        s_ui_state = UiState::EXPORTING;
+        led_set_state(UiState::EXPORTING);
+        if (!logger_export_bin_to_csv(bin_path)) {
+          s_warning_blink_until_ms = now_ms + 800;
+        }
+      }
+      s_ui_state = UiState::STOPPED;
+      led_set_state(UiState::STOPPED);
+    }
     LedFault f = system_status_get_led_fault();
     LedWarning w = system_status_get_led_warning();
     if (f != LedFault::NONE) {

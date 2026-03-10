@@ -81,7 +81,7 @@ static void run_fault_pattern(uint32_t now_ms) {
     set_pixel(0,0,0);
 }
 
-static void run_warning_pattern(uint32_t now_ms, LedColor col) {
+static void run_warning_pattern(uint32_t now_ms) {
   switch (s_warning) {
     case LedWarning::RTC_INVALID: {
       uint32_t pos = (now_ms - s_phase_start_ms) % 2000;
@@ -103,6 +103,13 @@ static void run_warning_pattern(uint32_t now_ms, LedColor col) {
       uint8_t br = (uint8_t)(DEFAULT_BRIGHTNESS * (0.3f + 0.7f * (0.5f + 0.5f * sinf(t))));
       if (br < 10) br = 10;
       uint8_t r,g,b; get_color_rgb(LedColor::ORANGE, br, &r,&g,&b); set_pixel(r,g,b);
+      return;
+    }
+    case LedWarning::BATT_WARN: {
+      uint32_t pos = (now_ms - s_phase_start_ms) % 1200;
+      if (pos < 120) { uint8_t r,g,b; get_color_rgb(LedColor::ORANGE, DEFAULT_BRIGHTNESS, &r,&g,&b); set_pixel(r,g,b); }
+      else if (pos >= 240 && pos < 360) { uint8_t r,g,b; get_color_rgb(LedColor::ORANGE, DEFAULT_BRIGHTNESS, &r,&g,&b); set_pixel(r,g,b); }
+      else set_pixel(0,0,0);
       return;
     }
     case LedWarning::UNDERLOAD: {
@@ -155,6 +162,12 @@ static void run_state_pattern(uint32_t now_ms) {
       else set_pixel(0,0,0);
       return;
     }
+    case UiState::FINALIZING: {
+      uint32_t pos = (now_ms - s_phase_start_ms) % 400;
+      if (pos < 200) { uint8_t r,g,b; get_color_rgb(LedColor::YELLOW, DEFAULT_BRIGHTNESS, &r,&g,&b); set_pixel(r,g,b); }
+      else set_pixel(0,0,0);
+      return;
+    }
     case UiState::STOPPED: {
       if (s_stopped_double_done) {
         uint8_t r,g,b; get_color_rgb(LedColor::RED, DEFAULT_BRIGHTNESS, &r,&g,&b); set_pixel(r,g,b);
@@ -194,11 +207,11 @@ void led_tick(uint32_t now_ms) {
     return;
   }
   if (s_warning != LedWarning::NONE && s_state == UiState::LOGGING) {
-    run_warning_pattern(now_ms, LedColor::YELLOW);
+    run_warning_pattern(now_ms);
     return;
   }
   if (s_warning != LedWarning::NONE && s_state != UiState::LOGGING) {
-    run_warning_pattern(now_ms, LedColor::YELLOW);
+    run_warning_pattern(now_ms);
     return;
   }
   run_state_pattern(now_ms);

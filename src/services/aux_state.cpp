@@ -14,7 +14,19 @@ void aux_set_imu(int16_t ax, int16_t ay, int16_t az, int16_t gx, int16_t gy, int
   portENTER_CRITICAL(&g_aux_mux);
   g_aux.ax=ax; g_aux.ay=ay; g_aux.az=az;
   g_aux.gx=gx; g_aux.gy=gy; g_aux.gz=gz;
+  g_aux.imu_valid = true;
   g_aux.imu_sample_t_us = imu_sample_t_us;
+  portEXIT_CRITICAL(&g_aux_mux);
+}
+
+void aux_set_imu_valid(bool valid) {
+  portENTER_CRITICAL(&g_aux_mux);
+  g_aux.imu_valid = valid;
+  if (!valid) {
+    g_aux.ax = 0; g_aux.ay = 0; g_aux.az = 0;
+    g_aux.gx = 0; g_aux.gy = 0; g_aux.gz = 0;
+    g_aux.imu_sample_t_us = 0;
+  }
   portEXIT_CRITICAL(&g_aux_mux);
 }
 
@@ -22,6 +34,15 @@ void aux_set_batt(uint16_t vbat_mV, uint16_t soc_centiPct) {
   portENTER_CRITICAL(&g_aux_mux);
   g_aux.vbat_mV = vbat_mV;
   g_aux.soc_centiPct = soc_centiPct;
+  g_aux.battery_valid = true;
+  portEXIT_CRITICAL(&g_aux_mux);
+}
+
+void aux_set_batt_invalid() {
+  portENTER_CRITICAL(&g_aux_mux);
+  g_aux.vbat_mV = 0;
+  g_aux.soc_centiPct = 0;
+  g_aux.battery_valid = false;
   portEXIT_CRITICAL(&g_aux_mux);
 }
 

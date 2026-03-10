@@ -10,7 +10,7 @@ enum PdlFlags : uint16_t {
   FLG_IMU_FAULT       = 1u << 4,
   FLG_RTC_INVALID     = 1u << 5,
 
-  FLG_SD_WARN         = 1u << 6,
+  FLG_SD_WARN         = 1u << 6,  // SD/logging-path warning, including queue pressure from SD/logger lag
   FLG_SD_FAIL         = 1u << 7,
 
   FLG_I2C_RECOVERED   = 1u << 8,

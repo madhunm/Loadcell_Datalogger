@@ -50,9 +50,11 @@ Use this table to interpret the status LED. **Saturated colors only** (no dim or
 |-------|---------|---------|-------------|
 | Red | Solid | Power on / Idle. Device is ready. | Short press to start logging; long press to export latest log to CSV. |
 | Green | Heartbeat (brief flash about once per second) | Logging in progress. | Short press to mark an event; long press to stop logging. |
+| Yellow | Blink while busy | Finalizing after stop request (draining/closing the log safely). | Wait; do not remove the SD card or try to start/export yet. |
 | Green | Double-blink then off | Just stopped logging. | Wait; LED will soon go solid red (idle). |
 | Red | Solid | Idle again after double-blink. | Same as “Power on / Idle” above. |
 | Orange | Slow pulse (about 2 seconds per cycle) | Low battery warning. | Recharge soon. Logging can continue but may stop if battery fails. |
+| Orange | Double-blink | Battery telemetry unavailable (fuel-gauge communication fault). | Logging can continue, but battery readings are unavailable until recovery. |
 | Purple | Slow pulse | Export in progress (converting latest log to CSV). | Wait until LED returns to solid red. Do not remove the SD card. |
 | Red | Coded blinks (e.g., 2 or 3 blinks, pause, repeat) | Fault condition. | Short press to retry (e.g., re-check SD card, sensors). If retry fails, power off and fix the issue (e.g., insert SD card), then power on again. |
 
@@ -86,7 +88,7 @@ Use this table to interpret the status LED. **Saturated colors only** (no dim or
 ### D. Stopping logging after landing
 
 1. With the LED still in **green heartbeat**, **long press** the button.
-2. The LED will show a **green double-blink**, then go **solid red**. Logging has stopped and the file has been closed and renamed on the SD card.
+2. The LED will first blink **yellow** while the logger finalizes the file, then show a **green double-blink**, then go **solid red**. Logging has stopped and the file has been closed and renamed on the SD card.
 
 ### E. Exporting data
 
@@ -117,6 +119,7 @@ Export converts the **latest** binary log file on the SD card into a **CSV file*
 
 - If the real-time clock is set and valid at the start of a log, the file name uses date and time: **PDL_YYYYMMDD_HHMMSS** (e.g., `PDL_20250118_143022.BIN` and `PDL_20250118_143022.CSV`).
 - If the clock is not valid, the device uses a run number: **PDL_RUN####** (e.g., `PDL_RUN0001.BIN` and `PDL_RUN0001.CSV`).
+- To avoid overwriting existing logs, the device may add a suffix to either type of name when a file already exists (e.g. `PDL_20250118_143022_01.BIN` or `PDL_RUN0001_01.BIN`). If the run-number file cannot be updated (e.g. card full), the device still assigns a run-based name and uses a suffix when needed so existing files are not overwritten.
 
 The **latest** log (most recently stopped) is the one that gets exported when you long-press from idle.
 
@@ -141,6 +144,7 @@ Typical columns you will see after export (exact names may vary slightly):
 ## 6. Battery Behavior
 
 - **Orange pulse** — Low battery warning. The device is still running and can keep logging, but you should recharge as soon as possible.
+- **Orange double-blink** — Battery telemetry is temporarily unavailable because the fuel gauge is not responding. Logging can continue, but the battery fields in the log are invalid until communication recovers.
 - If the battery fails during logging, the device may stop writing and the LED may show a fault (red blink). Data already written to the SD card up to that point remains valid; the last few seconds might be missing or incomplete.
 - Recharge the unit according to your hardware instructions. Do not remove the SD card during charging if you want to avoid any risk of file system damage.
 
@@ -166,7 +170,7 @@ Typical columns you will see after export (exact names may vary slightly):
 
 1. **Insert the SD card** and ensure it is fully seated.
 2. **Power on** and wait until the LED is **solid red** (idle). If you see red blinking, resolve the fault before flight.
-3. **Perform a short test:** Short press to start (green heartbeat), wait a few seconds, long press to stop (green double-blink, then solid red).
+3. **Perform a short test:** Short press to start (green heartbeat), wait a few seconds, long press to stop (yellow finalize blink, then green double-blink, then solid red).
 4. **Confirm a file was created:** After the test, power off, remove the SD card, and check on a computer that a new .BIN (and optionally .CSV) file is present. Reinsert the card and power on for the actual flight.
 5. **Charge the battery** so the LED does not show an orange pulse at takeoff.
 
@@ -180,7 +184,7 @@ Typical columns you will see after export (exact names may vary slightly):
 |---------|----------------|--------|
 | No LED at all | No power, or unit not starting | Check battery or USB connection; try a different cable or power source. |
 | Red blinking and never solid red | SD card missing, faulty, or full; or sensor fault | Insert or replace SD card; free space if full; short press to retry; power cycle if needed. |
-| Long press from idle does not create CSV | No previous log on card, or export failed | Ensure you have stopped a log at least once (green double-blink then red). Try export again; if orange or red blink appears, check SD card and retry. |
+| Long press from idle does not create CSV | No previous log on card, or export failed | Ensure you have stopped a log at least once and waited for stop finalization to complete (yellow blink, then green double-blink, then red). Try export again; if orange or red blink appears, check SD card and retry. |
 | File missing or unreadable on PC | Card removed during write, or card corrupted | Always stop logging (long press) and wait for solid red before removing the card. Use a known-good SD card and avoid removing it during purple pulse (export). |
 
 ---
