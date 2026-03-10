@@ -41,30 +41,58 @@ static constexpr size_t FLUSH_INTERVAL_BYTES = 256 * 1024;
 static constexpr const char* RUN_NUM_PATH = "/PDL_RUN.NUM";
 static constexpr const char* RUN_NUM_TMP_PATH = "/PDL_RUN.NEW";
 
+static bool read_run_counter_file(const char* path, uint32_t* value) {
+  if (!path || !value) return false;
+  File f = SD_MMC.open(path, FILE_READ);
+  if (!f) return false;
+  uint8_t b[4];
+  const bool ok = f.read(b, sizeof(b)) == sizeof(b);
+  f.close();
+  if (!ok) return false;
+  *value = (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+  return true;
+}
+
 static bool recover_run_number_file() {
   if (!SD_MMC.exists(RUN_NUM_TMP_PATH)) return true;
 
-  File f = SD_MMC.open(RUN_NUM_TMP_PATH, FILE_READ);
-  if (!f) {
-    Serial.println("#ERR: cannot inspect PDL_RUN.NEW");
-    return false;
-  }
-  const bool valid_tmp = f.available() >= 4;
-  f.close();
-  if (!valid_tmp) {
+  uint32_t tmp_value = 0;
+  if (!read_run_counter_file(RUN_NUM_TMP_PATH, &tmp_value)) {
     Serial.println("#WARN: removing incomplete PDL_RUN.NEW");
     return !SD_MMC.exists(RUN_NUM_TMP_PATH) || SD_MMC.remove(RUN_NUM_TMP_PATH);
   }
-  if (SD_MMC.exists(RUN_NUM_PATH) && !SD_MMC.remove(RUN_NUM_PATH)) {
-    Serial.println("#ERR: run counter recovery replace failed");
+
+  const bool have_num = SD_MMC.exists(RUN_NUM_PATH);
+  uint32_t num_value = 0;
+  const bool valid_num = have_num && read_run_counter_file(RUN_NUM_PATH, &num_value);
+
+  if (!have_num || !valid_num) {
+    if (have_num && !SD_MMC.remove(RUN_NUM_PATH)) {
+      Serial.println("#ERR: run counter recovery replace failed");
+      return false;
+    }
+    if (SD_MMC.rename(RUN_NUM_TMP_PATH, RUN_NUM_PATH)) {
+      Serial.println("#INFO: recovered run counter from PDL_RUN.NEW");
+      return true;
+    }
+    Serial.println("#ERR: run counter recovery failed");
     return false;
   }
-  if (SD_MMC.rename(RUN_NUM_TMP_PATH, RUN_NUM_PATH)) {
-    Serial.println("#INFO: recovered run counter from PDL_RUN.NEW");
-    return true;
+
+  if (tmp_value > num_value) {
+    if (!SD_MMC.remove(RUN_NUM_PATH)) {
+      Serial.println("#ERR: run counter recovery replace failed");
+      return false;
+    }
+    if (SD_MMC.rename(RUN_NUM_TMP_PATH, RUN_NUM_PATH)) {
+      Serial.println("#INFO: recovered newer run counter from PDL_RUN.NEW");
+      return true;
+    }
+    Serial.println("#ERR: run counter recovery failed");
+    return false;
   }
-  Serial.println("#ERR: run counter recovery failed");
-  return false;
+
+  return !SD_MMC.exists(RUN_NUM_TMP_PATH) || SD_MMC.remove(RUN_NUM_TMP_PATH);
 }
 
 static void mark_sd_failure_and_finalize() {
@@ -84,6 +112,30 @@ static bool is_candidate_bin_path(const char* path) {
   return len > 4 && strcmp(name + len - 4, ".BIN") == 0;
 }
 
+static bool read_bin_sort_key(const char* path, bool* has_rtc, uint64_t* timestamp) {
+  if (!path || !has_rtc || !timestamp) return false;
+  File f = SD_MMC.open(path, FILE_READ);
+  if (!f) return false;
+  PdlHeaderV1 hdr{};
+  const bool ok = f.read((uint8_t*)&hdr, sizeof(hdr)) == sizeof(hdr) &&
+                  hdr.magic == PDL_MAGIC &&
+                  hdr.header_ver == 1 &&
+                  hdr.header_size == sizeof(PdlHeaderV1);
+  f.close();
+  if (!ok) return false;
+  if (hdr.start_rtc_epoch > 0) {
+    *has_rtc = true;
+    *timestamp = hdr.start_rtc_epoch;
+    return true;
+  }
+  if (hdr.start_mono_us > 0) {
+    *has_rtc = false;
+    *timestamp = hdr.start_mono_us;
+    return true;
+  }
+  return false;
+}
+
 static bool find_latest_bin_on_disk(char* out, size_t out_len) {
   if (!out || out_len == 0) return false;
   out[0] = '\0';
@@ -91,14 +143,39 @@ static bool find_latest_bin_on_disk(char* out, size_t out_len) {
   File root = SD_MMC.open("/");
   if (!root) return false;
 
-  char best_path[64] = "";
+  char best_lex_path[64] = "";
+  char best_rtc_path[64] = "";
+  char best_mono_path[64] = "";
+  uint64_t best_rtc_ts = 0;
+  uint64_t best_mono_ts = 0;
+  bool have_rtc = false;
+  bool have_mono = false;
   File entry = root.openNextFile();
   while (entry) {
     if (!entry.isDirectory()) {
       const char* path = entry.name();
-      if (is_candidate_bin_path(path) && (best_path[0] == '\0' || strcmp(path, best_path) > 0)) {
-        strncpy(best_path, path, sizeof(best_path) - 1);
-        best_path[sizeof(best_path) - 1] = '\0';
+      if (is_candidate_bin_path(path)) {
+        if (best_lex_path[0] == '\0' || strcmp(path, best_lex_path) > 0) {
+          strncpy(best_lex_path, path, sizeof(best_lex_path) - 1);
+          best_lex_path[sizeof(best_lex_path) - 1] = '\0';
+        }
+        bool has_rtc = false;
+        uint64_t timestamp = 0;
+        if (read_bin_sort_key(path, &has_rtc, &timestamp)) {
+          if (has_rtc) {
+            if (!have_rtc || timestamp > best_rtc_ts) {
+              best_rtc_ts = timestamp;
+              strncpy(best_rtc_path, path, sizeof(best_rtc_path) - 1);
+              best_rtc_path[sizeof(best_rtc_path) - 1] = '\0';
+              have_rtc = true;
+            }
+          } else if (!have_mono || timestamp > best_mono_ts) {
+            best_mono_ts = timestamp;
+            strncpy(best_mono_path, path, sizeof(best_mono_path) - 1);
+            best_mono_path[sizeof(best_mono_path) - 1] = '\0';
+            have_mono = true;
+          }
+        }
       }
     }
     entry.close();
@@ -106,8 +183,9 @@ static bool find_latest_bin_on_disk(char* out, size_t out_len) {
   }
   root.close();
 
-  if (best_path[0] == '\0') return false;
-  strncpy(out, best_path, out_len - 1);
+  const char* selected_path = have_rtc ? best_rtc_path : (have_mono ? best_mono_path : best_lex_path);
+  if (selected_path[0] == '\0') return false;
+  strncpy(out, selected_path, out_len - 1);
   out[out_len - 1] = '\0';
   return true;
 }
