@@ -40,6 +40,36 @@ static constexpr size_t FRAME_BUF_BYTES = FRAME_BUF_COUNT * sizeof(PdlFrameV2);
 static constexpr size_t FLUSH_INTERVAL_BYTES = 256 * 1024;
 static constexpr const char* RUN_NUM_PATH = "/PDL_RUN.NUM";
 static constexpr const char* RUN_NUM_TMP_PATH = "/PDL_RUN.NEW";
+static constexpr const char* LATEST_BIN_PATH = "/PDL_LATEST.TXT";
+static constexpr size_t LATEST_BIN_PATH_MAX = 63;
+
+static bool is_candidate_bin_path(const char* path);
+
+static bool write_latest_bin_path(const char* path) {
+  if (!path || path[0] == '\0') return false;
+  size_t len = strnlen(path, LATEST_BIN_PATH_MAX + 1);
+  if (len == 0 || len > LATEST_BIN_PATH_MAX) return false;
+  File f = SD_MMC.open(LATEST_BIN_PATH, FILE_WRITE);
+  if (!f) return false;
+  size_t n = f.write((const uint8_t*)path, len + 1);
+  f.flush();
+  f.close();
+  return n == len + 1;
+}
+
+static bool read_latest_bin_path(char* out, size_t out_len) {
+  if (!out || out_len == 0) return false;
+  out[0] = '\0';
+  if (!SD_MMC.exists(LATEST_BIN_PATH)) return false;
+  File f = SD_MMC.open(LATEST_BIN_PATH, FILE_READ);
+  if (!f) return false;
+  size_t n = f.read((uint8_t*)out, out_len - 1);
+  f.close();
+  if (n == 0 || n >= out_len) return false;
+  out[n] = '\0';
+  if (!is_candidate_bin_path(out) || !SD_MMC.exists(out)) return false;
+  return true;
+}
 
 static bool read_run_counter_file(const char* path, uint32_t* value) {
   if (!path || !value) return false;
@@ -164,7 +194,6 @@ static bool find_latest_bin_on_disk(char* out, size_t out_len) {
   char best_rtc_path[64] = "";
   char best_nonrtc_path[64] = "";
   uint32_t best_rtc_epoch = 0;
-  uint64_t best_nonrtc_mono = 0;
   bool have_rtc = false;
   bool have_nonrtc = false;
   File entry = root.openNextFile();
@@ -186,12 +215,12 @@ static bool find_latest_bin_on_disk(char* out, size_t out_len) {
               best_rtc_path[sizeof(best_rtc_path) - 1] = '\0';
               have_rtc = true;
             }
-          } else if (!have_nonrtc || mono_us > best_nonrtc_mono ||
-                     (mono_us == best_nonrtc_mono && strcmp(path, best_nonrtc_path) > 0)) {
-            best_nonrtc_mono = mono_us;
-            strncpy(best_nonrtc_path, path, sizeof(best_nonrtc_path) - 1);
-            best_nonrtc_path[sizeof(best_nonrtc_path) - 1] = '\0';
-            have_nonrtc = true;
+          } else {
+            if (!have_nonrtc || strcmp(path, best_nonrtc_path) > 0) {
+              strncpy(best_nonrtc_path, path, sizeof(best_nonrtc_path) - 1);
+              best_nonrtc_path[sizeof(best_nonrtc_path) - 1] = '\0';
+              have_nonrtc = true;
+            }
           }
         }
       }
@@ -210,6 +239,7 @@ static bool find_latest_bin_on_disk(char* out, size_t out_len) {
 
 static bool resolve_last_bin_path(char* out, size_t out_len) {
   if (!out || out_len == 0) return false;
+  out[0] = '\0';
 
   portENTER_CRITICAL(&g_logger_mux);
   const bool have_cached = g_last_bin_path[0] != '\0';
@@ -220,6 +250,13 @@ static bool resolve_last_bin_path(char* out, size_t out_len) {
   portEXIT_CRITICAL(&g_logger_mux);
 
   if (have_cached && SD_MMC.exists(out)) return true;
+  if (read_latest_bin_path(out, out_len)) {
+    portENTER_CRITICAL(&g_logger_mux);
+    strncpy(g_last_bin_path, out, sizeof(g_last_bin_path) - 1);
+    g_last_bin_path[sizeof(g_last_bin_path) - 1] = '\0';
+    portEXIT_CRITICAL(&g_logger_mux);
+    return true;
+  }
   if (!find_latest_bin_on_disk(out, out_len)) return false;
 
   portENTER_CRITICAL(&g_logger_mux);
@@ -494,6 +531,7 @@ static void do_rename_tmp_to_bin() {
   if (SD_MMC.rename(g_current_tmp_path, bin_path)) {
     strncpy(g_last_bin_path, bin_path, sizeof(g_last_bin_path) - 1);
     g_last_bin_path[sizeof(g_last_bin_path)-1] = '\0';
+    write_latest_bin_path(bin_path);
     Serial.print("#LOGSAVED: ");
     Serial.println(bin_path);
     g_current_tmp_path[0] = '\0';
