@@ -1,0 +1,16 @@
+---
+description: Forbid the AI agent from invoking any build or compile commands — the user builds manually in STM32CubeIDE.
+alwaysApply: true
+---
+
+# No Build Rule
+
+**NEVER** invoke a build, compile, make, or flash command. This includes but is not limited to:
+
+- `make`, `cmake`, `ninja`
+- `arm-none-eabi-gcc` or any GCC invocation
+- STM32CubeIDE headless build commands
+- Any `Debug/` or `Release/` build-system targets
+- `st-flash`, `openocd`, `STM32_Programmer_CLI`, or any programming/flashing tool
+
+When a build is needed (e.g. to verify compilation after code changes), **tell the user** so they can build manually in STM32CubeIDE. Do not attempt to build on their behalf.

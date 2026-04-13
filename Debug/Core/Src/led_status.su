@@ -1,0 +1,9 @@
+../Core/Src/led_status.c:72:13:applyPattern	32	static
+../Core/Src/led_status.c:107:13:updateLed0	40	static
+../Core/Src/led_status.c:115:13:updateLed1	80	static
+../Core/Src/led_status.c:190:6:ledStatusInit	16	static
+../Core/Src/led_status.c:207:6:ledStatusUpdate	16	static
+../Core/Src/led_status.c:219:6:ledStatusSetSys	16	static
+../Core/Src/led_status.c:224:6:ledStatusSetSub	16	static
+../Core/Src/led_status.c:230:6:ledStatusSetLogging	16	static
+../Core/Src/led_status.c:235:13:ledStatusGetDiagStr	48	static

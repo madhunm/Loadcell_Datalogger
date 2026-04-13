@@ -1,0 +1,8 @@
+../Core/Src/calibration.c:42:14:trimWhitespace	24	static
+../Core/Src/calibration.c:53:14:skipBom	16	static
+../Core/Src/calibration.c:66:12:applyKeyValue	16	static
+../Core/Src/calibration.c:90:12:parseBuffer	56	static
+../Core/Src/calibration.c:149:5:calibrationLoad	1600	static
+../Core/Src/calibration.c:192:13:calibrationGetSource	4	static
+../Core/Src/calibration.c:197:20:calibrationGet	4	static
+../Core/Src/calibration.c:202:6:calibrationSetTare	16	static

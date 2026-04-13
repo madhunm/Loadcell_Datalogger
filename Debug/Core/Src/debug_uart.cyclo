@@ -1,0 +1,5 @@
+../Core/Src/debug_uart.c:49:13:cdcEnqueue	3
+../Core/Src/debug_uart.c:61:6:cdcPoll	9
+../Core/Src/debug_uart.c:98:6:uartWrite	1
+../Core/Src/debug_uart.c:103:6:cdcWrite	1
+../Core/Src/debug_uart.c:119:5:_write	9

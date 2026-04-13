@@ -1,0 +1,894 @@
+/**
+ * @file adc_ads131m02.c
+ * @brief ADS131M02 ADC driver — blocking SPI register access and register-level DMA hot path.
+ * @details Phase 6 provides blocking register reads/writes via HAL_SPI_TransmitReceive().
+ *          Phase 7 bypasses HAL entirely for the 64 kHz DMA hot path: direct GPDMA1 +
+ *          SPI1 register writes achieve ~3 µs total ISR overhead (vs ~40 µs with HAL).
+ *
+ *          The STM32H562 Cortex-M33 has no D-cache (only ICACHE), so plain RAM DMA
+ *          buffers require no cache maintenance or special linker-section placement.
+ *
+ *          After a GPDMA NORMAL-mode transfer completes (RM0481 §14.3.13):
+ *            - CCR.EN auto-clears; other CCR/CTR bits persist
+ *            - CSAR/CDAR advance past the transferred block (must be reloaded)
+ *            - CBR1.BNDT is decremented to 0 (must be reloaded)
+ *            - TC flag is set in CSR
+ *          Minimal restart: clear flags → reload CSAR/CDAR + BNDT → set EN.
+ *
+ * @author Madhu
+ * @date   2026-04-12
+ * @see    Datasheets/ads131m02.pdf  (TI SBAS853A)
+ * @see    RM0481 §44 (SPI), §14 (GPDMA1)
+ * @see    Troubleshooting/ADS131M02_DRIVER_STATE.md
+ */
+
+#include "adc_ads131m02.h"
+#include "diag_timers.h"
+#include "ux_api.h"
+#include "debug_uart.h"
+#include "main.h"
+#include "spi.h"
+#include <stdio.h>
+#include <string.h>
+#include <limits.h>
+
+extern SPI_HandleTypeDef hspi1;
+extern DMA_HandleTypeDef handle_GPDMA1_Channel0;
+extern DMA_HandleTypeDef handle_GPDMA1_Channel1;
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  Phase 6 — Blocking register access helpers
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/** @brief Assert ADC chip-select (active low). */
+static void adsCsLow(void)
+{
+    HAL_GPIO_WritePin(ADC_CS_GPIO_Port, ADC_CS_Pin, GPIO_PIN_RESET);
+}
+
+/** @brief De-assert ADC chip-select. */
+static void adsCsHigh(void)
+{
+    HAL_GPIO_WritePin(ADC_CS_GPIO_Port, ADC_CS_Pin, GPIO_PIN_SET);
+}
+
+/**
+ * @brief  Transfer one 4-word (12-byte) SPI frame in full-duplex blocking mode.
+ * @param[in]  cmd         16-bit command, MSB-aligned into the first 24-bit word.
+ * @param[out] statusOut  If non-NULL, receives the 16-bit STATUS from DOUT word 0.
+ * @return The 16-bit value from DOUT word 0 (response to the PREVIOUS command,
+ *         per the ADS131M02 pipelined SPI protocol).
+ * @see    ADS131M02 datasheet §9.5.1 (SPI communication protocol)
+ */
+static uint16_t adsTransferFrame(uint16_t cmd, uint16_t *statusOut)
+{
+    uint8_t tx[ADS_FRAME_BYTES];
+    uint8_t rx[ADS_FRAME_BYTES];
+
+    memset(tx, 0, sizeof(tx));
+    memset(rx, 0, sizeof(rx));
+
+    tx[0] = (uint8_t)(cmd >> 8);
+    tx[1] = (uint8_t)(cmd & 0xFF);
+
+    adsCsLow();
+    HAL_SPI_TransmitReceive(&hspi1, tx, rx, ADS_FRAME_BYTES, 100);
+    adsCsHigh();
+
+    uint16_t response = ((uint16_t)rx[0] << 8) | rx[1];
+
+    if (statusOut)
+        *statusOut = response;
+
+    return response;
+}
+
+/**
+ * @brief  Transfer a WREG frame: command in word 0, register data in word 1.
+ * @param[in]  cmd         WREG command word (includes encoded address).
+ * @param[in]  data        16-bit register value to write.
+ * @param[out] statusOut  If non-NULL, receives STATUS from DOUT word 0.
+ * @return The 16-bit STATUS from DOUT word 0.
+ */
+static uint16_t adsWregFrame(uint16_t cmd, uint16_t data, uint16_t *statusOut)
+{
+    uint8_t tx[ADS_FRAME_BYTES];
+    uint8_t rx[ADS_FRAME_BYTES];
+
+    memset(tx, 0, sizeof(tx));
+    memset(rx, 0, sizeof(rx));
+
+    tx[0] = (uint8_t)(cmd >> 8);
+    tx[1] = (uint8_t)(cmd & 0xFF);
+
+    /* Word 1: register data, MSB-aligned in 24-bit word */
+    tx[3] = (uint8_t)(data >> 8);
+    tx[4] = (uint8_t)(data & 0xFF);
+
+    adsCsLow();
+    HAL_SPI_TransmitReceive(&hspi1, tx, rx, ADS_FRAME_BYTES, 100);
+    adsCsHigh();
+
+    uint16_t response = ((uint16_t)rx[0] << 8) | rx[1];
+
+    if (statusOut)
+        *statusOut = response;
+
+    return response;
+}
+
+/* ── Register access (blocking, two-frame pipelined reads) ──────── */
+
+uint16_t ads131m02ReadReg(uint8_t addr)
+{
+    /* Frame 1: send RREG; response is stale (previous command) */
+    adsTransferFrame(ADS_RREG(addr), NULL);
+
+    /* Frame 2: send NULL; response carries the requested register value */
+    uint16_t val = adsTransferFrame(ADS_CMD_NULL, NULL);
+    return val;
+}
+
+int ads131m02WriteReg(uint8_t addr, uint16_t val)
+{
+    adsWregFrame(ADS_WREG(addr), val, NULL);
+    HAL_Delay(1);
+
+    uint16_t rb = ads131m02ReadReg(addr);
+    if (rb != val)
+    {
+        printf("ADS131M02: WREG verify FAIL addr=0x%02X wrote=0x%04X read=0x%04X\r\n",
+               addr, val, rb);
+        return -1;
+    }
+    return 0;
+}
+
+/**
+ * @brief  Assert hardware reset on PA3 (ADC_Reset) for 2 ms, then wait 50 ms.
+ * @see    ADS131M02 datasheet §7.7 (reset timing: tPOR = 2^18/fCLKIN ≈ 32 ms)
+ */
+static void adsHwReset(void)
+{
+    HAL_GPIO_WritePin(ADC_Reset_GPIO_Port, ADC_Reset_Pin, GPIO_PIN_RESET);
+    HAL_Delay(2);
+    HAL_GPIO_WritePin(ADC_Reset_GPIO_Port, ADC_Reset_Pin, GPIO_PIN_SET);
+    HAL_Delay(50);
+}
+
+int ads131m02Init(void)
+{
+    adsHwReset();
+
+    uint16_t status = 0;
+    adsTransferFrame(ADS_CMD_NULL, &status);
+
+    if (!(status & ADS_STATUS_RESET))
+    {
+        printf("ADS131M02: WARNING — RESET bit not set in STATUS after HW reset\r\n");
+    }
+
+    /* UNLOCK (device is unlocked by default after reset, but send for safety) */
+    adsTransferFrame(ADS_CMD_UNLOCK, NULL);
+    adsTransferFrame(ADS_CMD_NULL, NULL);
+
+    uint16_t id = ads131m02ReadReg(ADS_REG_ID);
+
+    if ((id & ADS_ID_M02_MASK) != ADS_ID_M02_EXPECTED)
+    {
+        printf("ADS131M02: ERROR — unexpected ID (expected 0x22xx, got 0x%04X)\r\n", id);
+        return -1;
+    }
+
+    if (ads131m02WriteReg(ADS_REG_MODE, ADS_MODE_INIT) != 0)
+    {
+        printf("ADS131M02: ERROR — MODE register write failed\r\n");
+        return -2;
+    }
+
+    /* CLOCK: CH0+CH1 enabled, TBM=1 (OSR bypass → 64 kSPS), HR power mode */
+    if (ads131m02WriteReg(ADS_REG_CLOCK, ADS_CLOCK_64KSPS) != 0)
+    {
+        printf("ADS131M02: ERROR — CLOCK register write failed\r\n");
+        return -3;
+    }
+
+    if (ads131m02WriteReg(ADS_REG_GAIN1, ADS_GAIN1_1X) != 0)
+    {
+        printf("ADS131M02: ERROR — GAIN1 register write failed\r\n");
+        return -4;
+    }
+
+    uint16_t mode  = ads131m02ReadReg(ADS_REG_MODE);
+    uint16_t clock = ads131m02ReadReg(ADS_REG_CLOCK);
+    uint16_t gain  = ads131m02ReadReg(ADS_REG_GAIN1);
+    status = ads131m02ReadReg(ADS_REG_STATUS);
+
+    printf("[ADC] init OK, ID=0x%04X CLK=0x%04X GAIN=0x%04X\r\n",
+           id, clock, gain);
+
+    int err = 0;
+    if (clock != ADS_CLOCK_64KSPS)
+    {
+        printf("ADS131M02: ERROR — CLOCK mismatch (expected 0x%04X)\r\n", ADS_CLOCK_64KSPS);
+        err = -5;
+    }
+    if (mode != ADS_MODE_INIT)
+    {
+        printf("ADS131M02: ERROR — MODE mismatch (expected 0x%04X)\r\n", ADS_MODE_INIT);
+        err = -6;
+    }
+
+    return err;
+}
+
+void ads131m02DumpRegs(void)
+{
+    static const struct { uint8_t addr; const char *name; } regs[] = {
+        { ADS_REG_ID,       "ID       " },
+        { ADS_REG_STATUS,   "STATUS   " },
+        { ADS_REG_MODE,     "MODE     " },
+        { ADS_REG_CLOCK,    "CLOCK    " },
+        { ADS_REG_GAIN1,    "GAIN1    " },
+        { ADS_REG_CFG,      "CFG      " },
+        { ADS_REG_CH0_CFG,  "CH0_CFG  " },
+        { ADS_REG_CH1_CFG,  "CH1_CFG  " },
+    };
+
+    printf("ADS131M02 Register Dump:\r\n");
+    for (unsigned i = 0; i < sizeof(regs) / sizeof(regs[0]); i++)
+    {
+        uint16_t val = ads131m02ReadReg(regs[i].addr);
+        printf("  [0x%02X] %s = 0x%04X\r\n", regs[i].addr, regs[i].name, val);
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  Phase 7 — DMA continuous capture (register-level fast path)
+ *
+ *  HAL_SPI_TransmitReceive_DMA() overhead is ~40 µs on STM32H5 GPDMA,
+ *  far exceeding the 15.625 µs DRDY period at 64 kSPS.  We bypass HAL
+ *  and write GPDMA + SPI registers directly.  Total ISR overhead: ~3 µs.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/** @brief Bit mask to clear all GPDMA channel flags in CFCR. */
+#define DMA_CFCR_ALL  (DMA_CFCR_TCF | DMA_CFCR_HTF | DMA_CFCR_DTEF | \
+                       DMA_CFCR_ULEF | DMA_CFCR_USEF | DMA_CFCR_SUSPF | \
+                       DMA_CFCR_TOF)
+
+/** @brief Bit mask to clear all SPI status flags in IFCR. */
+#define SPI_IFCR_ALL  (SPI_IFCR_EOTC | SPI_IFCR_TXTFC | SPI_IFCR_UDRC | \
+                       SPI_IFCR_OVRC | SPI_IFCR_CRCEC | SPI_IFCR_TIFREC | \
+                       SPI_IFCR_MODFC | SPI_IFCR_SUSPC)
+
+static uint8_t  adsTxDma[ADS_FRAME_BYTES] __attribute__((aligned(4)));
+static uint8_t  adsRxDma[ADS_FRAME_BYTES] __attribute__((aligned(4)));
+static volatile uint8_t  adsDmaBusy;
+static volatile uint8_t  adsDmaStop = 1;
+static volatile uint8_t  adsSkipFrames;
+static adsDmaStats_t   adsStats;
+
+static DMA_Channel_TypeDef *dmaRx;
+static DMA_Channel_TypeDef *dmaTx;
+
+/**
+ * @brief  Force SPI1 + FIFOs into a clean idle state.
+ * @details RM0481 requires a 1→0 transition on SPE to flush FIFOs; if SPE is
+ *          already 0 the FIFO contents are NOT cleared.  This function explicitly
+ *          sets then clears SPE to guarantee a flush, then clears all status flags.
+ * @see    RM0481 §44.4.9 (SPE handling), Troubleshooting/PHASE7_DMA_CRASH_CONTEXT.md §15
+ */
+static void adsSpiForceCleanIdle(void)
+{
+    CLEAR_BIT(SPI1->CFG1, SPI_CFG1_RXDMAEN | SPI_CFG1_TXDMAEN);
+    SET_BIT(SPI1->CR1, SPI_CR1_SPE);
+    CLEAR_BIT(SPI1->CR1, SPI_CR1_SPE);
+    SPI1->IFCR = SPI_IFCR_ALL;
+}
+
+/**
+ * @brief  One-time DMA channel setup for GPDMA1 CH0 (TX) and CH1 (RX).
+ * @details Enables DWT CYCCNT for ISR cycle instrumentation.  Configures DMA
+ *          source/destination addresses and byte counts.  Disables CH0 and SPI1
+ *          NVIC (TX-complete and SPI-error interrupts are not needed for the
+ *          register-level fast path).
+ * @pre    ads131m02Init() completed.
+ * @post   Both DMA channels idle and ready for adsFastStart().
+ * @see    RM0481 §14.3 (GPDMA programming model)
+ */
+static void adsDmaSetup(void)
+{
+    dmaRx = GPDMA1_Channel1;
+    dmaTx = GPDMA1_Channel0;
+
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CTRL  |= DWT_CTRL_CYCCNTENA_Msk;
+
+    memset(adsTxDma, 0, sizeof(adsTxDma));
+
+    CLEAR_BIT(dmaRx->CCR, DMA_CCR_EN);
+    CLEAR_BIT(dmaTx->CCR, DMA_CCR_EN);
+
+    while (!(dmaRx->CSR & DMA_CSR_IDLEF)) __NOP();
+    while (!(dmaTx->CSR & DMA_CSR_IDLEF)) __NOP();
+
+    dmaRx->CFCR = DMA_CFCR_ALL;
+    dmaTx->CFCR = DMA_CFCR_ALL;
+
+    dmaRx->CSAR = (uint32_t)&SPI1->RXDR;
+    dmaRx->CDAR = (uint32_t)adsRxDma;
+    dmaRx->CBR1 = ADS_FRAME_BYTES;
+
+    dmaTx->CSAR = (uint32_t)adsTxDma;
+    dmaTx->CDAR = (uint32_t)&SPI1->TXDR;
+    dmaTx->CBR1 = ADS_FRAME_BYTES;
+
+    SET_BIT(dmaRx->CCR, DMA_CCR_TCIE);
+
+    adsSpiForceCleanIdle();
+    SPI1->IER  = 0;
+    MODIFY_REG(SPI1->CR2, SPI_CR2_TSIZE, ADS_FRAME_BYTES);
+
+    /* TX-complete and SPI-error ISRs are not needed; prevent HAL from
+     * processing register-level DMA flags with stale internal state.
+     * @see Troubleshooting/PHASE7_DMA_CRASH_CONTEXT.md §17 */
+    HAL_NVIC_DisableIRQ(GPDMA1_Channel0_IRQn);
+    HAL_NVIC_DisableIRQ(SPI1_IRQn);
+    NVIC_ClearPendingIRQ(GPDMA1_Channel0_IRQn);
+    NVIC_ClearPendingIRQ(GPDMA1_Channel1_IRQn);
+    NVIC_ClearPendingIRQ(SPI1_IRQn);
+}
+
+/**
+ * @brief  Kick off a single 12-byte DMA read by asserting CS and enabling DMA+SPI.
+ * @note   CSAR/CDAR must be reloaded every transfer because GPDMA auto-advances
+ *         them past the buffer after NORMAL-mode completion.
+ * @see    RM0481 §14.3.13 (CSAR/CDAR auto-advance),
+ *         Troubleshooting/PHASE7_DMA_CRASH_CONTEXT.md §21
+ */
+static inline void adsFastStart(void)
+{
+    GPIOA->BSRR = (uint32_t)ADC_CS_Pin << 16;   /* CS LOW */
+
+    dmaRx->CFCR = DMA_CFCR_ALL;
+    dmaRx->CBR1 = ADS_FRAME_BYTES;
+    dmaRx->CDAR = (uint32_t)adsRxDma;
+    dmaTx->CFCR = DMA_CFCR_ALL;
+    dmaTx->CBR1 = ADS_FRAME_BYTES;
+    dmaTx->CSAR = (uint32_t)adsTxDma;
+
+    SET_BIT(dmaRx->CCR, DMA_CCR_EN);
+    SET_BIT(dmaTx->CCR, DMA_CCR_EN);
+
+    SPI1->IFCR = SPI_IFCR_ALL;
+    MODIFY_REG(SPI1->CR2, SPI_CR2_TSIZE, ADS_FRAME_BYTES);
+    SET_BIT(SPI1->CFG1, SPI_CFG1_RXDMAEN | SPI_CFG1_TXDMAEN);
+    SET_BIT(SPI1->CR1, SPI_CR1_SPE);
+    SET_BIT(SPI1->CR1, SPI_CR1_CSTART);
+}
+
+/**
+ * @brief  Complete a DMA transfer: wait for TXC, deassert CS, extract sample data.
+ * @details Waits for SPI TXC (all bits shifted out) before raising CS to satisfy
+ *          the ADS131M02 tCSH hold-time requirement.  Guard NOPs provide ~64 ns
+ *          hold at 250 MHz.  Then disables SPI and DMA, extracts the 24-bit
+ *          channel data, sign-extends, and updates the stats structure.
+ * @note   SPE must be cleared BEFORE CFG1 DMA bits, per RM0481: writes to CFG1
+ *         are silently ignored when SPE=1.
+ * @see    RM0481 §44.4.15 (TXC flag), ADS131M02 datasheet §7.5 (SPI timing),
+ *         Troubleshooting/PHASE7_DMA_CRASH_CONTEXT.md §20
+ */
+static inline void adsFastComplete(void)
+{
+    while (!(SPI1->SR & SPI_SR_TXC))
+        __NOP();
+    __DSB();
+    /* 16 NOPs ≈ 64 ns at 250 MHz — satisfies tCSH hold time */
+    __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP();
+    __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP();
+
+    GPIOA->BSRR = ADC_CS_Pin;                    /* CS HIGH */
+
+    /* SPE=0 first (flushes FIFOs), THEN clear CFG1 DMA bits */
+    CLEAR_BIT(SPI1->CR1, SPI_CR1_SPE);
+    CLEAR_BIT(SPI1->CFG1, SPI_CFG1_RXDMAEN | SPI_CFG1_TXDMAEN);
+    SPI1->IFCR = SPI_IFCR_ALL;
+
+    dmaRx->CFCR = DMA_CFCR_ALL;
+    dmaTx->CFCR = DMA_CFCR_ALL;
+
+    /* Extract 24-bit channel data from the DMA receive buffer.
+     * Frame layout: [STATUS(3B)][CH0(3B)][CH1(3B)][CRC(3B)] */
+    uint32_t raw0 = ((uint32_t)adsRxDma[3] << 16) |
+                    ((uint32_t)adsRxDma[4] << 8)  |
+                    ((uint32_t)adsRxDma[5]);
+    uint32_t raw1 = ((uint32_t)adsRxDma[6] << 16) |
+                    ((uint32_t)adsRxDma[7] << 8)  |
+                    ((uint32_t)adsRxDma[8]);
+
+    int32_t ch0 = adsSignExtend24(raw0);
+    int32_t ch1 = adsSignExtend24(raw1);
+
+    adsStats.ch0Latest = ch0;
+    adsStats.ch1Latest = ch1;
+    adsStats.dmaCount++;
+
+    if (adsStats.accumulate)
+    {
+        if (ch0 < adsStats.ch0Min) adsStats.ch0Min = ch0;
+        if (ch0 > adsStats.ch0Max) adsStats.ch0Max = ch0;
+        adsStats.ch0Sum += ch0;
+
+        if (ch1 < adsStats.ch1Min) adsStats.ch1Min = ch1;
+        if (ch1 > adsStats.ch1Max) adsStats.ch1Max = ch1;
+        adsStats.ch1Sum += ch1;
+
+        adsStats.windowCount++;
+    }
+
+    adsDmaBusy = 0;
+}
+
+/* ── ISR entry points (called from stm32h5xx_it.c USER CODE) ──── */
+
+void adsFastDrdyHandler(void)
+{
+    uint32_t cycEntry = DWT->CYCCNT;
+
+    /* Clear EXTI pending directly (bypass HAL for speed) */
+    EXTI->FPR1 = ADC_DRDY_Pin;
+
+    adsStats.drdyCount++;
+
+    if (adsDmaStop)
+        goto out;
+
+    if (adsDmaBusy)
+    {
+        adsStats.missCount++;
+        goto out;
+    }
+
+    adsDmaBusy = 1;
+    adsStats.dmaStartCount++;
+    adsFastStart();
+
+out:;
+    uint32_t elapsed = DWT->CYCCNT - cycEntry;
+    if (elapsed > adsStats.maxExtiCycles)
+        adsStats.maxExtiCycles = elapsed;
+}
+
+int adsFastDmaCompleteHandler(void)
+{
+    uint32_t cycEntry = DWT->CYCCNT;
+    uint32_t csr = GPDMA1_Channel1->CSR;
+
+    if (!(csr & DMA_CSR_TCF))
+    {
+        /* No TCF → error path: abort and clean up */
+        dmaRx->CFCR = DMA_CFCR_ALL;
+        dmaTx->CFCR = DMA_CFCR_ALL;
+        CLEAR_BIT(SPI1->CR1, SPI_CR1_SPE);
+        CLEAR_BIT(SPI1->CFG1, SPI_CFG1_RXDMAEN | SPI_CFG1_TXDMAEN);
+        SPI1->IFCR = SPI_IFCR_ALL;
+        GPIOA->BSRR = ADC_CS_Pin;
+        adsStats.dmaErrorCount++;
+        adsDmaBusy = 0;
+        return 1;
+    }
+
+    if (adsSkipFrames)
+    {
+        /* Discard the first N frames after starting continuous mode to
+         * allow the SPI pipeline to settle. */
+        while (!(SPI1->SR & SPI_SR_TXC)) __NOP();
+        __DSB();
+        __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP();
+        __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP();
+        GPIOA->BSRR = ADC_CS_Pin;
+        CLEAR_BIT(SPI1->CR1, SPI_CR1_SPE);
+        CLEAR_BIT(SPI1->CFG1, SPI_CFG1_RXDMAEN | SPI_CFG1_TXDMAEN);
+        SPI1->IFCR = SPI_IFCR_ALL;
+        dmaRx->CFCR = DMA_CFCR_ALL;
+        dmaTx->CFCR = DMA_CFCR_ALL;
+        adsSkipFrames--;
+        adsDmaBusy = 0;
+        goto out;
+    }
+
+    adsFastComplete();
+
+out:;
+    uint32_t elapsed = DWT->CYCCNT - cycEntry;
+    if (elapsed > adsStats.maxDmaCycles)
+        adsStats.maxDmaCycles = elapsed;
+    return 1;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  Public API — start / stop / stats
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/** @brief DMA register dump (unused in production, retained for debug). */
+static void __attribute__((unused)) adsDumpDmaRegs(const char *tag)
+{
+    printf("[DMA-%s] RX CCR=0x%08lX CTR1=0x%08lX CTR2=0x%08lX CBR1=%lu CSAR=0x%08lX CDAR=0x%08lX CSR=0x%08lX\r\n",
+           tag,
+           (unsigned long)dmaRx->CCR, (unsigned long)dmaRx->CTR1,
+           (unsigned long)dmaRx->CTR2, (unsigned long)dmaRx->CBR1,
+           (unsigned long)dmaRx->CSAR, (unsigned long)dmaRx->CDAR,
+           (unsigned long)dmaRx->CSR);
+    printf("[DMA-%s] TX CCR=0x%08lX CTR1=0x%08lX CTR2=0x%08lX CBR1=%lu CSAR=0x%08lX CDAR=0x%08lX CSR=0x%08lX\r\n",
+           tag,
+           (unsigned long)dmaTx->CCR, (unsigned long)dmaTx->CTR1,
+           (unsigned long)dmaTx->CTR2, (unsigned long)dmaTx->CBR1,
+           (unsigned long)dmaTx->CSAR, (unsigned long)dmaTx->CDAR,
+           (unsigned long)dmaTx->CSR);
+    printf("[SPI-%s] CR1=0x%08lX CR2=0x%08lX CFG1=0x%08lX CFG2=0x%08lX SR=0x%08lX IER=0x%08lX\r\n",
+           tag,
+           (unsigned long)SPI1->CR1, (unsigned long)SPI1->CR2,
+           (unsigned long)SPI1->CFG1, (unsigned long)SPI1->CFG2,
+           (unsigned long)SPI1->SR, (unsigned long)SPI1->IER);
+}
+
+/**
+ * @brief  Run a single blocking DMA transfer for self-test.
+ * @details Disables the GPDMA1_CH1 NVIC to avoid ISR/polling race, then polls
+ *         TCF directly.  Uses DWT CYCCNT timeout (immune to SysTick starvation
+ *         at 128K IRQ/sec).
+ * @return 0 on success, -1 on timeout.
+ * @see    Troubleshooting/PHASE7_DMA_CRASH_CONTEXT.md §18–19
+ */
+static int adsManualDmaTest(void)
+{
+    HAL_NVIC_DisableIRQ(GPDMA1_Channel1_IRQn);
+    NVIC_ClearPendingIRQ(GPDMA1_Channel1_IRQn);
+
+    __disable_irq();
+    adsFastStart();
+    __enable_irq();
+
+    uint32_t cyc0 = DWT->CYCCNT;
+    uint32_t timeoutCyc = SystemCoreClock / 10;   /* 100 ms */
+    while (!(GPDMA1_Channel1->CSR & DMA_CSR_TCF))
+    {
+        if ((DWT->CYCCNT - cyc0) > timeoutCyc)
+        {
+            printf("[DMA-TEST] TIMEOUT\r\n");
+            GPIOA->BSRR = ADC_CS_Pin;
+            CLEAR_BIT(SPI1->CFG1, SPI_CFG1_RXDMAEN | SPI_CFG1_TXDMAEN);
+            CLEAR_BIT(SPI1->CR1, SPI_CR1_SPE);
+            CLEAR_BIT(dmaRx->CCR, DMA_CCR_EN);
+            CLEAR_BIT(dmaTx->CCR, DMA_CCR_EN);
+            SPI1->IFCR  = SPI_IFCR_ALL;
+            dmaRx->CFCR = DMA_CFCR_ALL;
+            dmaTx->CFCR = DMA_CFCR_ALL;
+            adsDmaBusy = 0;
+            HAL_NVIC_EnableIRQ(GPDMA1_Channel1_IRQn);
+            return -1;
+        }
+    }
+
+    adsFastComplete();
+
+    /* Clear stale NVIC pending before re-enabling — prevents a spurious
+     * ISR from firing with no TCF, which increments dmaErrorCount.
+     * @see Troubleshooting/PHASE7_DMA_CRASH_CONTEXT.md (Bug 7) */
+    NVIC_ClearPendingIRQ(GPDMA1_Channel1_IRQn);
+    HAL_NVIC_EnableIRQ(GPDMA1_Channel1_IRQn);
+
+    return 0;
+}
+
+void ads131m02StartContinuous(void)
+{
+    for (int attempt = 0; attempt < 3; attempt++)
+    {
+        if (attempt > 0)
+            printf("[ADC] retry %d\r\n", attempt);
+
+        adsDmaSetup();
+
+        adsDmaBusy = 1;
+        if (adsManualDmaTest() == 0)
+        {
+            /* Hard cleanup before DRDY-triggered mode.  Gate EXTI2 to prevent
+             * any DRDY handler from firing during the transition. */
+            HAL_NVIC_DisableIRQ(EXTI2_IRQn);
+
+            adsSpiForceCleanIdle();
+
+            CLEAR_BIT(dmaRx->CCR, DMA_CCR_EN);
+            CLEAR_BIT(dmaTx->CCR, DMA_CCR_EN);
+            while (!(dmaRx->CSR & DMA_CSR_IDLEF)) __NOP();
+            while (!(dmaTx->CSR & DMA_CSR_IDLEF)) __NOP();
+            dmaRx->CFCR = DMA_CFCR_ALL;
+            dmaTx->CFCR = DMA_CFCR_ALL;
+            dmaRx->CBR1 = ADS_FRAME_BYTES;
+            dmaRx->CDAR = (uint32_t)adsRxDma;
+            dmaTx->CBR1 = ADS_FRAME_BYTES;
+            dmaTx->CSAR = (uint32_t)adsTxDma;
+
+            MODIFY_REG(SPI1->CR2, SPI_CR2_TSIZE, ADS_FRAME_BYTES);
+
+            __HAL_GPIO_EXTI_CLEAR_IT(ADC_DRDY_Pin);
+            NVIC_ClearPendingIRQ(EXTI2_IRQn);
+            NVIC_ClearPendingIRQ(GPDMA1_Channel1_IRQn);
+
+            adsSkipFrames = 2;
+            adsDmaBusy = 0;
+            adsDmaStop = 0;
+
+            HAL_NVIC_EnableIRQ(EXTI2_IRQn);
+            return;
+        }
+    }
+
+    printf("[ADC] DMA FAIL after 3 attempts\r\n");
+    adsDmaStop = 1;
+    adsDmaBusy = 0;
+}
+
+/** @brief Zero all fields in the stats structure (IRQ-safe). */
+static void ads131m02ClearStats(void)
+{
+    __disable_irq();
+    memset((void *)&adsStats, 0, sizeof(adsStats));
+    __enable_irq();
+}
+
+void ads131m02StopContinuous(void)
+{
+    adsDmaStop = 1;
+
+    HAL_NVIC_DisableIRQ(EXTI2_IRQn);
+    HAL_NVIC_DisableIRQ(GPDMA1_Channel1_IRQn);
+    __DSB();
+    __ISB();
+
+    CLEAR_BIT(dmaRx->CCR, DMA_CCR_EN);
+    CLEAR_BIT(dmaTx->CCR, DMA_CCR_EN);
+    while (!(dmaRx->CSR & DMA_CSR_IDLEF)) __NOP();
+    while (!(dmaTx->CSR & DMA_CSR_IDLEF)) __NOP();
+
+    adsSpiForceCleanIdle();
+    GPIOA->BSRR = ADC_CS_Pin;          /* CS HIGH */
+
+    dmaRx->CFCR = DMA_CFCR_ALL;
+    dmaTx->CFCR = DMA_CFCR_ALL;
+
+    adsDmaBusy = 0;
+
+    NVIC_ClearPendingIRQ(EXTI2_IRQn);
+    NVIC_ClearPendingIRQ(GPDMA1_Channel1_IRQn);
+    HAL_NVIC_EnableIRQ(GPDMA1_Channel1_IRQn);
+    HAL_NVIC_EnableIRQ(EXTI2_IRQn);
+
+    /* Restore HAL state so blocking SPI calls work again */
+    hspi1.State             = HAL_SPI_STATE_READY;
+    handle_GPDMA1_Channel0.State = HAL_DMA_STATE_READY;
+    handle_GPDMA1_Channel1.State = HAL_DMA_STATE_READY;
+}
+
+const volatile adsDmaStats_t *ads131m02GetStats(void)
+{
+    return &adsStats;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  Alternating-polarity self-test
+ *  Switches CH0/CH1 MUX between +test and -test each second,
+ *  accumulates min/max/sum per polarity, and prints a symmetry report.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/** @brief Reset the per-window accumulator fields for polarity test. */
+static void adsResetAccumulators(void)
+{
+    __disable_irq();
+    adsStats.ch0Min = INT32_MAX;
+    adsStats.ch0Max = INT32_MIN;
+    adsStats.ch0Sum = 0;
+    adsStats.ch1Min = INT32_MAX;
+    adsStats.ch1Max = INT32_MIN;
+    adsStats.ch1Sum = 0;
+    adsStats.windowCount = 0;
+    adsStats.accumulate   = 1;
+    __enable_irq();
+}
+
+void ads131m02PolarityTest(uint32_t durationS)
+{
+    printf("\r\n=== ADC POLARITY TEST (%lu s) ===\r\n",
+           (unsigned long)durationS);
+
+    int64_t  ch0pSum = 0, ch0nSum = 0, ch1pSum = 0, ch1nSum = 0;
+    uint32_t ch0pCnt = 0, ch0nCnt = 0, ch1pCnt = 0, ch1nCnt = 0;
+    int32_t  ch0pMin = INT32_MAX, ch0pMax = INT32_MIN;
+    int32_t  ch0nMin = INT32_MAX, ch0nMax = INT32_MIN;
+    int32_t  ch1pMin = INT32_MAX, ch1pMax = INT32_MIN;
+    int32_t  ch1nMin = INT32_MAX, ch1nMax = INT32_MIN;
+
+    for (uint32_t sec = 0; sec < durationS; sec++)
+    {
+        ads131m02StopContinuous();
+
+        uint16_t ch0Mux, ch1Mux;
+
+        if (sec & 1)
+        {
+            ch0Mux = ADS_MUX_NEG_TEST;  ch1Mux = ADS_MUX_POS_TEST;
+        }
+        else
+        {
+            ch0Mux = ADS_MUX_POS_TEST;  ch1Mux = ADS_MUX_NEG_TEST;
+        }
+
+        ads131m02WriteReg(ADS_REG_CH0_CFG, ch0Mux);
+        ads131m02WriteReg(ADS_REG_CH1_CFG, ch1Mux);
+
+        ads131m02StartContinuous();
+        adsResetAccumulators();
+
+        uint32_t t0 = HAL_GetTick();
+        while (HAL_GetTick() - t0 < 1000)
+            ux_system_tasks_run();
+
+        adsStats.accumulate = 0;
+        __DSB();
+
+        int32_t  c0min = adsStats.ch0Min, c0max = adsStats.ch0Max;
+        int64_t  c0sum = adsStats.ch0Sum;
+        int32_t  c1min = adsStats.ch1Min, c1max = adsStats.ch1Max;
+        int64_t  c1sum = adsStats.ch1Sum;
+        uint32_t cnt   = adsStats.windowCount;
+
+        if (ch0Mux == ADS_MUX_POS_TEST)
+        {
+            ch0pSum += c0sum;  ch0pCnt += cnt;
+            if (c0min < ch0pMin) ch0pMin = c0min;
+            if (c0max > ch0pMax) ch0pMax = c0max;
+        }
+        else
+        {
+            ch0nSum += c0sum;  ch0nCnt += cnt;
+            if (c0min < ch0nMin) ch0nMin = c0min;
+            if (c0max > ch0nMax) ch0nMax = c0max;
+        }
+
+        if (ch1Mux == ADS_MUX_POS_TEST)
+        {
+            ch1pSum += c1sum;  ch1pCnt += cnt;
+            if (c1min < ch1pMin) ch1pMin = c1min;
+            if (c1max > ch1pMax) ch1pMax = c1max;
+        }
+        else
+        {
+            ch1nSum += c1sum;  ch1nCnt += cnt;
+            if (c1min < ch1nMin) ch1nMin = c1min;
+            if (c1max > ch1nMax) ch1nMax = c1max;
+        }
+    }
+
+    ads131m02StopContinuous();
+
+    int32_t ch0pAvg = ch0pCnt ? (int32_t)(ch0pSum / (int64_t)ch0pCnt) : 0;
+    int32_t ch0nAvg = ch0nCnt ? (int32_t)(ch0nSum / (int64_t)ch0nCnt) : 0;
+    int32_t ch1pAvg = ch1pCnt ? (int32_t)(ch1pSum / (int64_t)ch1pCnt) : 0;
+    int32_t ch1nAvg = ch1nCnt ? (int32_t)(ch1nSum / (int64_t)ch1nCnt) : 0;
+
+    printf("\r\n=== ADC POLARITY TEST SUMMARY (%lu s) ===\r\n",
+           (unsigned long)durationS);
+    printf("CH0 +test: avg=%+ld spread=%ld (%lu windows)\r\n",
+           (long)ch0pAvg, (long)(ch0pMax - ch0pMin),
+           (unsigned long)(durationS / 2));
+    printf("CH0 -test: avg=%+ld spread=%ld (%lu windows)\r\n",
+           (long)ch0nAvg, (long)(ch0nMax - ch0nMin),
+           (unsigned long)(durationS / 2));
+    printf("CH1 +test: avg=%+ld spread=%ld (%lu windows)\r\n",
+           (long)ch1pAvg, (long)(ch1pMax - ch1pMin),
+           (unsigned long)(durationS / 2));
+    printf("CH1 -test: avg=%+ld spread=%ld (%lu windows)\r\n",
+           (long)ch1nAvg, (long)(ch1nMax - ch1nMin),
+           (unsigned long)(durationS / 2));
+
+    if (ch0pAvg != 0)
+    {
+        double ch0Sym = 100.0 * ((double)ch0pAvg + (double)ch0nAvg)
+                         / (double)ch0pAvg;
+        double ch1Sym = (ch1pAvg != 0)
+                         ? 100.0 * ((double)ch1pAvg + (double)ch1nAvg)
+                           / (double)ch1pAvg
+                         : 0.0;
+        printf("Symmetry error: CH0=%+.4f%%  CH1=%+.4f%%\r\n",
+               ch0Sym, ch1Sym);
+    }
+
+    printf("Total DRDY=%lu DMA=%lu miss=%lu\r\n",
+           (unsigned long)adsStats.drdyCount,
+           (unsigned long)adsStats.dmaCount,
+           (unsigned long)adsStats.missCount);
+    printf("=== END TEST ===\r\n\r\n");
+
+    ads131m02WriteReg(ADS_REG_CH0_CFG, ADS_MUX_EXTERNAL);
+    ads131m02WriteReg(ADS_REG_CH1_CFG, ADS_MUX_EXTERNAL);
+
+    ads131m02ClearStats();
+    ads131m02StartContinuous();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  DRDY_FMT A/B test — level (DRDY_FMT=0) vs pulse (DRDY_FMT=1)
+ *
+ *  Runs armSeconds in each mode, prints side-by-side comparison.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+void ads131m02DrdyFmtTest(uint32_t armSeconds)
+{
+    uint32_t totalS = armSeconds * 2;
+    printf("\r\n=== DRDY_FMT A/B TEST (%lu s) ===\r\n",
+           (unsigned long)totalS);
+
+    uint16_t modeLevel = ADS_MODE_INIT & ~0x0001u;
+    uint16_t modePulse = ADS_MODE_INIT |  0x0001u;
+
+    /* ── Arm A: level mode (DRDY_FMT=0) ──────────────────────────── */
+    ads131m02StopContinuous();
+    ads131m02WriteReg(ADS_REG_MODE, modeLevel);
+
+    ads131m02ClearStats();
+    uint32_t hwAStart = diagDrdyReadEdges();
+    ads131m02StartContinuous();
+
+    {
+        uint32_t t0 = HAL_GetTick();
+        while (HAL_GetTick() - t0 < armSeconds * 1000)
+            ux_system_tasks_run();
+    }
+
+    ads131m02StopContinuous();
+    uint32_t hwAEnd   = diagDrdyReadEdges();
+    uint32_t aDrdySw  = adsStats.drdyCount;
+    uint32_t aDrdyHw  = hwAEnd - hwAStart;
+    uint32_t aDma      = adsStats.dmaCount;
+    uint32_t aMiss     = adsStats.missCount;
+
+    printf("[A] DRDY_FMT=0 (level), %lu s:\r\n"
+           "  DRDY_SW=%lu  DRDY_HW=%lu  DMA=%lu  miss=%lu\r\n",
+           (unsigned long)armSeconds,
+           (unsigned long)aDrdySw, (unsigned long)aDrdyHw,
+           (unsigned long)aDma, (unsigned long)aMiss);
+
+    /* ── Arm B: pulse mode (DRDY_FMT=1) ──────────────────────────── */
+    ads131m02WriteReg(ADS_REG_MODE, modePulse);
+
+    ads131m02ClearStats();
+    uint32_t hwBStart = diagDrdyReadEdges();
+    ads131m02StartContinuous();
+
+    {
+        uint32_t t0 = HAL_GetTick();
+        while (HAL_GetTick() - t0 < armSeconds * 1000)
+            ux_system_tasks_run();
+    }
+
+    ads131m02StopContinuous();
+    uint32_t hwBEnd   = diagDrdyReadEdges();
+    uint32_t bDrdySw  = adsStats.drdyCount;
+    uint32_t bDrdyHw  = hwBEnd - hwBStart;
+    uint32_t bDma      = adsStats.dmaCount;
+    uint32_t bMiss     = adsStats.missCount;
+
+    printf("[B] DRDY_FMT=1 (pulse), %lu s:\r\n"
+           "  DRDY_SW=%lu  DRDY_HW=%lu  DMA=%lu  miss=%lu\r\n",
+           (unsigned long)armSeconds,
+           (unsigned long)bDrdySw, (unsigned long)bDrdyHw,
+           (unsigned long)bDma, (unsigned long)bMiss);
+
+    ads131m02WriteReg(ADS_REG_MODE, ADS_MODE_INIT);
+    printf("Reverted to MODE=0x%04X\r\n", ADS_MODE_INIT);
+    printf("=== END A/B TEST ===\r\n\r\n");
+
+    ads131m02ClearStats();
+    ads131m02StartContinuous();
+}

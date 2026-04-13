@@ -1,0 +1,6 @@
+../Core/Src/neopixel.c:34:6:HAL_TIM_PWM_PulseFinishedCallback	16	static
+../Core/Src/neopixel.c:45:5:neoInit	8	static
+../Core/Src/neopixel.c:92:6:neoSetPixel	32	static
+../Core/Src/neopixel.c:105:6:neoShow	8	static
+../Core/Src/neopixel.c:126:6:neoOff	8	static
+../Core/Src/neopixel.c:133:6:neoDmaIrqHandler	8	static

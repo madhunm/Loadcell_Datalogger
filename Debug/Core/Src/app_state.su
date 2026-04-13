@@ -1,0 +1,2 @@
+../Core/Src/app_state.c:20:12:appStateGet	4	static
+../Core/Src/app_state.c:25:6:appStateCanStartLogging	8	static

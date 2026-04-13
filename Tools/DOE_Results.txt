@@ -1,0 +1,212 @@
+   9344 ========================================
+   9344 === DOE RUN 1/6  drain=16  SPI= 5MHz ===
+   9345 ========================================
+   9346 [DOE] >> KEEP STILL  (10 s)
+   9346 [DOE] >> KEEP STILL  10s left  fmax=0 ovf=0 err=0  [1/6 dm=16  5MHz]
+.  11343 [DOE] >> KEEP STILL  8s left  fmax=254 ovf=24 err=0  [1/6 dm=16  5MHz]
+..  13343 [DOE] >> KEEP STILL  6s left  fmax=254 ovf=24 err=0  [1/6 dm=16  5MHz]
+..  15343 [DOE] >> KEEP STILL  4s left  fmax=254 ovf=24 err=0  [1/6 dm=16  5MHz]
+..  17343 [DOE] >> KEEP STILL  2s left  fmax=254 ovf=24 err=0  [1/6 dm=16  5MHz]
+..  19343 [DOE] STILL done: fmax=254 ovf=24 err=0 sflp=1408 | read: n=200 max=415us avg=220us
+  19344 [DOE] >> SHAKE HARD  (10 s)
+  19345 [DOE] >> SHAKE HARD  10s left  fmax=254 ovf=24 err=0  [1/6 dm=16  5MHz]
+..  21343 [DOE] >> SHAKE HARD  8s left  fmax=254 ovf=24 err=0  [1/6 dm=16  5MHz]
+..  23343 [DOE] >> SHAKE HARD  6s left  fmax=254 ovf=24 err=0  [1/6 dm=16  5MHz]
+..  25343 [DOE] >> SHAKE HARD  4s left  fmax=254 ovf=24 err=0  [1/6 dm=16  5MHz]
+..  27343 [DOE] >> SHAKE HARD  2s left  fmax=254 ovf=24 err=0  [1/6 dm=16  5MHz]
+..  29343 [DOE] SHAKE done: fmax=254 ovf=24 err=0 sflp=2569 | read: n=400 max=415us avg=207us
+  29344 [DOE] >> KEEP STILL  (10 s recovery)
+  29345 [DOE] >> KEEP STILL (recovery)  10s left  fmax=254 ovf=24 err=0  [1/6 dm=16  5MHz]
+..  31343 [DOE] >> KEEP STILL (recovery)  8s left  fmax=254 ovf=24 err=0  [1/6 dm=16  5MHz]
+..  33343 [DOE] >> KEEP STILL (recovery)  6s left  fmax=254 ovf=24 err=0  [1/6 dm=16  5MHz]
+..  35343 [DOE] >> KEEP STILL (recovery)  4s left  fmax=254 ovf=24 err=0  [1/6 dm=16  5MHz]
+..  37343 [DOE] >> KEEP STILL (recovery)  2s left  fmax=254 ovf=24 err=0  [1/6 dm=16  5MHz]
+..  39343 [DOE] RECOV done: fmax=254 ovf=24 err=0 sflp=3729 | read: n=600 max=415us avg=203us
+  39344 [DOE] >> TILT & TAP gently  (10 s)
+  39345 [DOE] >> TILT & TAP gently  10s left  fmax=254 ovf=24 err=0  [1/6 dm=16  5MHz]
+..  41343 [DOE] >> TILT & TAP gently  8s left  fmax=254 ovf=24 err=0  [1/6 dm=16  5MHz]
+..  43343 [DOE] >> TILT & TAP gently  6s left  fmax=254 ovf=24 err=0  [1/6 dm=16  5MHz]
+..  45343 [DOE] >> TILT & TAP gently  4s left  fmax=254 ovf=24 err=0  [1/6 dm=16  5MHz]
+..  47343 [DOE] >> TILT & TAP gently  2s left  fmax=254 ovf=24 err=0  [1/6 dm=16  5MHz]
+..  49343 [DOE] === RESULT drain=16 SPI= 5MHz === WARN
+  49344 [DOE]   fmax=254  ovf=24  sflp=4890  err=0  rec=0  T=28.4 g=+Z
+  49345 [DOE]   read: calls=800  max=415us  avg=200us
+  49345 [DOE] --- 5 s pause before next run ---
+.............................................
+  94343 ========================================
+  94344 === DOE RUN 2/6  drain=32  SPI= 5MHz ===
+  94344 ========================================
+  94345 [DOE] >> KEEP STILL  (10 s)
+  94345 [DOE] >> KEEP STILL  10s left  fmax=0 ovf=0 err=0  [2/6 dm=32  5MHz]
+..  96343 [DOE] >> KEEP STILL  8s left  fmax=6 ovf=0 err=0  [2/6 dm=32  5MHz]
+..  98343 [DOE] >> KEEP STILL  6s left  fmax=6 ovf=0 err=0  [2/6 dm=32  5MHz]
+.. 100343 [DOE] >> KEEP STILL  4s left  fmax=6 ovf=0 err=0  [2/6 dm=32  5MHz]
+.. 102343 [DOE] >> KEEP STILL  2s left  fmax=6 ovf=0 err=0  [2/6 dm=32  5MHz]
+.. 104343 [DOE] STILL done: fmax=6 ovf=0 err=0 sflp=1160 | read: n=200 max=201us avg=193us
+ 104344 [DOE] >> SHAKE HARD  (10 s)
+ 104345 [DOE] >> SHAKE HARD  10s left  fmax=6 ovf=0 err=0  [2/6 dm=32  5MHz]
+.. 106343 [DOE] >> SHAKE HARD  8s left  fmax=6 ovf=0 err=0  [2/6 dm=32  5MHz]
+.. 108343 [DOE] >> SHAKE HARD  6s left  fmax=6 ovf=0 err=0  [2/6 dm=32  5MHz]
+.. 110343 [DOE] >> SHAKE HARD  4s left  fmax=6 ovf=0 err=0  [2/6 dm=32  5MHz]
+.. 112343 [DOE] >> SHAKE HARD  2s left  fmax=6 ovf=0 err=0  [2/6 dm=32  5MHz]
+.. 114343 [DOE] SHAKE done: fmax=6 ovf=0 err=0 sflp=2320 | read: n=400 max=202us avg=194us
+ 114344 [DOE] >> KEEP STILL  (10 s recovery)
+ 114345 [DOE] >> KEEP STILL (recovery)  10s left  fmax=6 ovf=0 err=0  [2/6 dm=32  5MHz]
+.. 116343 [DOE] >> KEEP STILL (recovery)  8s left  fmax=6 ovf=0 err=0  [2/6 dm=32  5MHz]
+.. 118343 [DOE] >> KEEP STILL (recovery)  6s left  fmax=6 ovf=0 err=0  [2/6 dm=32  5MHz]
+.. 120343 [DOE] >> KEEP STILL (recovery)  4s left  fmax=6 ovf=0 err=0  [2/6 dm=32  5MHz]
+.. 122343 [DOE] >> KEEP STILL (recovery)  2s left  fmax=6 ovf=0 err=0  [2/6 dm=32  5MHz]
+.. 124343 [DOE] RECOV done: fmax=6 ovf=0 err=0 sflp=3481 | read: n=600 max=202us avg=193us
+ 124344 [DOE] >> TILT & TAP gently  (10 s)
+ 124345 [DOE] >> TILT & TAP gently  10s left  fmax=6 ovf=0 err=0  [2/6 dm=32  5MHz]
+.. 126343 [DOE] >> TILT & TAP gently  8s left  fmax=6 ovf=0 err=0  [2/6 dm=32  5MHz]
+.. 128343 [DOE] >> TILT & TAP gently  6s left  fmax=6 ovf=0 err=0  [2/6 dm=32  5MHz]
+.. 130343 [DOE] >> TILT & TAP gently  4s left  fmax=6 ovf=0 err=0  [2/6 dm=32  5MHz]
+.. 132343 [DOE] >> TILT & TAP gently  2s left  fmax=6 ovf=0 err=0  [2/6 dm=32  5MHz]
+.. 134343 [DOE] === RESULT drain=32 SPI= 5MHz === PASS
+ 134344 [DOE]   fmax=6  ovf=0  sflp=4641  err=0  rec=0  T=28.1 g=+Z
+ 134345 [DOE]   read: calls=800  max=202us  avg=193us
+ 134345 [DOE] --- 5 s pause before next run ---
+.............................................
+ 179343 ========================================
+ 179344 === DOE RUN 3/6  drain=64  SPI= 5MHz ===
+ 179344 ========================================
+ 179345 [DOE] >> KEEP STILL  (10 s)
+ 179345 [DOE] >> KEEP STILL  10s left  fmax=0 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 181343 [DOE] >> KEEP STILL  8s left  fmax=6 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 183343 [DOE] >> KEEP STILL  6s left  fmax=6 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 185343 [DOE] >> KEEP STILL  4s left  fmax=6 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 187343 [DOE] >> KEEP STILL  2s left  fmax=6 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 189343 [DOE] STILL done: fmax=6 ovf=0 err=0 sflp=1161 | read: n=200 max=201us avg=193us
+ 189344 [DOE] >> SHAKE HARD  (10 s)
+ 189345 [DOE] >> SHAKE HARD  10s left  fmax=6 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 191343 [DOE] >> SHAKE HARD  8s left  fmax=6 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 193343 [DOE] >> SHAKE HARD  6s left  fmax=6 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 195343 [DOE] >> SHAKE HARD  4s left  fmax=6 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 197343 [DOE] >> SHAKE HARD  2s left  fmax=6 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 199343 [DOE] SHAKE done: fmax=6 ovf=0 err=0 sflp=2321 | read: n=400 max=202us avg=194us
+ 199344 [DOE] >> KEEP STILL  (10 s recovery)
+ 199345 [DOE] >> KEEP STILL (recovery)  10s left  fmax=6 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 201343 [DOE] >> KEEP STILL (recovery)  8s left  fmax=6 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 203343 [DOE] >> KEEP STILL (recovery)  6s left  fmax=6 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 205343 [DOE] >> KEEP STILL (recovery)  4s left  fmax=6 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 207343 [DOE] >> KEEP STILL (recovery)  2s left  fmax=6 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 209343 [DOE] RECOV done: fmax=6 ovf=0 err=0 sflp=3481 | read: n=600 max=202us avg=193us
+ 209344 [DOE] >> TILT & TAP gently  (10 s)
+ 209345 [DOE] >> TILT & TAP gently  10s left  fmax=6 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 211343 [DOE] >> TILT & TAP gently  8s left  fmax=6 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 213343 [DOE] >> TILT & TAP gently  6s left  fmax=6 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 215343 [DOE] >> TILT & TAP gently  4s left  fmax=6 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 217343 [DOE] >> TILT & TAP gently  2s left  fmax=6 ovf=0 err=0  [3/6 dm=64  5MHz]
+.. 219343 [DOE] === RESULT drain=64 SPI= 5MHz === PASS
+ 219344 [DOE]   fmax=6  ovf=0  sflp=4641  err=0  rec=0  T=28.1 g=+Z
+ 219345 [DOE]   read: calls=800  max=202us  avg=193us
+ 219345 [DOE] --- 5 s pause before next run ---
+.............................................
+ 264343 ========================================
+ 264344 === DOE RUN 4/6  drain=16  SPI=10MHz ===
+ 264344 ========================================
+ 264345 [DOE] >> KEEP STILL  (10 s)
+ 264345 [DOE] >> KEEP STILL  10s left  fmax=0 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 266343 [DOE] >> KEEP STILL  8s left  fmax=6 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 268343 [DOE] >> KEEP STILL  6s left  fmax=6 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 270343 [DOE] >> KEEP STILL  4s left  fmax=6 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 272343 [DOE] >> KEEP STILL  2s left  fmax=6 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 274343 [DOE] STILL done: fmax=6 ovf=0 err=0 sflp=1160 | read: n=200 max=148us avg=139us
+ 274344 [DOE] >> SHAKE HARD  (10 s)
+ 274345 [DOE] >> SHAKE HARD  10s left  fmax=6 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 276343 [DOE] >> SHAKE HARD  8s left  fmax=6 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 278343 [DOE] >> SHAKE HARD  6s left  fmax=6 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 280343 [DOE] >> SHAKE HARD  4s left  fmax=6 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 282343 [DOE] >> SHAKE HARD  2s left  fmax=6 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 284343 [DOE] SHAKE done: fmax=6 ovf=0 err=0 sflp=2320 | read: n=400 max=148us avg=139us
+ 284344 [DOE] >> KEEP STILL  (10 s recovery)
+ 284345 [DOE] >> KEEP STILL (recovery)  10s left  fmax=6 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 286343 [DOE] >> KEEP STILL (recovery)  8s left  fmax=6 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 288343 [DOE] >> KEEP STILL (recovery)  6s left  fmax=6 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 290343 [DOE] >> KEEP STILL (recovery)  4s left  fmax=6 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 292343 [DOE] >> KEEP STILL (recovery)  2s left  fmax=6 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 294343 [DOE] RECOV done: fmax=6 ovf=0 err=0 sflp=3480 | read: n=600 max=148us avg=139us
+ 294344 [DOE] >> TILT & TAP gently  (10 s)
+ 294345 [DOE] >> TILT & TAP gently  10s left  fmax=6 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 296343 [DOE] >> TILT & TAP gently  8s left  fmax=6 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 298343 [DOE] >> TILT & TAP gently  6s left  fmax=6 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 300343 [DOE] >> TILT & TAP gently  4s left  fmax=6 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 302343 [DOE] >> TILT & TAP gently  2s left  fmax=6 ovf=0 err=0  [4/6 dm=16 10MHz]
+.. 304343 [DOE] === RESULT drain=16 SPI=10MHz === PASS
+ 304344 [DOE]   fmax=6  ovf=0  sflp=4641  err=0  rec=0  T=28.0 g=+Z
+ 304345 [DOE]   read: calls=800  max=148us  avg=139us
+ 304345 [DOE] --- 5 s pause before next run ---
+.............................................
+ 349343 ========================================
+ 349344 === DOE RUN 5/6  drain=32  SPI=10MHz ===
+ 349344 ========================================
+ 349345 [DOE] >> KEEP STILL  (10 s)
+ 349345 [DOE] >> KEEP STILL  10s left  fmax=0 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 351343 [DOE] >> KEEP STILL  8s left  fmax=6 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 353343 [DOE] >> KEEP STILL  6s left  fmax=6 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 355343 [DOE] >> KEEP STILL  4s left  fmax=6 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 357343 [DOE] >> KEEP STILL  2s left  fmax=6 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 359343 [DOE] STILL done: fmax=6 ovf=0 err=0 sflp=1161 | read: n=200 max=148us                                                                                                                               avg=140us
+ 359344 [DOE] >> SHAKE HARD  (10 s)
+ 359345 [DOE] >> SHAKE HARD  10s left  fmax=6 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 361343 [DOE] >> SHAKE HARD  8s left  fmax=6 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 363343 [DOE] >> SHAKE HARD  6s left  fmax=6 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 365343 [DOE] >> SHAKE HARD  4s left  fmax=6 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 367343 [DOE] >> SHAKE HARD  2s left  fmax=6 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 369343 [DOE] SHAKE done: fmax=6 ovf=0 err=0 sflp=2321 | read: n=400 max=148us avg=139us
+ 369344 [DOE] >> KEEP STILL  (10 s recovery)
+ 369345 [DOE] >> KEEP STILL (recovery)  10s left  fmax=6 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 371343 [DOE] >> KEEP STILL (recovery)  8s left  fmax=6 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 373343 [DOE] >> KEEP STILL (recovery)  6s left  fmax=6 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 375343 [DOE] >> KEEP STILL (recovery)  4s left  fmax=6 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 377343 [DOE] >> KEEP STILL (recovery)  2s left  fmax=6 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 379343 [DOE] RECOV done: fmax=6 ovf=0 err=0 sflp=3481 | read: n=600 max=148us avg=140us
+ 379344 [DOE] >> TILT & TAP gently  (10 s)
+ 379345 [DOE] >> TILT & TAP gently  10s left  fmax=6 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 381343 [DOE] >> TILT & TAP gently  8s left  fmax=6 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 383343 [DOE] >> TILT & TAP gently  6s left  fmax=6 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 385343 [DOE] >> TILT & TAP gently  4s left  fmax=6 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 387343 [DOE] >> TILT & TAP gently  2s left  fmax=6 ovf=0 err=0  [5/6 dm=32 10MHz]
+.. 389343 [DOE] === RESULT drain=32 SPI=10MHz === PASS
+ 389344 [DOE]   fmax=6  ovf=0  sflp=4641  err=0  rec=0  T=28.1 g=+Z
+ 389344 [DOE]   read: calls=800  max=148us  avg=140us
+ 389345 [DOE] --- 5 s pause before next run ---
+.............................................
+ 434343 ========================================
+ 434344 === DOE RUN 6/6  drain=64  SPI=10MHz ===
+ 434344 ========================================
+ 434345 [DOE] >> KEEP STILL  (10 s)
+ 434345 [DOE] >> KEEP STILL  10s left  fmax=0 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 436343 [DOE] >> KEEP STILL  8s left  fmax=6 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 438343 [DOE] >> KEEP STILL  6s left  fmax=6 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 440343 [DOE] >> KEEP STILL  4s left  fmax=6 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 442343 [DOE] >> KEEP STILL  2s left  fmax=6 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 444343 [DOE] STILL done: fmax=6 ovf=0 err=0 sflp=1160 | read: n=200 max=147us avg=139us
+ 444344 [DOE] >> SHAKE HARD  (10 s)
+ 444345 [DOE] >> SHAKE HARD  10s left  fmax=6 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 446343 [DOE] >> SHAKE HARD  8s left  fmax=6 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 448343 [DOE] >> SHAKE HARD  6s left  fmax=6 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 450343 [DOE] >> SHAKE HARD  4s left  fmax=6 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 452343 [DOE] >> SHAKE HARD  2s left  fmax=6 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 454343 [DOE] SHAKE done: fmax=6 ovf=0 err=0 sflp=2320 | read: n=400 max=149us avg=139us
+ 454344 [DOE] >> KEEP STILL  (10 s recovery)
+ 454345 [DOE] >> KEEP STILL (recovery)  10s left  fmax=6 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 456343 [DOE] >> KEEP STILL (recovery)  8s left  fmax=6 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 458343 [DOE] >> KEEP STILL (recovery)  6s left  fmax=6 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 460343 [DOE] >> KEEP STILL (recovery)  4s left  fmax=6 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 462343 [DOE] >> KEEP STILL (recovery)  2s left  fmax=6 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 464343 [DOE] RECOV done: fmax=6 ovf=0 err=0 sflp=3480 | read: n=600 max=149us avg=140us
+ 464344 [DOE] >> TILT & TAP gently  (10 s)
+ 464345 [DOE] >> TILT & TAP gently  10s left  fmax=6 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 466343 [DOE] >> TILT & TAP gently  8s left  fmax=6 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 468343 [DOE] >> TILT & TAP gently  6s left  fmax=6 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 470343 [DOE] >> TILT & TAP gently  4s left  fmax=6 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 472343 [DOE] >> TILT & TAP gently  2s left  fmax=6 ovf=0 err=0  [6/6 dm=64 10MHz]
+.. 474343 [DOE] === RESULT drain=64 SPI=10MHz === PASS
+ 474344 [DOE]   fmax=6  ovf=0  sflp=4641  err=0  rec=0  T=28.1 g=+Z
+ 474344 [DOE]   read: calls=800  max=149us  avg=140us
+
+ 474345 ========================================
+ 474346 === ALL DOE RUNS COMPLETE ===
+ 474346 ========================================

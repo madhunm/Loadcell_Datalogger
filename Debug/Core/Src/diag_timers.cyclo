@@ -1,0 +1,11 @@
+../Core/Src/diag_timers.c:42:6:diagClkinInit	2
+../Core/Src/diag_timers.c:75:6:TIM8_UP_IRQHandler	2
+../Core/Src/diag_timers.c:84:10:diagClkinGetHz	1
+../Core/Src/diag_timers.c:96:13:snapCounters	2
+../Core/Src/diag_timers.c:116:6:diagClkinEnsureDwt	2
+../Core/Src/diag_timers.c:126:10:diagClkinMeasureHz	4
+../Core/Src/diag_timers.c:166:6:diagClkinStabilityTest	14
+../Core/Src/diag_timers.c:296:6:diagClkinPoll	4
+../Core/Src/diag_timers.c:339:6:diagDrdyTim3Overflow	1
+../Core/Src/diag_timers.c:344:6:diagDrdyInit	2
+../Core/Src/diag_timers.c:371:10:diagDrdyReadEdges	2

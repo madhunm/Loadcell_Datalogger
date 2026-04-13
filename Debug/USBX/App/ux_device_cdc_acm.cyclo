@@ -1,0 +1,4 @@
+../USBX/App/ux_device_cdc_acm.c:65:6:USBD_CDC_ACM_Activate	1
+../USBX/App/ux_device_cdc_acm.c:80:6:USBD_CDC_ACM_Deactivate	1
+../USBX/App/ux_device_cdc_acm.c:96:6:USBD_CDC_ACM_ParameterChange	1
+../USBX/App/ux_device_cdc_acm.c:106:25:cdc_acm_get_instance	1

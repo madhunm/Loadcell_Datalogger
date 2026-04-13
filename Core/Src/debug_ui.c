@@ -1,0 +1,570 @@
+/**
+ * @file debug_ui.c
+ * @brief VT220 ANSI status panel and scrolling debug log over USB CDC.
+ * @details Draws a 24-row status panel using VT220-compatible ANSI escape
+ *          sequences (cursor positioning, scroll region, CP437 box-drawing).
+ *          Field setters cache values and set dirty flags; uiUpdateFields()
+ *          redraws only dirty rows at rate-limited intervals:
+ *            - Fast fields (ADC, IMU): 100 ms
+ *            - Slow fields (battery, SD, log stats): 1000 ms
+ *
+ *          A parallel 1 Hz UART dump (uiUartDump) outputs the same data as
+ *          flat key=value lines on USART1 for headless serial debugging.
+ *
+ *          CDC RX is polled for single-character commands:
+ *            - 'd' / 'D': redraw the entire panel.
+ *
+ * @author Madhu
+ * @date   2026-04-12
+ * @see    VT220 Programmer Reference Manual (DEC), ANSI X3.64
+ */
+
+#include "debug_ui.h"
+#include "debug_uart.h"
+#include "ux_device_cdc_acm.h"
+#include "ux_api.h"
+#include "main.h"
+#include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
+
+#define PW          56            /**< Panel inner width (characters).    */
+#define PANEL_ROWS  24            /**< Total panel rows including borders. */
+#define LOG_TOP     (PANEL_ROWS + 1)
+#define LOG_BOT     53
+
+#define ESC_CLEAR    "\033[2J\033[H"
+#define ESC_SAVE     "\0337"
+#define ESC_RESTORE  "\0338"
+#define ESC_HIDE_CUR "\033[?25l"
+
+#define FAST_MS   100
+#define SLOW_MS   1000
+#define DUMP_MS   1000
+
+/* ── CDC-only and UART-only formatted output ─────────────────────── */
+
+static char _iobuf[192];
+
+/**
+ * @brief  printf to the CDC TX ring buffer only (no UART, no timestamp).
+ * @note   Used exclusively for VT220 escape sequences and panel rendering.
+ */
+static void cdcPrintf(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(_iobuf, sizeof(_iobuf), fmt, ap);
+    va_end(ap);
+    if (n > 0)
+    {
+        if (n > (int)sizeof(_iobuf) - 1) n = (int)sizeof(_iobuf) - 1;
+        cdcWrite((const uint8_t *)_iobuf, (uint32_t)n);
+    }
+}
+
+/** @brief vprintf variant for CDC (used by uiLog). */
+static void cdcVprintf(const char *fmt, va_list ap)
+{
+    int n = vsnprintf(_iobuf, sizeof(_iobuf), fmt, ap);
+    if (n > 0)
+    {
+        if (n > (int)sizeof(_iobuf) - 1) n = (int)sizeof(_iobuf) - 1;
+        cdcWrite((const uint8_t *)_iobuf, (uint32_t)n);
+    }
+}
+
+static char _uartbuf[192];
+
+/** @brief printf to USART1 only (no CDC, no timestamp). */
+static void uartPrintf(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(_uartbuf, sizeof(_uartbuf), fmt, ap);
+    va_end(ap);
+    if (n > 0)
+    {
+        if (n > (int)sizeof(_uartbuf) - 1) n = (int)sizeof(_uartbuf) - 1;
+        uartWrite((const uint8_t *)_uartbuf, (uint32_t)n);
+    }
+}
+
+/* ── CDC drawing helpers ─────────────────────────────────────────── */
+
+/** @brief Move the cursor to row @p r, column @p c (1-based). */
+static void gotoRc(int r, int c) { cdcPrintf("\033[%d;%dH", r, c); }
+
+/** @brief Draw a horizontal border with CP437 box-drawing end-caps. */
+static void border(char left, char right)
+{
+    char buf[PW + 4];
+    buf[0] = left;
+    memset(&buf[1], '\xcd', PW);
+    buf[PW + 1] = right;
+    buf[PW + 2] = '\0';
+    cdcPrintf("%s\r\n", buf);
+}
+
+/** @brief Print one panel row, padded to PW, wrapped in vertical-bar borders. */
+static void prow(const char *fmt, ...)
+{
+    char inner[PW + 1];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(inner, sizeof(inner), fmt, ap);
+    va_end(ap);
+    if (n < 0) n = 0;
+    if (n > PW) n = PW;
+    memset(inner + n, ' ', PW - n);
+    inner[PW] = '\0';
+    cdcPrintf("\xba%s\xba\r\n", inner);
+}
+
+/** @brief Overwrite the inner content of panel @p row in-place (no border redraw). */
+static void rowInner(int row, const char *fmt, ...)
+{
+    char inner[PW + 1];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(inner, sizeof(inner), fmt, ap);
+    va_end(ap);
+    if (n < 0) n = 0;
+    if (n > PW) n = PW;
+    memset(inner + n, ' ', PW - n);
+    inner[PW] = '\0';
+    gotoRc(row, 2);
+    cdcPrintf("%s", inner);
+}
+
+/* ── Cached field values ─────────────────────────────────────────── */
+
+static char     fState[16]     = "IDLE";
+
+static uint32_t fClkinHz       = 0;
+static uint32_t fDrdyHz        = 0;
+static int32_t  fCh0           = 0;
+static int32_t  fCh1           = 0;
+static float    fVratio        = 0.0f;
+static float    fForceN        = 0.0f;
+static uint32_t fAdcIn         = 0;
+static uint32_t fAdcOk         = 0;
+static uint32_t fAdcLost       = 0;
+
+static float    fAx = 0, fAy = 0, fAz = 0;
+static float    fGx = 0, fGy = 0, fGz = 0;
+static float    fDx = 0, fDy = 0, fDz = 0;
+static char     fGrav[4]   = "??";
+static float    fCoAx = 0, fCoAy = 0, fCoAz = 0;
+static float    fCoGx = 0, fCoGy = 0, fCoGz = 0;
+static float    fQw = 1, fQx = 0, fQy = 0, fQz = 0;
+static float    fRoll = 0, fPitch = 0, fYaw = 0;
+static float    fImuTemp       = 0.0f;
+
+static float    fVbat          = 0.0f;
+static uint8_t  fSoc           = 0;
+static char     fChg[12]       = "---";
+static char     fUsb[12]       = "---";
+static float    fMcuTemp       = 0.0f;
+static char     fSd[12]        = "---";
+static char     fCal[12]       = "---";
+static uint32_t fLogIn         = 0;
+static uint32_t fLogOk         = 0;
+static uint32_t fLogLost       = 0;
+static float    fWrittenMb     = 0.0f;
+static uint32_t fElapsedS      = 0;
+
+static uint8_t  dirtyFast      = 1;
+static uint8_t  dirtySlow      = 1;
+static uint32_t lastFast       = 0;
+static uint32_t lastSlow       = 0;
+static uint32_t lastDump       = 0;
+
+static uint8_t  cdcWasActive   = 0;
+
+/* ── Setters ─────────────────────────────────────────────────────── */
+
+void uiSetState(const char *state)
+{
+    strncpy(fState, state, sizeof(fState) - 1);
+    fState[sizeof(fState) - 1] = '\0';
+    dirtySlow = 1;
+}
+
+void uiSetClkinHz(uint32_t hz)  { fClkinHz = hz; dirtyFast = 1; }
+void uiSetDrdyHz(uint32_t hz)   { fDrdyHz = hz; dirtyFast = 1; }
+void uiSetForce(float newtons)  { fForceN = newtons; dirtyFast = 1; }
+void uiSetVratio(float volts)   { fVratio = volts; dirtyFast = 1; }
+
+void uiSetAdcCounts(int32_t ch0, int32_t ch1)
+{
+    fCh0 = ch0; fCh1 = ch1;
+    dirtyFast = 1;
+}
+
+void uiSetAdcRing(uint32_t in, uint32_t ok, uint32_t lost)
+{
+    fAdcIn = in; fAdcOk = ok; fAdcLost = lost;
+    dirtySlow = 1;
+}
+
+void uiSetAccel(float x, float y, float z)
+{
+    fAx = x; fAy = y; fAz = z;
+    dirtyFast = 1;
+}
+
+void uiSetGyro(float x, float y, float z)
+{
+    fGx = x; fGy = y; fGz = z;
+    dirtyFast = 1;
+}
+
+void uiSetImuDrift(float dx, float dy, float dz)
+{
+    fDx = dx; fDy = dy; fDz = dz;
+    dirtyFast = 1;
+}
+
+void uiSetImuGrav(const char *tag)
+{
+    strncpy(fGrav, tag, sizeof(fGrav) - 1);
+    fGrav[sizeof(fGrav) - 1] = '\0';
+    dirtySlow = 1;
+}
+
+void uiSetImuCal(float ax, float ay, float az,
+                 float gx, float gy, float gz)
+{
+    fCoAx = ax; fCoAy = ay; fCoAz = az;
+    fCoGx = gx; fCoGy = gy; fCoGz = gz;
+    dirtySlow = 1;
+}
+
+void uiSetImuTemp(float degC)
+{
+    fImuTemp = degC;
+    dirtyFast = 1;
+}
+
+void uiSetQuat(float w, float x, float y, float z)
+{
+    fQw = w; fQx = x; fQy = y; fQz = z;
+    dirtyFast = 1;
+}
+
+void uiSetEuler(float roll, float pitch, float yaw)
+{
+    fRoll = roll; fPitch = pitch; fYaw = yaw;
+    dirtyFast = 1;
+}
+
+void uiSetBattery(float volts, uint8_t socPct, const char *chgStr)
+{
+    fVbat = volts;
+    fSoc = socPct;
+    strncpy(fChg, chgStr, sizeof(fChg) - 1);
+    fChg[sizeof(fChg) - 1] = '\0';
+    dirtySlow = 1;
+}
+
+void uiSetUsbStatus(const char *status)
+{
+    strncpy(fUsb, status, sizeof(fUsb) - 1);
+    fUsb[sizeof(fUsb) - 1] = '\0';
+    dirtySlow = 1;
+}
+
+void uiSetMcuTemp(float degC)
+{
+    fMcuTemp = degC;
+    dirtySlow = 1;
+}
+
+void uiSetSdStatus(const char *status)
+{
+    strncpy(fSd, status, sizeof(fSd) - 1);
+    fSd[sizeof(fSd) - 1] = '\0';
+    dirtySlow = 1;
+}
+
+void uiSetCalSource(const char *source)
+{
+    strncpy(fCal, source, sizeof(fCal) - 1);
+    fCal[sizeof(fCal) - 1] = '\0';
+    dirtySlow = 1;
+}
+
+void uiSetLogStats(uint32_t in, uint32_t ok, uint32_t lost)
+{
+    fLogIn = in; fLogOk = ok; fLogLost = lost;
+    dirtySlow = 1;
+}
+
+void uiSetWritten(float mb, uint32_t elapsedS)
+{
+    fWrittenMb = mb;
+    fElapsedS = elapsedS;
+    dirtySlow = 1;
+}
+
+/* ── Panel drawing (CDC only) ────────────────────────────────────── */
+
+void uiDrawPanel(void)
+{
+    cdcPrintf(ESC_CLEAR ESC_HIDE_CUR);
+
+    border('\xc9', '\xbb');                                          /*  1 */
+    prow("  H562 PARACHUTE DATALOGGER  v1.0   STATE: %-8s", fState); /*  2 */
+    border('\xcc', '\xb9');                                          /*  3 */
+    prow("  ADC (ADS131M02)");                                       /*  4 */
+    prow("    CLKIN: -------  Hz   DRDY: -------  Hz");              /*  5 */
+    prow("    Ch0: ----------   Ch1: ----------  counts");           /*  6 */
+    prow("    Vratio: -.------  V   Force: -------.-- N");           /*  7 */
+    prow("    Ring: ------ in  ------ ok  ------ lost");             /*  8 */
+    border('\xcc', '\xb9');                                          /*  9 */
+    prow("  IMU (LSM6DSV LP1)              Grav: %-2s", fGrav);     /* 10 */
+    prow("    Accel X:------  Y:------  Z:------  m/s\xfd");        /* 11 */
+    prow("    Gyro  X:------  Y:------  Z:------  dps");            /* 12 */
+    prow("    Drift X:------  Y:------  Z:------  deg");            /* 13 */
+    prow("    CalOf a:------,------,------  g:------,------,------");/* 14 */
+    prow("    Quat  W:------ X:------ Y:------ Z:------");          /* 15 */
+    prow("    Euler R:------  P:------  Y:------  deg");             /* 16 */
+    prow("    Temp: -----.- C");                                     /* 17 */
+    border('\xcc', '\xb9');                                          /* 18 */
+    prow("  SYSTEM");                                                /* 19 */
+    prow("    Vbat: --.--V (--%%)  CHG: --------  USB: ---");       /* 20 */
+    prow("    SD: --------  Cal: --------");                         /* 21 */
+    prow("    Log: ------ in  ------ ok  ------ lost");              /* 22 */
+    prow("    Written: -----.- MB  Elapsed: --:--:--");              /* 23 */
+    border('\xc8', '\xbc');                                          /* 24 */
+
+    cdcPrintf("\033[%d;%dr", LOG_TOP, LOG_BOT);
+    gotoRc(LOG_TOP, 1);
+
+    cdcWasActive = (cdc_acm_get_instance() != UX_NULL);
+    dirtyFast = 1;
+    dirtySlow = 1;
+
+    uiLog("Panel ready. Press 'd' to redraw.");
+}
+
+/* ── Field updates (CDC only, rate-limited) ──────────────────────── */
+
+/** @brief Redraw fast-update panel rows (ADC + IMU, 10 Hz). */
+static void updateFastFields(void)
+{
+    if (fClkinHz > 0 || fDrdyHz > 0)
+        rowInner(5,  "    CLKIN: %-7lu  Hz   DRDY: %-7lu  Hz",
+                  (unsigned long)fClkinHz, (unsigned long)fDrdyHz);
+    else
+        rowInner(5,  "    CLKIN: -------  Hz   DRDY: -------  Hz");
+
+    if (fDrdyHz > 0)
+    {
+        rowInner(6,  "    Ch0: %-10ld   Ch1: %-10ld  counts",
+                  (long)fCh0, (long)fCh1);
+        rowInner(7,  "    Vratio: %+8.6f  V   Force: %+9.2f N",
+                  (double)fVratio, (double)fForceN);
+    }
+    else
+    {
+        rowInner(6,  "    Ch0: ----------   Ch1: ----------  counts");
+        rowInner(7,  "    Vratio: -.------  V   Force: -------.-- N");
+    }
+
+    if (fDrdyHz > 0)
+    {
+        rowInner(10, "  IMU (LSM6DSV 480Hz LP1)      Grav: %-2s", fGrav);
+        rowInner(11, "    Accel X:%+7.2f  Y:%+7.2f  Z:%+7.2f  m/s\xfd",
+                  (double)fAx, (double)fAy, (double)fAz);
+        rowInner(12, "    Gyro  X:%+7.1f  Y:%+7.1f  Z:%+7.1f  dps",
+                  (double)fGx, (double)fGy, (double)fGz);
+        rowInner(13, "    Drift X:%+7.2f  Y:%+7.2f  Z:%+7.2f  deg",
+                  (double)fDx, (double)fDy, (double)fDz);
+        rowInner(14, "    CalOf a:%+.2f,%+.2f,%+.2f g:%+.2f,%+.2f,%+.2f",
+                  (double)fCoAx, (double)fCoAy, (double)fCoAz,
+                  (double)fCoGx, (double)fCoGy, (double)fCoGz);
+        rowInner(15, "    Quat  W:%+6.3f X:%+6.3f Y:%+6.3f Z:%+6.3f",
+                  (double)fQw, (double)fQx, (double)fQy, (double)fQz);
+        rowInner(16, "    Euler R:%+7.2f  P:%+7.2f  Y:%+7.2f  deg",
+                  (double)fRoll, (double)fPitch, (double)fYaw);
+        rowInner(17, "    Temp: %+6.1f C", (double)fImuTemp);
+    }
+    else
+    {
+        rowInner(11, "    Accel X: ------  Y: ------  Z: ------  m/s\xfd");
+        rowInner(12, "    Gyro  X: ------  Y: ------  Z: ------  dps");
+        rowInner(13, "    Drift X: ------  Y: ------  Z: ------  deg");
+        rowInner(14, "    CalOf a:------,------,------  g:------,------,------");
+        rowInner(15, "    Quat  W: ------ X: ------ Y: ------ Z: ------");
+        rowInner(16, "    Euler R: ------  P: ------  Y: ------  deg");
+        rowInner(17, "    Temp: -----.- C");
+    }
+}
+
+/** @brief Redraw slow-update panel rows (system, 1 Hz). */
+static void updateSlowFields(void)
+{
+    rowInner(2, "  H562 PARACHUTE DATALOGGER  v1.0   STATE: %-8s",
+              fState);
+
+    rowInner(8, "    Ring: %-6lu in  %-6lu ok  %-6lu lost",
+              (unsigned long)fAdcIn, (unsigned long)fAdcOk,
+              (unsigned long)fAdcLost);
+
+    if (fVbat > 0.1f)
+    {
+        if (fSoc == 0xFF)
+            rowInner(20, "  Vbat:%5.2fV(---) %s USB:%-3s %4.1fC",
+                      (double)fVbat, fChg, fUsb, (double)fMcuTemp);
+        else
+            rowInner(20, "  Vbat:%5.2fV(%2u%%) %s USB:%-3s %4.1fC",
+                      (double)fVbat, fSoc, fChg, fUsb, (double)fMcuTemp);
+    }
+    else
+        rowInner(20, "  Vbat:--.--V(--%%)" " %s USB:%-3s %4.1fC",
+                  fChg, fUsb, (double)fMcuTemp);
+
+    rowInner(21, "    SD: %-8s  Cal: %-8s", fSd, fCal);
+
+    rowInner(22, "    Log: %-6lu in  %-6lu ok  %-6lu lost",
+              (unsigned long)fLogIn, (unsigned long)fLogOk,
+              (unsigned long)fLogLost);
+
+    {
+        uint32_t h = fElapsedS / 3600;
+        uint32_t m = (fElapsedS % 3600) / 60;
+        uint32_t s = fElapsedS % 60;
+        rowInner(23, "    Written: %7.1f MB  Elapsed: %02lu:%02lu:%02lu",
+                  (double)fWrittenMb,
+                  (unsigned long)h, (unsigned long)m, (unsigned long)s);
+    }
+}
+
+void uiUpdateFields(void)
+{
+    uint8_t cdcActive = (cdc_acm_get_instance() != UX_NULL);
+    if (cdcActive && !cdcWasActive)
+    {
+        cdcWasActive = 1;
+        uiDrawPanel();
+        return;
+    }
+    cdcWasActive = cdcActive;
+
+    uint32_t now = HAL_GetTick();
+
+    if (dirtyFast && (now - lastFast >= FAST_MS))
+    {
+        cdcPrintf(ESC_SAVE);
+        updateFastFields();
+        cdcPrintf(ESC_RESTORE);
+        dirtyFast = 0;
+        lastFast = now;
+    }
+
+    if (dirtySlow && (now - lastSlow >= SLOW_MS))
+    {
+        cdcPrintf(ESC_SAVE);
+        updateSlowFields();
+        cdcPrintf(ESC_RESTORE);
+        dirtySlow = 0;
+        lastSlow = now;
+    }
+}
+
+/* ── Scrolling log (CDC only) ────────────────────────────────────── */
+
+void uiLog(const char *fmt, ...)
+{
+    cdcPrintf(ESC_SAVE);
+    gotoRc(LOG_BOT, 1);
+
+    va_list ap;
+    va_start(ap, fmt);
+    cdcVprintf(fmt, ap);
+    va_end(ap);
+
+    cdcPrintf("\r\n");
+    cdcPrintf(ESC_RESTORE);
+}
+
+/* ── Continuous UART dump (UART only, 1 Hz) ──────────────────────── */
+
+void uiUartDump(void)
+{
+    uint32_t now = HAL_GetTick();
+    if (now - lastDump < DUMP_MS)
+        return;
+    lastDump = now;
+
+    uint32_t ts = now / 1000UL;
+    uint32_t h = fElapsedS / 3600;
+    uint32_t m = (fElapsedS % 3600) / 60;
+    uint32_t s = fElapsedS % 60;
+
+    uartPrintf("[%5lu] state=%-6s clkin=%lu drdy=%lu\r\n",
+                (unsigned long)ts, fState,
+                (unsigned long)fClkinHz, (unsigned long)fDrdyHz);
+
+    uartPrintf("  ch0=%-10ld ch1=%-10ld vratio=%+.6f force=%+.2f\r\n",
+                (long)fCh0, (long)fCh1,
+                (double)fVratio, (double)fForceN);
+
+    uartPrintf("  ring=%lu/%lu/%lu\r\n",
+                (unsigned long)fAdcIn, (unsigned long)fAdcOk,
+                (unsigned long)fAdcLost);
+
+    uartPrintf("  ax=%+.2f ay=%+.2f az=%+.2f"
+                " gx=%+.1f gy=%+.1f gz=%+.1f grav=%s\r\n",
+                (double)fAx, (double)fAy, (double)fAz,
+                (double)fGx, (double)fGy, (double)fGz, fGrav);
+
+    uartPrintf("  drift=%+.2f,%+.2f,%+.2f deg\r\n",
+                (double)fDx, (double)fDy, (double)fDz);
+
+    uartPrintf("  q=%+.3f,%+.3f,%+.3f,%+.3f"
+                " rpy=%+.1f,%+.1f,%+.1f\r\n",
+                (double)fQw, (double)fQx, (double)fQy, (double)fQz,
+                (double)fRoll, (double)fPitch, (double)fYaw);
+
+    if (fSoc == 0xFF)
+        uartPrintf("  vbat=%.2f soc=--- chg=%s usb=%s mcu=%.1fC\r\n",
+                    (double)fVbat, fChg, fUsb, (double)fMcuTemp);
+    else
+        uartPrintf("  vbat=%.2f soc=%u chg=%s usb=%s mcu=%.1fC\r\n",
+                    (double)fVbat, fSoc, fChg, fUsb, (double)fMcuTemp);
+
+    uartPrintf("  sd=%s log=%lu/%lu/%lu"
+                " wr=%.1fMB el=%02lu:%02lu:%02lu\r\n",
+                fSd,
+                (unsigned long)fLogIn, (unsigned long)fLogOk,
+                (unsigned long)fLogLost,
+                (double)fWrittenMb,
+                (unsigned long)h, (unsigned long)m, (unsigned long)s);
+}
+
+/* ── CDC RX for keypress commands ────────────────────────────────── */
+
+void uiProcessInput(void)
+{
+    UX_SLAVE_CLASS_CDC_ACM *cdc = cdc_acm_get_instance();
+    if (cdc == UX_NULL)
+        return;
+
+    static UCHAR rxBuf[8];
+    static ULONG actual = 0;
+    UINT status = ux_device_class_cdc_acm_read_run(cdc, rxBuf,
+                                                    sizeof(rxBuf), &actual);
+
+    if (status == UX_STATE_NEXT && actual > 0)
+    {
+        for (ULONG i = 0; i < actual; i++)
+        {
+            if (rxBuf[i] == 'd' || rxBuf[i] == 'D')
+                uiDrawPanel();
+        }
+        actual = 0;
+    }
+}

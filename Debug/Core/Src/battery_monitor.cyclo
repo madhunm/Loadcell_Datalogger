@@ -1,0 +1,16 @@
+../Core/Src/battery_monitor.c:118:17:adc1ReadChannel	3
+../Core/Src/battery_monitor.c:154:16:socFromVoltage	5
+../Core/Src/battery_monitor.c:182:22:decodeCharger	6
+../Core/Src/battery_monitor.c:212:16:computeMcuTempX10	1
+../Core/Src/battery_monitor.c:221:5:batteryInit	8
+../Core/Src/battery_monitor.c:270:6:batteryPoll	8
+../Core/Src/battery_monitor.c:325:7:batteryGetVoltage	1
+../Core/Src/battery_monitor.c:330:9:batteryGetSocPercent	1
+../Core/Src/battery_monitor.c:335:15:batteryGetChargeState	1
+../Core/Src/battery_monitor.c:340:13:batteryGetChargeStateStr	2
+../Core/Src/battery_monitor.c:347:6:batteryIsUsbConnected	1
+../Core/Src/battery_monitor.c:352:9:battGetMcuTempX10	1
+../Core/Src/battery_monitor.c:357:10:battGetVddaMv	1
+../Core/Src/battery_monitor.c:362:10:battGetVddCoreMv	1
+../Core/Src/battery_monitor.c:367:13:batteryGetSocStr	2
+../Core/Src/battery_monitor.c:376:13:batteryGetGpioDebugStr	1

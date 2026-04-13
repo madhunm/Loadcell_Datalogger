@@ -1,0 +1,65 @@
+---
+description: Doxygen commenting standard and naming conventions for all C source/header files
+globs: "**/*.{c,h}"
+alwaysApply: true
+---
+
+# Commenting Standard: Doxygen
+
+## File Headers (every .c and .h)
+
+```c
+/**
+ * @file    filename.c
+ * @brief   One-line summary of the module's purpose.
+ * @details What it does, why it exists, who feeds it (upstream), who consumes it (downstream).
+ * @author  Madhu
+ * @date    YYYY-MM-DD
+ */
+```
+
+## Function Documentation (every non-static public function)
+
+```c
+/**
+ * @brief  One-line summary of what the function does.
+ * @details Expanded explanation: algorithm, hardware interaction, timing constraints.
+ *
+ * @param[in]  name   Description (units, valid range, alignment requirements).
+ * @param[out] name   Description (what gets written, who reads it).
+ * @param[in,out] name  Description.
+ *
+ * @return Type  What the return value means (e.g., HAL_OK on success).
+ *
+ * @note   Hardware gotchas, errata workarounds, non-obvious constraints.
+ * @pre    What must be true before calling (e.g., "SPI1 must be idle").
+ * @post   What is guaranteed after return (e.g., "DMA TC interrupt armed").
+ * @see    Related functions, datasheet sections, RM0481 references.
+ */
+```
+
+## Inline Comments
+
+- Only for non-obvious logic, hardware quirks, errata references, or datasheet citations.
+- Reference datasheet sections: `/* See ADS131M02 datasheet Table 25, Section 9.5.2 */`
+- Never narrate what code obviously does (`/* increment counter */` is forbidden).
+
+## Tags to Always Use
+
+`@brief`, `@param[in/out]`, `@return`, `@note` (gotchas), `@pre`/`@post`, `@see` (cross-refs).
+
+# Naming Conventions
+
+| Category | Convention | Example |
+|---|---|---|
+| `#define` constants | `UPPER_SNAKE_CASE` | `ADC_FRAME_SIZE_BYTES` |
+| `enum` values | `UPPER_SNAKE_CASE` | `ADC_STATE_IDLE` |
+| `const` variables | `UPPER_SNAKE_CASE` | `MAX_CHANNEL_COUNT` |
+| Functions | `camelCase` | `ads131m02Init()` |
+| Local variables | `camelCase` | `frameCount` |
+| Global variables | `g_` prefix + `camelCase` | `g_adcReady` |
+| Struct/typedef names | `camelCase_t` | `adcConfig_t` |
+| Struct members | `camelCase` | `.sampleRate` |
+| Module prefix | `lowercase` | `ads131m02_`, `lsm6dsv_` |
+
+Do NOT rename HAL/CubeMX-generated identifiers (e.g., `hspi1`, `HAL_GPIO_ReadPin`). Only apply these conventions to application code we write.

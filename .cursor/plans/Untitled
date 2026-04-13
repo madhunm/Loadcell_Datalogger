@@ -1,0 +1,85 @@
+Apply the following corrections to the Phase 10b plan before implementation.
+Do not change anything else.
+
+## BLOCKER 1 — f_mkfs API version gate
+
+The f_fdisk version gate already exists. Apply the same gate to every f_mkfs call.
+
+R0.14b and earlier (5-argument form):
+  f_mkfs("0:", FM_FAT32, 0, fmtWork, sizeof(fmtWork));
+  f_mkfs("1:", FM_FAT32, 0, fmtWork, sizeof(fmtWork));
+
+R0.15 and later (4-argument form, MKFS_PARM struct):
+  const MKFS_PARM mp = {FM_FAT32, 0, 0, 0, 0};
+  f_mkfs("0:", &mp, fmtWork, sizeof(fmtWork));
+  f_mkfs("1:", &mp, fmtWork, sizeof(fmtWork));
+
+The version check is the same one already required beside f_fdisk. Both checks
+read from the same ff.c version string — do them once, apply to both calls.
+Record the confirmed version in a comment beside both f_fdisk and f_mkfs.
+
+## BLOCKER 2 — MX_FATFS_Init() must not mount any volume
+
+Remove all f_mount calls from MX_FATFS_Init(). It initialises the FATFS objects
+and disk layer only. No mounting occurs there.
+
+Add a single custom function to fatfs.c:
+  FRESULT sdMountAll(void);
+
+sdMountAll() performs in order:
+  1. Attempt f_mount(&FatFS, "0:", 1)
+  2. Attempt f_mount(&SysCalFatFS, "1:", 1)
+  3. If either returns FR_NO_FILESYSTEM, return FR_NO_FILESYSTEM to caller
+  4. On both success, return FR_OK
+
+main.c calls sdMountAll() after the first-boot detection block.
+First-boot detection calls sdMountAll() and branches on FR_NO_FILESYSTEM.
+After format, sdMountAll() is called again to mount the freshly created volumes.
+
+This eliminates double-mount and partial-format ambiguity.
+
+## GOTCHA 1 — adcGainCh1 / adcGainCh2 type
+
+Declare both fields as float in calConfig_t:
+  float adcGainCh1;   /* ADS131M02 CH0 gain: 1/2/4/8/16/32/128 stored as float */
+  float adcGainCh2;   /* ADS131M02 CH1 gain: always 1.0f */
+
+Change ads131m02SetGain signature to take float:
+  void ads131m02SetGain(float ch0Gain, float ch1Gain);
+
+Inside ads131m02SetGain, cast explicitly before writing the register:
+  uint8_t g0 = (uint8_t)ch0Gain;
+  uint8_t g1 = (uint8_t)ch1Gain;
+
+This makes the float-to-integer conversion explicit and compiler-warning-free.
+Update the header, source, and all call sites accordingly.
+
+## GOTCHA 2 — calScanFiles / calSelectViaUi ownership and selectedSerial
+
+Assign module ownership explicitly:
+
+calibration.c owns:
+  - calScanFiles(void) — scans "1:*.cal", populates module-static
+    g_calEntries[CAL_MAX_CELLS] and g_calEntryCount
+  - calibrationGetEntries(const calEntry_t **entries, uint8_t *count) —
+    exposes the array read-only to other modules
+
+debug_ui.c owns:
+  - uint32_t calSelectViaUi(void) — calls calibrationGetEntries() to build
+    the menu, blocks until valid digit key, returns selected serial number
+    directly as return value. HAL_IWDG_Refresh in poll loop as already specified.
+
+main.c usage:
+  calScanFiles();
+  uint32_t selectedSerial = calSelectViaUi();
+  calibrationLoadFromCal(selectedSerial);
+
+No shared globals between calibration.c and debug_ui.c beyond the getter.
+
+## MINOR — stdbool.h in main.c
+
+In USER CODE BEGIN Includes in main.c, add:
+  #include <stdbool.h>
+
+Required for bool / true / false used by the calLoaded flag.
+Do not rely on compiler or HAL headers pulling this in implicitly.
