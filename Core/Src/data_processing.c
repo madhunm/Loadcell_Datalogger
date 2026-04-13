@@ -16,6 +16,7 @@
  */
 
 #include "data_processing.h"
+#include "circular_buffer.h"
 #include "imu_lsm6dsv.h"
 #include "main.h"
 #include <math.h>
@@ -56,9 +57,7 @@ static uint16_t lastAdsStatus;
 
 /* ── Staging areas (ISR writes, main loop reads) ──────────────────── */
 
-volatile uint8_t      g_dpPendingAdcRecord;
 volatile uint8_t      g_dpPendingForceRecord;
-binAdcRecord_t        g_dpStagedAdc;
 binForceRecord_t      g_dpStagedForce;
 
 char     g_dpStagedCsv[DP_STAGED_CSV_MAX];
@@ -90,10 +89,8 @@ void dpInit(const calConfig_t *cal)
     forceRecordTotal = 0;
     lastAdsStatus   = 0;
 
-    g_dpPendingAdcRecord   = 0;
     g_dpPendingForceRecord = 0;
 
-    memset(&g_dpStagedAdc,   0, sizeof(g_dpStagedAdc));
     memset(&g_dpStagedForce, 0, sizeof(g_dpStagedForce));
     memset(g_dpStagedCsv, 0, sizeof(g_dpStagedCsv));
     g_dpStagedCsvLen = 0;
@@ -125,8 +122,12 @@ void dpFeedSample(int32_t ch0, int32_t ch1, uint16_t adsStatus)
         else
             rec.crc16 = 0x0000;
 
-        g_dpStagedAdc = rec;
-        g_dpPendingAdcRecord = 1;
+        if (g_loggingActive)
+        {
+            if (ringPush(ringDescBin(), &rec, sizeof(rec)) == sizeof(rec))
+                g_adcPushCount++;
+        }
+
         adcRecordTotal++;
     }
 
@@ -229,6 +230,11 @@ uint32_t dpGetAdcRecordCount(void)
 uint32_t dpGetForceRecordCount(void)
 {
     return forceRecordTotal;
+}
+
+uint16_t dpGetLastAdsStatus(void)
+{
+    return lastAdsStatus;
 }
 
 void dpFillImu(binForceRecord_t *rec)

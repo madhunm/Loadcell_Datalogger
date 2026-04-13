@@ -1,3 +1,5 @@
-../Core/Src/app_state.c:19:12:appStateGet	1
-../Core/Src/app_state.c:24:6:appStateSet	1
-../Core/Src/app_state.c:29:6:appStateCanStartLogging	3
+../Core/Src/app_state.c:16:12:appStateGet	1
+../Core/Src/app_state.c:21:6:appStateSet	1
+../Core/Src/app_state.c:26:6:appStateCanStartLogging	3
+../Core/Src/app_state.c:36:6:appStateButtonIsr	1
+../Core/Src/app_state.c:41:6:appStateConsumeButtonPress	2

@@ -1,12 +1,8 @@
 /**
  * @file    app_state.c
- * @brief   Application state machine — minimal stub for USB logging gate.
- * @details Phase 11 builds the full state machine.  This stub returns
- *          STATE_IDLE and gates logging based on USB connection status.
- *          Upstream: battery_monitor (USB sense).
- *          Downstream: main (button handler), logger (Phase 11).
+ * @brief   Application state machine implementation.
  * @author  Madhu
- * @date    2026-04-12
+ * @date    2026-04-13
  */
 
 #include "app_state.h"
@@ -14,7 +10,8 @@
 #include "calibration.h"
 #include <stdio.h>
 
-static appState_t g_appState = STATE_IDLE;
+static appState_t        g_appState = STATE_IDLE;
+static volatile uint8_t g_buttonLatch = 0U;
 
 appState_t appStateGet(void)
 {
@@ -33,5 +30,18 @@ bool appStateCanStartLogging(void)
         printf("[APP] logging BLOCKED: USB connected & allowLogOnUsb=0\r\n");
         return false;
     }
+    return true;
+}
+
+void appStateButtonIsr(void)
+{
+    g_buttonLatch = 1U;
+}
+
+bool appStateConsumeButtonPress(void)
+{
+    if (g_buttonLatch == 0U)
+        return false;
+    g_buttonLatch = 0U;
     return true;
 }

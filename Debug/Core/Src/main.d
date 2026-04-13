@@ -65,10 +65,11 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
  ../Core/Inc/neopixel.h ../Core/Inc/led_status.h \
  ../Core/Inc/battery_monitor.h ../Core/Inc/app_state.h \
  ../Core/Inc/calibration.h ../Core/Inc/data_processing.h \
- ../Core/Inc/log_record.h ../Core/Inc/calibration.h ../FATFS/App/fatfs.h \
+ ../Core/Inc/log_record.h ../Core/Inc/calibration.h \
+ ../Core/Inc/circular_buffer.h ../Core/Inc/sdmmc_fatfs.h \
  ../Middlewares/Third_Party/FatFs/src/ff.h \
- ../Middlewares/Third_Party/FatFs/src/ffconf.h \
- ../USBX/App/ux_device_cdc_acm.h \
+ ../Middlewares/Third_Party/FatFs/src/ffconf.h ../Core/Inc/log_record.h \
+ ../FATFS/App/fatfs.h ../USBX/App/ux_device_cdc_acm.h \
  ../Middlewares/Third_Party/FatFs/src/diskio.h
 ../Core/Inc/main.h:
 ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal.h:
@@ -158,8 +159,11 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
 ../Core/Inc/data_processing.h:
 ../Core/Inc/log_record.h:
 ../Core/Inc/calibration.h:
-../FATFS/App/fatfs.h:
+../Core/Inc/circular_buffer.h:
+../Core/Inc/sdmmc_fatfs.h:
 ../Middlewares/Third_Party/FatFs/src/ff.h:
 ../Middlewares/Third_Party/FatFs/src/ffconf.h:
+../Core/Inc/log_record.h:
+../FATFS/App/fatfs.h:
 ../USBX/App/ux_device_cdc_acm.h:
 ../Middlewares/Third_Party/FatFs/src/diskio.h:

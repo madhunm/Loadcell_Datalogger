@@ -1,7 +1,5 @@
-Core/Src/data_processing.o: ../Core/Src/data_processing.c \
- ../Core/Inc/data_processing.h ../Core/Inc/log_record.h \
- ../Core/Inc/calibration.h ../Core/Inc/circular_buffer.h \
- ../Core/Inc/imu_lsm6dsv.h ../Core/Inc/main.h \
+Core/Src/circular_buffer.o: ../Core/Src/circular_buffer.c \
+ ../Core/Inc/circular_buffer.h \
  ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal.h \
  ../Core/Inc/stm32h5xx_hal_conf.h \
  ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal_rcc.h \
@@ -49,12 +47,7 @@ Core/Src/data_processing.o: ../Core/Src/data_processing.c \
  ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal_cordic.h \
  ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal_exti.h \
  ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal_fmac.h
-../Core/Inc/data_processing.h:
-../Core/Inc/log_record.h:
-../Core/Inc/calibration.h:
 ../Core/Inc/circular_buffer.h:
-../Core/Inc/imu_lsm6dsv.h:
-../Core/Inc/main.h:
 ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal.h:
 ../Core/Inc/stm32h5xx_hal_conf.h:
 ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal_rcc.h:

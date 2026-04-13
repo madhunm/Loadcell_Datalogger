@@ -1,3 +1,5 @@
-../Core/Src/app_state.c:19:12:appStateGet	4	static
-../Core/Src/app_state.c:24:6:appStateSet	16	static
-../Core/Src/app_state.c:29:6:appStateCanStartLogging	8	static
+../Core/Src/app_state.c:16:12:appStateGet	4	static
+../Core/Src/app_state.c:21:6:appStateSet	16	static
+../Core/Src/app_state.c:26:6:appStateCanStartLogging	8	static
+../Core/Src/app_state.c:36:6:appStateButtonIsr	4	static
+../Core/Src/app_state.c:41:6:appStateConsumeButtonPress	4	static

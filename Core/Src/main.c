@@ -50,10 +50,14 @@
 #include "app_state.h"
 #include "calibration.h"
 #include "data_processing.h"
+#include "circular_buffer.h"
+#include "sdmmc_fatfs.h"
+#include "log_record.h"
 #include "fatfs.h"
 #include "ux_device_cdc_acm.h"
 #include "ux_dcd_stm32.h"
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #include "ff.h"
@@ -81,6 +85,9 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+
+static sdSession_t g_sdSession;
+static uint32_t    s_logBtnDebounceMs;
 
 /* USER CODE END PV */
 
@@ -428,6 +435,8 @@ sdDone:
       ads131m02SetGain(calibrationGet()->adcGainCh1,
                        calibrationGet()->adcGainCh2);
       dpInit(calibrationGet());
+      ringInit(ringDescBin());
+      ringInit(ringDescCsv());
 
       {
           char     calBuf[24];
@@ -507,22 +516,202 @@ sdDone:
     cdcPoll();
     diagClkinPoll();
 
-    /* ── Phase 10: drain pending decimation records (needs valid cal) ─ */
-    if (calLoaded)
+    /* ── Phase 11: logging FSM, force→ring, SD flush (needs valid cal + SD) ─ */
+    if (calLoaded && sdReady)
     {
-      if (g_dpPendingAdcRecord)
+      appState_t stLog = appStateGet();
+
+      if (appStateConsumeButtonPress())
       {
-        g_dpPendingAdcRecord = 0;
-        /* Phase 11: ring_push(&g_dpStagedAdc, sizeof(g_dpStagedAdc)); */
+        uint32_t nowBtn = HAL_GetTick();
+        if ((nowBtn - s_logBtnDebounceMs) >= 300U)
+        {
+          s_logBtnDebounceMs = nowBtn;
+
+          if (stLog == STATE_IDLE && appStateCanStartLogging())
+          {
+            dpTare();
+            FRESULT sfr = sdSessionOpen(&g_sdSession);
+            if (sfr != FR_OK)
+            {
+              printf("[LOG] sdSessionOpen failed: %d\r\n", (int)sfr);
+              appStateSet(STATE_ERROR);
+              ledStatusSetSub(LED_SUB_SD, LED_LEVEL_ERROR);
+              ledStatusSetSys(LED_SYS_ERROR);
+            }
+            else
+            {
+              g_loggingActive = true;
+              appStateSet(STATE_LOGGING);
+              ledStatusSetLogging(true);
+              ledStatusSetSub(LED_SUB_LOGGER, LED_LEVEL_OK);
+            }
+          }
+          else if (stLog == STATE_LOGGING)
+          {
+            g_loggingActive = false;
+            appStateSet(STATE_STOPPING);
+          }
+        }
       }
+
       if (g_dpPendingForceRecord)
       {
         g_dpPendingForceRecord = 0;
         dpFillImu(&g_dpStagedForce);
-        dpFormatForceCsvLine(&g_dpStagedForce);
-        /* Phase 11: ring_push(&g_dpStagedForce, sizeof(g_dpStagedForce)); */
-        /* Phase 11: ring_push CSV bytes g_dpStagedCsv, g_dpStagedCsvLen */
+        if (calibrationGet()->enableAdcCrc)
+          g_dpStagedForce.crc16 = crc16Ccitt((const uint8_t *)&g_dpStagedForce, 30);
+        else
+          g_dpStagedForce.crc16 = 0x0000;
+
+        if (g_loggingActive)
+        {
+          if (ringPush(ringDescBin(), &g_dpStagedForce, sizeof(g_dpStagedForce))
+              == sizeof(g_dpStagedForce))
+            g_forcePushCount++;
+
+          dpFormatForceCsvLine(&g_dpStagedForce);
+          if (ringPush(ringDescCsv(), g_dpStagedCsv, g_dpStagedCsvLen)
+              == (uint32_t)g_dpStagedCsvLen)
+            g_sdSession.csvCount++;
+        }
       }
+
+      stLog = appStateGet();
+      if ((stLog == STATE_LOGGING || stLog == STATE_STOPPING) && g_sdSession.isOpen)
+      {
+        while (ringUsed(ringDescBin()) >= 4096U)
+        {
+          const uint8_t *p;
+          uint32_t       avail = ringDrainContiguous(ringDescBin(), &p);
+          uint32_t       chunk = avail > 4096U ? 4096U : avail;
+          if (chunk == 0U)
+            break;
+          if (sdSessionWriteBinChunk(&g_sdSession, p, (UINT)chunk) != FR_OK)
+          {
+            g_loggingActive = false;
+            (void)sdSessionClose(&g_sdSession);
+            appStateSet(STATE_ERROR);
+            ledStatusSetSys(LED_SYS_ERROR);
+            break;
+          }
+          ringAdvanceTail(ringDescBin(), chunk);
+        }
+
+        {
+          uint32_t usedBin = ringUsed(ringDescBin());
+          if (usedBin > g_sdSession.ringPeakUsed)
+            g_sdSession.ringPeakUsed = usedBin;
+
+          static bool inPressure;
+          uint32_t pct = usedBin * 100U / RING_BIN_SIZE;
+          if (pct > 75U)
+          {
+            if (!inPressure)
+            {
+              inPressure = true;
+              g_sdSession.pressureEvents++;
+              printf("[LOG] ring pressure >75%%\r\n");
+            }
+          }
+          else if (pct < 50U)
+          {
+            inPressure = false;
+          }
+        }
+
+        if (appStateGet() == STATE_STOPPING)
+        {
+          while (ringUsed(ringDescBin()) > 0U)
+          {
+            const uint8_t *p;
+            uint32_t       avail = ringDrainContiguous(ringDescBin(), &p);
+            if (avail == 0U)
+              break;
+            uint32_t chunk = avail > 4096U ? 4096U : avail;
+            if (sdSessionWriteBinChunk(&g_sdSession, p, (UINT)chunk) != FR_OK)
+            {
+              g_loggingActive = false;
+              (void)sdSessionClose(&g_sdSession);
+              appStateSet(STATE_ERROR);
+              ledStatusSetSys(LED_SYS_ERROR);
+              break;
+            }
+            ringAdvanceTail(ringDescBin(), chunk);
+          }
+        }
+
+        while (ringUsed(ringDescCsv()) > 0U)
+        {
+          const uint8_t *p;
+          uint32_t       avail = ringDrainContiguous(ringDescCsv(), &p);
+          if (avail == 0U)
+            break;
+          if (sdSessionWriteCsvChunk(&g_sdSession, p, (UINT)avail) != FR_OK)
+          {
+            g_loggingActive = false;
+            (void)sdSessionClose(&g_sdSession);
+            appStateSet(STATE_ERROR);
+            ledStatusSetSys(LED_SYS_ERROR);
+            break;
+          }
+          ringAdvanceTail(ringDescCsv(), avail);
+        }
+
+        sdSessionTrySync(&g_sdSession);
+
+        {
+          static uint32_t s_lastMetaMs;
+          uint32_t        nowM = HAL_GetTick();
+          if (appStateGet() == STATE_LOGGING && g_loggingActive
+              && ((nowM - s_lastMetaMs) >= 1000U))
+          {
+            s_lastMetaMs = nowM;
+            binMetaRecord_t meta;
+            memset(&meta, 0, sizeof(meta));
+            meta.type          = REC_TYPE_META;
+            meta.secondNum     = (uint16_t)(((nowM - g_sdSession.sessionStartTick) / 1000U) & 0xFFFFU);
+            meta.clkinHz       = diagClkinGetHz();
+            meta.mcuTempX10    = battGetMcuTempX10();
+            meta.batteryMv     = (uint16_t)(batteryGetVoltage() * 1000.0f);
+            meta.drdyTotal     = ads131m02GetStats()->drdyCount;
+            meta.missTotal     = ads131m02GetStats()->missCount;
+            meta.overflowTotal = g_binRing.overflow;
+            meta.adsStatus     = dpGetLastAdsStatus();
+            meta.crc16         = crc16Ccitt((uint8_t *)&meta, offsetof(binMetaRecord_t, crc16));
+            if (ringPush(ringDescBin(), &meta, sizeof(meta)) == sizeof(meta))
+              g_sdSession.metaCount++;
+          }
+        }
+
+        {
+          static uint32_t s_lastLogUartMs;
+          uint32_t        nowL = HAL_GetTick();
+          if (appStateGet() == STATE_LOGGING && ((nowL - s_lastLogUartMs) >= 1000U))
+          {
+            s_lastLogUartMs = nowL;
+            printf("LOG: t=%lus adc=%lu force=%lu ovf=%lu ring=%lu%% stall=%lums\r\n",
+                   (unsigned long)((nowL - g_sdSession.sessionStartTick) / 1000U),
+                   (unsigned long)(g_adcPushCount - g_sdSession.adcPushBase),
+                   (unsigned long)(g_forcePushCount - g_sdSession.forcePushBase),
+                   (unsigned long)(g_binRing.overflow - g_sdSession.overflowBase),
+                   (unsigned long)(ringUsed(ringDescBin()) * 100U / RING_BIN_SIZE),
+                   (unsigned long)g_sdSession.stallMaxMs);
+          }
+        }
+
+        if (appStateGet() == STATE_STOPPING && (ringUsed(ringDescBin()) == 0U)
+            && (ringUsed(ringDescCsv()) == 0U))
+        {
+          (void)sdSessionClose(&g_sdSession);
+          appStateSet(STATE_IDLE);
+          ledStatusSetLogging(false);
+        }
+      }
+    }
+
+    if (calLoaded)
+    {
 
       /* ── Phase 10: force UI update at ~10 Hz ───────────────────── */
       {
@@ -540,8 +729,6 @@ sdDone:
     uiUpdateFields();
 #endif
     uiProcessInput();
-    if (calLoaded && uiConsumeTareRequest())
-      dpTare();
 
     /* ── ADC stats (1 Hz, UI feed only — no serial print) ─────── */
     {
@@ -767,6 +954,16 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+/**
+ * @brief  HAL EXTI rising callback — logStart button only (EXTI4).
+ * @note   ADC DRDY uses the fast EXTI2 path; never handled here.
+ */
+void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin)
+{
+  if (GPIO_Pin == logStart_Pin)
+    appStateButtonIsr();
+}
 
 /* USER CODE END 4 */
 

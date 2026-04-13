@@ -1,13 +1,10 @@
 /**
  * @file    app_state.h
- * @brief   Application state machine — minimal stub for USB logging gate.
- * @details Phase 11 builds the full state machine.  This stub provides the
- *          state enum and the USB logging-gate check consumed by the button
- *          handler.
- *          Upstream: battery_monitor (USB sense).
- *          Downstream: main (button handler), logger (Phase 11).
+ * @brief   Application state machine — logging states and USB policy gate.
+ * @details States IDLE / LOGGING / STOPPING / ERROR with logStart button ISR
+ *          flag consumed from the main loop (debounced).  EXTI4 for logStart only.
  * @author  Madhu
- * @date    2026-04-12
+ * @date    2026-04-13
  */
 
 #ifndef APP_STATE_H
@@ -19,33 +16,43 @@ extern "C" {
 
 #include <stdbool.h>
 
-/** @brief  Top-level application states (expanded in Phase 11). */
+/** @brief  Top-level application states. */
 typedef enum {
-    STATE_IDLE,     /**< No logging, waiting for button press */
-    STATE_LOGGING,  /**< Actively writing data to SD          */
-    STATE_ERROR,    /**< Fatal error, logging stopped          */
+    STATE_IDLE,      /**< No logging */
+    STATE_LOGGING,   /**< Session open, g_loggingActive may gate ISR push */
+    STATE_STOPPING,  /**< Draining rings before sdSessionClose */
+    STATE_ERROR,     /**< SD or fatal fault */
 } appState_t;
 
 /**
  * @brief  Get the current application state.
- * @return Current state (defaults to STATE_IDLE in this stub).
+ * @return Current state.
  */
 appState_t appStateGet(void);
 
 /**
- * @brief  Set the application state (e.g. STATE_ERROR after calibration fault).
+ * @brief  Set the application state.
  * @param[in] state  New state.
  */
 void appStateSet(appState_t state);
 
 /**
- * @brief  Check whether logging is permitted based on USB connection.
- * @details If allowLogOnUsb == 0 and USB VBUS is present, logging is
- *          blocked to prevent data corruption from USB enumeration resets.
- * @return true if logging may start, false if blocked by USB policy.
- * @note   allowLogOnUsb comes from factory `.cal` via calibrationGet() (Phase 10b).
+ * @brief  Check whether logging is permitted (USB policy from calibration).
+ * @return true if logging may start.
  */
 bool appStateCanStartLogging(void);
+
+/**
+ * @brief  EXTI callback entry — sets internal button flag (debounce in main).
+ * @note   Call only from HAL_GPIO_EXTI_Rising_Callback for logStart_Pin.
+ */
+void appStateButtonIsr(void);
+
+/**
+ * @brief  Return true once per button interrupt edge (clears internal latch).
+ * @return true if a rising edge was latched since last call.
+ */
+bool appStateConsumeButtonPress(void);
 
 #ifdef __cplusplus
 }

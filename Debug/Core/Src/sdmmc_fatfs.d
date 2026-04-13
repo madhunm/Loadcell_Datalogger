@@ -1,7 +1,14 @@
-Core/Src/data_processing.o: ../Core/Src/data_processing.c \
- ../Core/Inc/data_processing.h ../Core/Inc/log_record.h \
- ../Core/Inc/calibration.h ../Core/Inc/circular_buffer.h \
- ../Core/Inc/imu_lsm6dsv.h ../Core/Inc/main.h \
+Core/Src/sdmmc_fatfs.o: ../Core/Src/sdmmc_fatfs.c \
+ ../Core/Inc/sdmmc_fatfs.h ../Middlewares/Third_Party/FatFs/src/ff.h \
+ ../Middlewares/Third_Party/FatFs/src/ffconf.h \
+ ../Core/Inc/adc_ads131m02.h ../USBX/App/app_usbx.h \
+ ../Middlewares/ST/usbx/common/core/inc/ux_api.h \
+ ../Middlewares/ST/usbx/ports/generic/inc/ux_port.h ../USBX/App/ux_user.h \
+ ../Middlewares/ST/usbx/common/core/inc/ux_utility.h \
+ ../Middlewares/ST/usbx/common/core/inc/ux_system.h \
+ ../USBX/App/app_usbx_device.h ../USBX/App/ux_device_cdc_acm.h \
+ ../Middlewares/ST/usbx/common/usbx_device_classes/inc/ux_device_class_cdc_acm.h \
+ ../USBX/App/ux_device_descriptors.h ../USBX/Target/ux_stm32_config.h \
  ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal.h \
  ../Core/Inc/stm32h5xx_hal_conf.h \
  ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal_rcc.h \
@@ -48,13 +55,26 @@ Core/Src/data_processing.o: ../Core/Src/data_processing.c \
  ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal_pcd_ex.h \
  ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal_cordic.h \
  ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal_exti.h \
- ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal_fmac.h
-../Core/Inc/data_processing.h:
-../Core/Inc/log_record.h:
-../Core/Inc/calibration.h:
-../Core/Inc/circular_buffer.h:
-../Core/Inc/imu_lsm6dsv.h:
-../Core/Inc/main.h:
+ ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal_fmac.h \
+ ../Middlewares/ST/usbx/common/usbx_stm32_device_controllers/ux_dcd_stm32.h \
+ ../Core/Inc/calibration.h ../Core/Inc/circular_buffer.h \
+ ../Core/Inc/debug_uart.h ../Core/Inc/diag_timers.h \
+ ../Core/Inc/log_record.h ../Core/Inc/osc_ltc6903.h
+../Core/Inc/sdmmc_fatfs.h:
+../Middlewares/Third_Party/FatFs/src/ff.h:
+../Middlewares/Third_Party/FatFs/src/ffconf.h:
+../Core/Inc/adc_ads131m02.h:
+../USBX/App/app_usbx.h:
+../Middlewares/ST/usbx/common/core/inc/ux_api.h:
+../Middlewares/ST/usbx/ports/generic/inc/ux_port.h:
+../USBX/App/ux_user.h:
+../Middlewares/ST/usbx/common/core/inc/ux_utility.h:
+../Middlewares/ST/usbx/common/core/inc/ux_system.h:
+../USBX/App/app_usbx_device.h:
+../USBX/App/ux_device_cdc_acm.h:
+../Middlewares/ST/usbx/common/usbx_device_classes/inc/ux_device_class_cdc_acm.h:
+../USBX/App/ux_device_descriptors.h:
+../USBX/Target/ux_stm32_config.h:
 ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal.h:
 ../Core/Inc/stm32h5xx_hal_conf.h:
 ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal_rcc.h:
@@ -102,3 +122,10 @@ Core/Src/data_processing.o: ../Core/Src/data_processing.c \
 ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal_cordic.h:
 ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal_exti.h:
 ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal_fmac.h:
+../Middlewares/ST/usbx/common/usbx_stm32_device_controllers/ux_dcd_stm32.h:
+../Core/Inc/calibration.h:
+../Core/Inc/circular_buffer.h:
+../Core/Inc/debug_uart.h:
+../Core/Inc/diag_timers.h:
+../Core/Inc/log_record.h:
+../Core/Inc/osc_ltc6903.h:

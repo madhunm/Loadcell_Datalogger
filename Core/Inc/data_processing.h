@@ -8,8 +8,9 @@
  *          dpFillImu() runs in the main loop (SPI2 + SysTick deadlock if called
  *          from priority-0 GPDMA ISR).  After IMU fill, dpFormatForceCsvLine()
  *          builds `$,time_ms,load_N,#` for Phase 11 CSV ring push.
- *          Records use staging globals and pending flags; Phase 11 replaces
- *          flags with ringPush from ISR/main.
+ *          ADC records: ringPush(ringDescBin()) from ISR when g_loggingActive.
+ *          Force: ISR stages g_dpStagedForce + pending flag; main fills IMU,
+ *          then ringPush binary + CSV (SPI2 not in ISR).
  *
  *          Upstream:  adsFastComplete() in adc_ads131m02.c
  *          Downstream: main loop polling, debug_ui force display, Phase 11 ring
@@ -60,10 +61,8 @@ void dpFeedSample(int32_t ch0, int32_t ch1, uint16_t adsStatus);
 
 /* ── Staging areas (written by ISR, read by main loop) ────────────── */
 
-extern volatile uint8_t      g_dpPendingAdcRecord;
 extern volatile uint8_t      g_dpPendingForceRecord;
 
-extern binAdcRecord_t        g_dpStagedAdc;
 extern binForceRecord_t      g_dpStagedForce;
 
 /** Max length of CSV line `$,time_ms,load_N,#\\r\\n` (Phase 11 copies to CSV ring). */
@@ -126,6 +125,12 @@ uint32_t dpGetAdcRecordCount(void);
  * @return Total binForceRecord_t records since dpInit().
  */
 uint32_t dpGetForceRecordCount(void);
+
+/**
+ * @brief  Last ADS131M02 STATUS word seen in dpFeedSample (ISR context).
+ * @return 16-bit STATUS register snapshot for metadata records.
+ */
+uint16_t dpGetLastAdsStatus(void);
 
 #ifdef __cplusplus
 }

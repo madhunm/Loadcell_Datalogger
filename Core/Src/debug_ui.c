@@ -13,10 +13,9 @@
  *
  *          CDC RX is polled for single-character commands:
  *            - 'd' / 'D': redraw the entire panel.
- *            - 't' / 'T': request tare (main loop calls dpTare when cal loaded).
  *
  * @author Madhu
- * @date   2026-04-12
+ * @date   2026-04-13
  * @see    VT220 Programmer Reference Manual (DEC), ANSI X3.64
  */
 
@@ -47,9 +46,6 @@ extern IWDG_HandleTypeDef hiwdg;
 #define FAST_MS   100
 #define SLOW_MS   1000
 #define DUMP_MS   1000
-
-/** Set by CDC RX; cleared by uiConsumeTareRequest() in main. */
-static volatile uint8_t sUiTareRequest;
 
 /* ── CDC-only and UART-only formatted output ─────────────────────── */
 
@@ -637,17 +633,7 @@ void uiProcessInput(void)
             char c = (char)rxBuf[i];
             if (c == 'd' || c == 'D')
                 uiDrawPanel();
-            else if (c == 't' || c == 'T')
-                sUiTareRequest = 1U;
         }
         actual = 0;
     }
-}
-
-uint8_t uiConsumeTareRequest(void)
-{
-    if (sUiTareRequest == 0U)
-        return 0U;
-    sUiTareRequest = 0U;
-    return 1U;
 }

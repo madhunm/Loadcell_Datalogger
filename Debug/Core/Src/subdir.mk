@@ -10,6 +10,7 @@ C_SRCS += \
 ../Core/Src/app_state.c \
 ../Core/Src/battery_monitor.c \
 ../Core/Src/calibration.c \
+../Core/Src/circular_buffer.c \
 ../Core/Src/cordic.c \
 ../Core/Src/crc.c \
 ../Core/Src/custom_bus.c \
@@ -28,6 +29,7 @@ C_SRCS += \
 ../Core/Src/osc_ltc6903.c \
 ../Core/Src/rtc.c \
 ../Core/Src/sdmmc.c \
+../Core/Src/sdmmc_fatfs.c \
 ../Core/Src/spi.c \
 ../Core/Src/stm32h5xx_hal_msp.c \
 ../Core/Src/stm32h5xx_hal_timebase_tim.c \
@@ -45,6 +47,7 @@ OBJS += \
 ./Core/Src/app_state.o \
 ./Core/Src/battery_monitor.o \
 ./Core/Src/calibration.o \
+./Core/Src/circular_buffer.o \
 ./Core/Src/cordic.o \
 ./Core/Src/crc.o \
 ./Core/Src/custom_bus.o \
@@ -63,6 +66,7 @@ OBJS += \
 ./Core/Src/osc_ltc6903.o \
 ./Core/Src/rtc.o \
 ./Core/Src/sdmmc.o \
+./Core/Src/sdmmc_fatfs.o \
 ./Core/Src/spi.o \
 ./Core/Src/stm32h5xx_hal_msp.o \
 ./Core/Src/stm32h5xx_hal_timebase_tim.o \
@@ -80,6 +84,7 @@ C_DEPS += \
 ./Core/Src/app_state.d \
 ./Core/Src/battery_monitor.d \
 ./Core/Src/calibration.d \
+./Core/Src/circular_buffer.d \
 ./Core/Src/cordic.d \
 ./Core/Src/crc.d \
 ./Core/Src/custom_bus.d \
@@ -98,6 +103,7 @@ C_DEPS += \
 ./Core/Src/osc_ltc6903.d \
 ./Core/Src/rtc.d \
 ./Core/Src/sdmmc.d \
+./Core/Src/sdmmc_fatfs.d \
 ./Core/Src/spi.d \
 ./Core/Src/stm32h5xx_hal_msp.d \
 ./Core/Src/stm32h5xx_hal_timebase_tim.d \
@@ -117,7 +123,7 @@ Core/Src/%.o Core/Src/%.su Core/Src/%.cyclo: ../Core/Src/%.c Core/Src/subdir.mk
 clean: clean-Core-2f-Src
 
 clean-Core-2f-Src:
-	-$(RM) ./Core/Src/adc.cyclo ./Core/Src/adc.d ./Core/Src/adc.o ./Core/Src/adc.su ./Core/Src/adc_ads131m02.cyclo ./Core/Src/adc_ads131m02.d ./Core/Src/adc_ads131m02.o ./Core/Src/adc_ads131m02.su ./Core/Src/app_state.cyclo ./Core/Src/app_state.d ./Core/Src/app_state.o ./Core/Src/app_state.su ./Core/Src/battery_monitor.cyclo ./Core/Src/battery_monitor.d ./Core/Src/battery_monitor.o ./Core/Src/battery_monitor.su ./Core/Src/calibration.cyclo ./Core/Src/calibration.d ./Core/Src/calibration.o ./Core/Src/calibration.su ./Core/Src/cordic.cyclo ./Core/Src/cordic.d ./Core/Src/cordic.o ./Core/Src/cordic.su ./Core/Src/crc.cyclo ./Core/Src/crc.d ./Core/Src/crc.o ./Core/Src/crc.su ./Core/Src/custom_bus.cyclo ./Core/Src/custom_bus.d ./Core/Src/custom_bus.o ./Core/Src/custom_bus.su ./Core/Src/data_processing.cyclo ./Core/Src/data_processing.d ./Core/Src/data_processing.o ./Core/Src/data_processing.su ./Core/Src/debug_uart.cyclo ./Core/Src/debug_uart.d ./Core/Src/debug_uart.o ./Core/Src/debug_uart.su ./Core/Src/debug_ui.cyclo ./Core/Src/debug_ui.d ./Core/Src/debug_ui.o ./Core/Src/debug_ui.su ./Core/Src/diag_timers.cyclo ./Core/Src/diag_timers.d ./Core/Src/diag_timers.o ./Core/Src/diag_timers.su ./Core/Src/fmac.cyclo ./Core/Src/fmac.d ./Core/Src/fmac.o ./Core/Src/fmac.su ./Core/Src/gpdma.cyclo ./Core/Src/gpdma.d ./Core/Src/gpdma.o ./Core/Src/gpdma.su ./Core/Src/gpio.cyclo ./Core/Src/gpio.d ./Core/Src/gpio.o ./Core/Src/gpio.su ./Core/Src/icache.cyclo ./Core/Src/icache.d ./Core/Src/icache.o ./Core/Src/icache.su ./Core/Src/imu_lsm6dsv.cyclo ./Core/Src/imu_lsm6dsv.d ./Core/Src/imu_lsm6dsv.o ./Core/Src/imu_lsm6dsv.su ./Core/Src/led_status.cyclo ./Core/Src/led_status.d ./Core/Src/led_status.o ./Core/Src/led_status.su ./Core/Src/main.cyclo ./Core/Src/main.d ./Core/Src/main.o ./Core/Src/main.su ./Core/Src/neopixel.cyclo ./Core/Src/neopixel.d ./Core/Src/neopixel.o ./Core/Src/neopixel.su ./Core/Src/osc_ltc6903.cyclo ./Core/Src/osc_ltc6903.d ./Core/Src/osc_ltc6903.o ./Core/Src/osc_ltc6903.su ./Core/Src/rtc.cyclo ./Core/Src/rtc.d ./Core/Src/rtc.o ./Core/Src/rtc.su ./Core/Src/sdmmc.cyclo ./Core/Src/sdmmc.d ./Core/Src/sdmmc.o ./Core/Src/sdmmc.su ./Core/Src/spi.cyclo ./Core/Src/spi.d ./Core/Src/spi.o ./Core/Src/spi.su ./Core/Src/stm32h5xx_hal_msp.cyclo ./Core/Src/stm32h5xx_hal_msp.d ./Core/Src/stm32h5xx_hal_msp.o ./Core/Src/stm32h5xx_hal_msp.su ./Core/Src/stm32h5xx_hal_timebase_tim.cyclo ./Core/Src/stm32h5xx_hal_timebase_tim.d ./Core/Src/stm32h5xx_hal_timebase_tim.o ./Core/Src/stm32h5xx_hal_timebase_tim.su ./Core/Src/stm32h5xx_it.cyclo ./Core/Src/stm32h5xx_it.d ./Core/Src/stm32h5xx_it.o ./Core/Src/stm32h5xx_it.su ./Core/Src/syscalls.cyclo ./Core/Src/syscalls.d ./Core/Src/syscalls.o ./Core/Src/syscalls.su ./Core/Src/sysmem.cyclo ./Core/Src/sysmem.d ./Core/Src/sysmem.o ./Core/Src/sysmem.su ./Core/Src/system_stm32h5xx.cyclo ./Core/Src/system_stm32h5xx.d ./Core/Src/system_stm32h5xx.o ./Core/Src/system_stm32h5xx.su ./Core/Src/tim.cyclo ./Core/Src/tim.d ./Core/Src/tim.o ./Core/Src/tim.su ./Core/Src/usart.cyclo ./Core/Src/usart.d ./Core/Src/usart.o ./Core/Src/usart.su ./Core/Src/usb.cyclo ./Core/Src/usb.d ./Core/Src/usb.o ./Core/Src/usb.su
+	-$(RM) ./Core/Src/adc.cyclo ./Core/Src/adc.d ./Core/Src/adc.o ./Core/Src/adc.su ./Core/Src/adc_ads131m02.cyclo ./Core/Src/adc_ads131m02.d ./Core/Src/adc_ads131m02.o ./Core/Src/adc_ads131m02.su ./Core/Src/app_state.cyclo ./Core/Src/app_state.d ./Core/Src/app_state.o ./Core/Src/app_state.su ./Core/Src/battery_monitor.cyclo ./Core/Src/battery_monitor.d ./Core/Src/battery_monitor.o ./Core/Src/battery_monitor.su ./Core/Src/calibration.cyclo ./Core/Src/calibration.d ./Core/Src/calibration.o ./Core/Src/calibration.su ./Core/Src/circular_buffer.cyclo ./Core/Src/circular_buffer.d ./Core/Src/circular_buffer.o ./Core/Src/circular_buffer.su ./Core/Src/cordic.cyclo ./Core/Src/cordic.d ./Core/Src/cordic.o ./Core/Src/cordic.su ./Core/Src/crc.cyclo ./Core/Src/crc.d ./Core/Src/crc.o ./Core/Src/crc.su ./Core/Src/custom_bus.cyclo ./Core/Src/custom_bus.d ./Core/Src/custom_bus.o ./Core/Src/custom_bus.su ./Core/Src/data_processing.cyclo ./Core/Src/data_processing.d ./Core/Src/data_processing.o ./Core/Src/data_processing.su ./Core/Src/debug_uart.cyclo ./Core/Src/debug_uart.d ./Core/Src/debug_uart.o ./Core/Src/debug_uart.su ./Core/Src/debug_ui.cyclo ./Core/Src/debug_ui.d ./Core/Src/debug_ui.o ./Core/Src/debug_ui.su ./Core/Src/diag_timers.cyclo ./Core/Src/diag_timers.d ./Core/Src/diag_timers.o ./Core/Src/diag_timers.su ./Core/Src/fmac.cyclo ./Core/Src/fmac.d ./Core/Src/fmac.o ./Core/Src/fmac.su ./Core/Src/gpdma.cyclo ./Core/Src/gpdma.d ./Core/Src/gpdma.o ./Core/Src/gpdma.su ./Core/Src/gpio.cyclo ./Core/Src/gpio.d ./Core/Src/gpio.o ./Core/Src/gpio.su ./Core/Src/icache.cyclo ./Core/Src/icache.d ./Core/Src/icache.o ./Core/Src/icache.su ./Core/Src/imu_lsm6dsv.cyclo ./Core/Src/imu_lsm6dsv.d ./Core/Src/imu_lsm6dsv.o ./Core/Src/imu_lsm6dsv.su ./Core/Src/led_status.cyclo ./Core/Src/led_status.d ./Core/Src/led_status.o ./Core/Src/led_status.su ./Core/Src/main.cyclo ./Core/Src/main.d ./Core/Src/main.o ./Core/Src/main.su ./Core/Src/neopixel.cyclo ./Core/Src/neopixel.d ./Core/Src/neopixel.o ./Core/Src/neopixel.su ./Core/Src/osc_ltc6903.cyclo ./Core/Src/osc_ltc6903.d ./Core/Src/osc_ltc6903.o ./Core/Src/osc_ltc6903.su ./Core/Src/rtc.cyclo ./Core/Src/rtc.d ./Core/Src/rtc.o ./Core/Src/rtc.su ./Core/Src/sdmmc.cyclo ./Core/Src/sdmmc.d ./Core/Src/sdmmc.o ./Core/Src/sdmmc.su ./Core/Src/sdmmc_fatfs.cyclo ./Core/Src/sdmmc_fatfs.d ./Core/Src/sdmmc_fatfs.o ./Core/Src/sdmmc_fatfs.su ./Core/Src/spi.cyclo ./Core/Src/spi.d ./Core/Src/spi.o ./Core/Src/spi.su ./Core/Src/stm32h5xx_hal_msp.cyclo ./Core/Src/stm32h5xx_hal_msp.d ./Core/Src/stm32h5xx_hal_msp.o ./Core/Src/stm32h5xx_hal_msp.su ./Core/Src/stm32h5xx_hal_timebase_tim.cyclo ./Core/Src/stm32h5xx_hal_timebase_tim.d ./Core/Src/stm32h5xx_hal_timebase_tim.o ./Core/Src/stm32h5xx_hal_timebase_tim.su ./Core/Src/stm32h5xx_it.cyclo ./Core/Src/stm32h5xx_it.d ./Core/Src/stm32h5xx_it.o ./Core/Src/stm32h5xx_it.su ./Core/Src/syscalls.cyclo ./Core/Src/syscalls.d ./Core/Src/syscalls.o ./Core/Src/syscalls.su ./Core/Src/sysmem.cyclo ./Core/Src/sysmem.d ./Core/Src/sysmem.o ./Core/Src/sysmem.su ./Core/Src/system_stm32h5xx.cyclo ./Core/Src/system_stm32h5xx.d ./Core/Src/system_stm32h5xx.o ./Core/Src/system_stm32h5xx.su ./Core/Src/tim.cyclo ./Core/Src/tim.d ./Core/Src/tim.o ./Core/Src/tim.su ./Core/Src/usart.cyclo ./Core/Src/usart.d ./Core/Src/usart.o ./Core/Src/usart.su ./Core/Src/usb.cyclo ./Core/Src/usb.d ./Core/Src/usb.o ./Core/Src/usb.su
 
 .PHONY: clean-Core-2f-Src
 

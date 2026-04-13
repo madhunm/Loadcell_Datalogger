@@ -1,0 +1,10 @@
+../Core/Inc/log_record.h:169:24:crc16Ccitt	32	static
+../Core/Src/sdmmc_fatfs.c:33:13:sdMeasureWriteStall	24	static
+../Core/Src/sdmmc_fatfs.c:51:13:sdUsbKeepaliveIfSlow	16	static
+../Core/Src/sdmmc_fatfs.c:65:16:sdWriteBinHeader	96	static
+../Core/Src/sdmmc_fatfs.c:111:16:sdWriteCsvHeader	32	static
+../Core/Src/sdmmc_fatfs.c:128:9:sdSessionOpen	128	static
+../Core/Src/sdmmc_fatfs.c:243:9:sdSessionWriteBinChunk	40	static
+../Core/Src/sdmmc_fatfs.c:258:9:sdSessionWriteCsvChunk	40	static
+../Core/Src/sdmmc_fatfs.c:273:6:sdSessionTrySync	24	static
+../Core/Src/sdmmc_fatfs.c:290:9:sdSessionClose	80	static
