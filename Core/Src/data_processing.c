@@ -152,10 +152,18 @@ void dpFeedSample(int32_t ch0, int32_t ch1, uint16_t adsStatus)
         int64_t absAccCh1 = accCh1_128 < 0 ? -accCh1_128 : accCh1_128;
         if (absAccCh1 >= CH1_MIN_ABS_THRESHOLD)
         {
-            rec.forceN = ((float)accCh0_128 / (float)accCh1_128)
-                         * (3.3f / pCal->sensitivityUvPerN) * 1e6f
-                         - pCal->tareOffsetN;
-            rec.validity |= VALIDITY_ADC_OK;
+            float denom = pCal->sensitivityUvPerN * pCal->cellCorrFactor;
+            if (denom > 1e-12f)
+            {
+                rec.forceN = ((float)accCh0_128 / (float)accCh1_128)
+                             * (3.3f * CH1_DIV_RATIO * 1e6f / denom)
+                             - pCal->tareOffsetN;
+                rec.validity |= VALIDITY_ADC_OK;
+            }
+            else
+            {
+                rec.forceN = 0.0f;
+            }
         }
         else
         {

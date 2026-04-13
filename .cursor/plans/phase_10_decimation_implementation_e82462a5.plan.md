@@ -27,6 +27,8 @@ isProject: false
 
 **Phase Jump Acknowledgment:** Phase 9 closure is pending due to external hardware dependencies. This one-time jump to Phase 10 is approved by the user.
 
+**Supersession (Phase 10b):** Production calibration is **not** loaded from `config.txt`. [Phase 10b](phase_10b_cal_sd_partitions_751257fe.plan.md) replaces the text parser with binary **`.cal`** files on the SYSCAL volume, VT220 cell selection, **`cellCorrFactor`**, **`CH1_DIV_RATIO`** in the force equation, and **`ads131m02SetGain()`** after a successful cal load. This Phase 10 plan remains the historical spec for decimation/ISR/data_processing architecture; treat **`calibration.c`** / boot integration descriptions as superseded where they conflict with Phase 10b.
+
 ## Architecture Overview
 
 ```mermaid
@@ -85,16 +87,15 @@ The CRC16 implementation (table-driven, poly 0x1021, init 0xFFFF) goes in a smal
 ### 2. [Core/Inc/calibration.h](Core/Inc/calibration.h) + [Core/Src/calibration.c](Core/Src/calibration.c) (new)
 
 **Header** defines:
-- `calConfig_t` struct — `sensitivityUvPerN`, `adcGainCh1/Ch2`, `offsetCh1/Ch2`, `tareOffsetN`, `battDividerRatio`, `preallocMb`, `enableAdcCrc`, `allowLogOnUsb`
+- `calConfig_t` struct — `sensitivityUvPerN`, `adcGainCh1/Ch2`, `offsetCh1/Ch2`, `tareOffsetN`, `battDividerRatio`, `preallocMb`, `enableAdcCrc`, `allowLogOnUsb` (Phase 10b adds `cellCorrFactor` and binary **`.cal`** API — see [Phase 10b](phase_10b_cal_sd_partitions_751257fe.plan.md))
 - `calSource_t` enum — `CAL_SRC_DEFAULT`, `CAL_SRC_SD_FILE`, `CAL_SRC_FLASH`
 - `calibrationLoad()`, `calibrationGetSource()`, `calibrationGet()`, `calibrationSetTare()`
 
-**Source** implements:
+**Source** (initial Phase 10 deliverable):
 - Hardcoded defaults (sensitivity=2.0, gains=1, offsets=0, tare=0, preallocMb=64, enableAdcCrc=0, allowLogOnUsb=1)
-- FatFS-based parser: `f_open("0:config.txt")`, `f_gets()` line-by-line, `key = value` via `sscanf`/`strtof`
-- Whitespace trimming, BOM skip, unknown keys silently ignored
-- Per-key serial print: `printf("CAL: %s = %s\r\n", key, valueStr)`
-- Summary: `printf("CAL: loaded %d/%d keys from %s\r\n", ...)`
+- FatFS-based parser: `f_open("0:config.txt")`, bulk read / line split, `key = value` parsing *(removed in Phase 10b — replaced by `calibrationLoadFromCal()`)*
+
+**Post–Phase 10b:** no `config.txt` on production cards; factory **`Tools/write_cal.py`** must match firmware **`crc16Ccitt()`** (table in `log_record.h`).
 
 ### 3. [Core/Inc/data_processing.h](Core/Inc/data_processing.h) + [Core/Src/data_processing.c](Core/Src/data_processing.c) (new)
 
@@ -141,7 +142,7 @@ This single call is the entry point — all decimation and record assembly happe
 
 **USER CODE BEGIN Includes:** Add `#include "calibration.h"` and `#include "data_processing.h"`.
 
-**USER CODE BEGIN 2** (after SD mount, before `ads131m02StartContinuous()`): Add `calibrationLoad()` + `dpInit(calibrationGet())` + update UI cal source from `calibrationGetSource()`.
+**USER CODE BEGIN 2** (after SD mount, before `ads131m02StartContinuous()`): Integrate calibration + `dpInit` per boot policy. **Phase 10 (original):** `calibrationLoad()` + `dpInit(calibrationGet())` + UI cal source. **Phase 10b:** dual-partition mount, optional first-boot format + MBR patch, `calScanFiles` / `calSelectViaUi` / `calibrationLoadFromCal`, then `ads131m02SetGain` + `dpInit` + `ads131m02StartContinuous` only if `CAL_SRC_SD_FILE` — see [Phase 10b §6](phase_10b_cal_sd_partitions_751257fe.plan.md).
 
 **Main loop (USER CODE BEGIN 3):** Add:
 - Pending record drain (clear flags, placeholder for Phase 11 ring push)
@@ -165,8 +166,8 @@ The files must be created/edited in dependency order so the code compiles at eac
 
 ## Verification (user builds manually)
 
-After all files are created/edited, the user should build in STM32CubeIDE. Expected serial output:
-- `CAL: loaded from SD, sensitivity=2.000 uV/N` (or `CAL: using defaults`)
+After all files are created/edited, the user should build in STM32CubeIDE. Expected serial output (Phase 10 baseline; **Phase 10b** changes cal lines to `.cal` load / `SN:` / fault paths):
+- `CAL: loaded from SD, sensitivity=2.000 uV/N` (or `CAL: using defaults`) — *superseded by Phase 10b `.cal` load*
 - `DECIM: ADC=8000/s FORCE=500/s` at 1 Hz
 - Force field on VT220 UI updates at 10 Hz
 - Zero DRDY misses over 60 s (verify `missCount` unchanged)

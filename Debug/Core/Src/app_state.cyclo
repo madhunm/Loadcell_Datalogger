@@ -1,2 +1,3 @@
-../Core/Src/app_state.c:20:12:appStateGet	1
-../Core/Src/app_state.c:25:6:appStateCanStartLogging	3
+../Core/Src/app_state.c:22:12:appStateGet	1
+../Core/Src/app_state.c:27:6:appStateSet	1
+../Core/Src/app_state.c:32:6:appStateCanStartLogging	3

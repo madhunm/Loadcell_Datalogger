@@ -1,1 +1,2 @@
-../FATFS/App/fatfs.c:16:6:MX_FATFS_Init	16	static
+../FATFS/App/fatfs.c:25:6:MX_FATFS_Init	4	static
+../FATFS/App/fatfs.c:35:9:sdMountAll	16	static

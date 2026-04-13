@@ -156,6 +156,17 @@ typedef struct {
 int      ads131m02Init(void);
 
 /**
+ * @brief  Apply PGA gains from calibration (after ads131m02Init, before streaming).
+ * @details Writes GAIN1 (reg 0x04). CH0 and CH1 gains are powers of two in 1..128
+ *          (64 unsupported). Init leaves 1×/1×; this applies factory values.
+ * @param[in] ch0Gain  CH0 (bridge) PGA gain as float (1, 2, 4, …, 128).
+ * @param[in] ch1Gain  CH1 (excitation sense) PGA gain — typically 1.0.
+ * @pre    EXTI2 disabled; not in continuous DMA mode.
+ * @see    ADS131M02 datasheet Table 16 (GAIN1 register).
+ */
+void     ads131m02SetGain(float ch0Gain, float ch1Gain);
+
+/**
  * @brief  Read a single 16-bit register (two-frame pipelined read).
  * @param[in] addr  Register address (0x00–0x3E).
  * @return 16-bit register value.

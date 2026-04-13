@@ -223,6 +223,58 @@ int ads131m02Init(void)
     return err;
 }
 
+/**
+ * @brief  Set ADS131M02 GAIN1 register from per-channel float gains.
+ * @details See ADS131M02 datasheet Table 16 (GAIN1 register): bits 10:8 = CH1,
+ *          bits 2:0 = CH0. Encoding uses a LUT; gain 64 is invalid (idx 6).
+ */
+void ads131m02SetGain(float ch0Gain, float ch1Gain)
+{
+    if ((uint32_t)ch0Gain == 0U || (uint32_t)ch1Gain == 0U)
+    {
+        printf("[ADS] ERROR: zero gain value rejected\r\n");
+        return;
+    }
+
+    uint32_t g0 = (uint32_t)ch0Gain;
+    uint32_t g1 = (uint32_t)ch1Gain;
+
+    if ((g0 & (g0 - 1U)) != 0U || (g1 & (g1 - 1U)) != 0U)
+    {
+        printf("[ADS] ERROR: gains must be powers of two (1…128, not 64)\r\n");
+        return;
+    }
+
+    uint8_t idxCh0 = (uint8_t)__builtin_ctz(g0);
+    uint8_t idxCh1 = (uint8_t)__builtin_ctz(g1);
+
+    if (idxCh0 > 7U || idxCh1 > 7U || idxCh0 == 6U || idxCh1 == 6U)
+    {
+        printf("[ADS] ERROR: invalid PGA gain code (reject 64×)\r\n");
+        return;
+    }
+
+    /* See ADS131M02 datasheet Table 16 — GAIN1 register */
+    static const uint8_t gainLut[8] = {
+        0x00,  /* 1×   */
+        0x01,  /* 2×   */
+        0x02,  /* 4×   */
+        0x03,  /* 8×   */
+        0x04,  /* 16×  */
+        0x05,  /* 32×  */
+        0x00,  /* 64× — invalid on device */
+        0x07,  /* 128× */
+    };
+
+    uint16_t gainReg = ((uint16_t)gainLut[idxCh1] << 8) | gainLut[idxCh0];
+
+    if (ads131m02WriteReg(ADS_REG_GAIN1, gainReg) != 0)
+        printf("[ADS] ERROR: GAIN1 register write failed\r\n");
+    else
+        printf("[ADS] GAIN1 = 0x%04X (CH0 gain=%.0f CH1 gain=%.0f)\r\n",
+               gainReg, (double)ch0Gain, (double)ch1Gain);
+}
+
 void ads131m02DumpRegs(void)
 {
     static const struct { uint8_t addr; const char *name; } regs[] = {

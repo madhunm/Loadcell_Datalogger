@@ -48,6 +48,13 @@ void uiUartDump(void);
 /** @brief Poll CDC RX for single-character commands (e.g. 'd' = redraw panel). */
 void uiProcessInput(void);
 
+/**
+ * @brief  Blocking VT220 menu to pick a factory .cal cell by serial.
+ * @return Selected serial number, or 0 if none / error.
+ * @note   Calls calibrationGetEntries(); does not load the .cal file.
+ */
+uint32_t calSelectViaUi(void);
+
 /* ── State ───────────────────────────────────────────────────────── */
 
 /**

@@ -33,6 +33,12 @@ typedef enum {
 appState_t appStateGet(void);
 
 /**
+ * @brief  Set the application state (e.g. STATE_ERROR after calibration fault).
+ * @param[in] state  New state.
+ */
+void appStateSet(appState_t state);
+
+/**
  * @brief  Check whether logging is permitted based on USB connection.
  * @details If allowLogOnUsb == 0 and USB VBUS is present, logging is
  *          blocked to prevent data corruption from USB enumeration resets.

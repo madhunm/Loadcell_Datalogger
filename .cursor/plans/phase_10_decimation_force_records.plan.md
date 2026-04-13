@@ -1,6 +1,6 @@
 ---
 name: Phase 10 Two-Stage Decimation, Force Calculation, and Record Assembly
-overview: "Implement two-stage boxcar decimation (64 kHz→8 kHz→500 Hz), ratiometric force calculation, calibration loading from config.txt, tare function, record type structs (log_record.h), and CSV line formatting — all running inside the DMA-complete ISR context with CRC16 on every record."
+overview: Implement two-stage boxcar decimation (64 kHz→8 kHz→500 Hz), ratiometric force calculation, calibration loading from config.txt, tare function, record type structs (log_record.h), and CSV line formatting — all running inside the DMA-complete ISR context with CRC16 on every record.
 todos:
   - id: create-log-record-h
     content: "Create Core/Inc/log_record.h: packed struct definitions for binFileHeader_t (64B), binAdcRecord_t (16B), binForceRecord_t (32B), binMetaRecord_t (32B), validity flags, CRC16-CCITT helper"
@@ -12,7 +12,7 @@ todos:
     content: "Create Core/Src/data_processing.c + Core/Inc/data_processing.h: two-stage boxcar decimation, forceN calculation, record assembly, CSV line formatting, tare logic"
     status: pending
   - id: wire-isr
-    content: "Wire dpFeedSample() into DMA-complete ISR in adc_ads131m02.c, add g_dpPendingAdcRecord / g_dpPendingForceRecord flags"
+    content: Wire dpFeedSample() into DMA-complete ISR in adc_ads131m02.c, add g_dpPendingAdcRecord / g_dpPendingForceRecord flags
     status: pending
   - id: integrate-main
     content: "Edit main.c: add includes, call calibrationLoad() after FatFS mount, add decimation rate diagnostic print, add tare command stub"
@@ -21,7 +21,7 @@ todos:
     content: "Update debug_ui.c: feed ui_set_force() at 10 Hz from latest force record, show calibration source (calSource_t / calibrationGetSource())"
     status: pending
   - id: verify-build
-    content: "Build, verify record rates (8000/s ADC, 500/s force), force reads ~0N unloaded after tare, CSV format correct, zero DRDY misses over 60 s"
+    content: Build, verify record rates (8000/s ADC, 500/s force), force reads ~0N unloaded after tare, CSV format correct, zero DRDY misses over 60 s
     status: pending
 isProject: false
 ---

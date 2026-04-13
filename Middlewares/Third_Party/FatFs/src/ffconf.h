@@ -11,12 +11,12 @@
 
 #define FF_FS_READONLY	0
 #define FF_FS_MINIMIZE	0
-#define FF_USE_FIND		0
+#define FF_USE_FIND		1
 #define FF_USE_MKFS		1	/* Allow formatting from firmware */
 #define FF_USE_FASTSEEK	1	/* Pre-allocation for logging */
 #define FF_USE_EXPAND	0
 #define FF_USE_CHMOD	0
-#define FF_USE_LABEL	0
+#define FF_USE_LABEL	1
 #define FF_USE_FORWARD	0
 
 #define FF_USE_STRFUNC	0
@@ -43,11 +43,11 @@
 / Drive/Volume Configurations
 /---------------------------------------------------------------------------*/
 
-#define FF_VOLUMES		1
+#define FF_VOLUMES		2
 #define FF_STR_VOLUME_ID	0
 #define FF_VOLUME_STRS		"SD"
 
-#define FF_MULTI_PARTITION	0
+#define FF_MULTI_PARTITION	1
 
 #define FF_MIN_SS		512
 #define FF_MAX_SS		512

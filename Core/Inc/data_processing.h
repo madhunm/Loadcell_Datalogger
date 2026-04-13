@@ -26,12 +26,18 @@ extern "C" {
 #include "log_record.h"
 #include "calibration.h"
 
+/**
+ * @brief CH1 excitation-sense voltage divider ratio (R6/(R3+R6)).
+ * @details Fixed hardware — not a calibration parameter.
+ */
+#define CH1_DIV_RATIO  (33.0f / 133.0f)
+
 /* ── Initialisation ───────────────────────────────────────────────── */
 
 /**
  * @brief  Initialise the decimation pipeline.
  * @param[in] cal  Pointer to the active calibration config (must remain valid).
- * @pre    calibrationLoad() must have been called.
+ * @pre    Valid calibration loaded (e.g. calibrationLoadFromCal success).
  * @post   All accumulators zeroed, sequence counters reset, logStartTick captured.
  */
 void dpInit(const calConfig_t *cal);

@@ -20,10 +20,15 @@
  */
 
 #include "debug_ui.h"
+#include "calibration.h"
 #include "debug_uart.h"
 #include "ux_device_cdc_acm.h"
 #include "ux_api.h"
 #include "main.h"
+#if defined(HAL_IWDG_MODULE_ENABLED)
+#include "stm32h5xx_hal_iwdg.h"
+extern IWDG_HandleTypeDef hiwdg;
+#endif
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
@@ -543,6 +548,69 @@ void uiUartDump(void)
                 (unsigned long)fLogLost,
                 (double)fWrittenMb,
                 (unsigned long)h, (unsigned long)m, (unsigned long)s);
+}
+
+/* ── Boot-time cell selection (CDC) ──────────────────────────────── */
+
+uint32_t calSelectViaUi(void)
+{
+    const calEntry_t *ent = NULL;
+    uint8_t           n    = 0;
+
+    calibrationGetEntries(&ent, &n);
+
+    if (n == 0U || ent == NULL)
+        return 0U;
+
+    if (n == 1U)
+        return ent[0].serial;
+
+    cdcPrintf(ESC_SAVE);
+    cdcPrintf("\033[25;1H\033[K");
+    cdcPrintf("  === SELECT LOAD CELL ===\r\n");
+
+    for (uint8_t i = 0; i < n; i++)
+    {
+        cdcPrintf("  [%u] SN %lu\r\n",
+                  (unsigned)(i + 1U), (unsigned long)ent[i].serial);
+    }
+
+    cdcPrintf("\r\n  Press 1-%u to select:\r\n", (unsigned)n);
+    cdcPrintf(ESC_RESTORE);
+
+    for (;;)
+    {
+#if defined(HAL_IWDG_MODULE_ENABLED)
+        HAL_IWDG_Refresh(&hiwdg);
+#endif
+        ux_system_tasks_run();
+        cdcPoll();
+
+        UX_SLAVE_CLASS_CDC_ACM *cdc = cdc_acm_get_instance();
+        if (cdc == UX_NULL)
+            continue;
+
+        static UCHAR rxBuf[8];
+        static ULONG actual = 0;
+        UINT         status = ux_device_class_cdc_acm_read_run(cdc, rxBuf,
+                                                                sizeof(rxBuf),
+                                                                &actual);
+
+        if (status == UX_STATE_NEXT && actual > 0U)
+        {
+            for (ULONG i = 0; i < actual; i++)
+            {
+                char c = (char)rxBuf[i];
+                if (c >= '1' && c <= '8')
+                {
+                    uint8_t idx = (uint8_t)(c - '1');
+                    if (idx < n)
+                        return ent[idx].serial;
+                }
+            }
+            actual = 0;
+        }
+    }
 }
 
 /* ── CDC RX for keypress commands ────────────────────────────────── */

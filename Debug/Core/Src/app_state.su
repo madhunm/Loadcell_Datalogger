@@ -1,2 +1,3 @@
-../Core/Src/app_state.c:20:12:appStateGet	4	static
-../Core/Src/app_state.c:25:6:appStateCanStartLogging	8	static
+../Core/Src/app_state.c:22:12:appStateGet	4	static
+../Core/Src/app_state.c:27:6:appStateSet	16	static
+../Core/Src/app_state.c:32:6:appStateCanStartLogging	8	static

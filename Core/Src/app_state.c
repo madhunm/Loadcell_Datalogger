@@ -17,9 +17,16 @@
  *          0 = production (block).  Phase 10 loads from config.txt. */
 static uint8_t allowLogOnUsb = 1;
 
+static appState_t g_appState = STATE_IDLE;
+
 appState_t appStateGet(void)
 {
-    return STATE_IDLE;
+    return g_appState;
+}
+
+void appStateSet(appState_t state)
+{
+    g_appState = state;
 }
 
 bool appStateCanStartLogging(void)

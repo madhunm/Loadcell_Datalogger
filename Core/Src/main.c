@@ -53,8 +53,11 @@
 #include "fatfs.h"
 #include "ux_device_cdc_acm.h"
 #include "ux_dcd_stm32.h"
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include "ff.h"
+#include "diskio.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -64,6 +67,9 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
+/** MBR partition 2 entry starts at 0x1CE; type byte is at +4 → 0x1D2 Hidden FAT32: suppresses Windows auto-mount on Win10/11 */
+#define MBR_PART2_TYPE_OFFSET  0x1D2U
 
 /* USER CODE END PD */
 
@@ -97,6 +103,31 @@ void SystemClock_Config(void);
 static void sdSetClkdiv(uint32_t div)
 {
     MODIFY_REG(hsd1.Instance->CLKCR, SDMMC_CLKCR_CLKDIV, div & 0x3FFU);
+}
+
+/** Work buffer for f_fdisk / f_mkfs (must not be on stack). */
+static BYTE fmtWork[4096];
+
+/**
+ * @brief Create LOGGER README on partition 0 if it does not exist.
+ */
+static void writeReadmeIfAbsent(void)
+{
+    FIL       f;
+    FRESULT   fr;
+    UINT      bw;
+    static const char kReadme[] =
+        "This SD card is used by the H562 Parachute Datalogger.\r\n"
+        "Data files appear here automatically after each logging session.\r\n"
+        "Do not modify or delete any files on this card.\r\n"
+        "If the card stops working, contact your equipment provider.\r\n";
+
+    fr = f_open(&f, "0:README.txt", FA_CREATE_NEW | FA_WRITE);
+    if (fr != FR_OK)
+        return;
+
+    f_write(&f, kReadme, sizeof(kReadme) - 1U, &bw);
+    f_close(&f);
 }
 
 /* USER CODE END 0 */
@@ -253,7 +284,9 @@ int main(void)
     uiSetUsbStatus(usbStr);
   }
 
-  /* ── SDMMC + FatFS SD Card Init ────────────────────────────────── */
+  /* ── SDMMC + FatFS dual-volume init ─────────────────────────────── */
+  bool sdReady = false;
+
   MX_SDMMC1_SD_Init();
   HAL_NVIC_SetPriority(SDMMC1_IRQn, 5, 0);
   {
@@ -263,52 +296,155 @@ int main(void)
           printf("[SD] init failed, card state=%lu\r\n", (unsigned long)cstate);
           uiSetSdStatus("ERROR");
           ledStatusSetSub(LED_SUB_SD, LED_LEVEL_ERROR);
+          ledStatusSetSys(LED_SYS_ERROR);
           goto sdDone;
       }
       HAL_SD_CardInfoTypeDef ci;
       HAL_SD_GetCardInfo(&hsd1, &ci);
-      (void)ci;   /* used below for debug if needed */
+      (void)ci;
   }
 
   MX_FATFS_Init();
+
   {
-      DWORD freClust;
-      FATFS *fsPtr;
-      FRESULT fres = f_getfree(SDPath, &freClust, &fsPtr);
-      if (fres != FR_OK)
+      FRESULT fr = sdMountAll();
+
+      if (fr == FR_OK)
       {
-          printf("[SD] FAIL %d\r\n", (int)fres);
+          sdReady = true;
+          printf("[SD] SYSCAL mounted\r\n");
+      }
+      else if (fr == FR_NO_FILESYSTEM)
+      {
+          /* FatFs R0.15 w/patch1 — f_fdisk: percentage table (≤100 = %). */
+          const LBA_t partSizes[] = { 50, 50, 0, 0 };
+          printf("[SD] No filesystem — partitioning (FatFs R0.15 w/patch1)...\r\n");
+
+          fr = f_fdisk(0, partSizes, fmtWork);
+          if (fr != FR_OK)
+          {
+              printf("[SD] FATAL: f_fdisk failed %d\r\n", (int)fr);
+              ledStatusSetSys(LED_SYS_ERROR);
+          }
+          else
+          {
+              /* FatFs R0.15 w/patch1 — f_mkfs: MKFS_PARM variant. */
+              const MKFS_PARM mkOpt = { FM_FAT32, 0U, 0U, 0U, 0U };
+
+              fr = f_mkfs("0:", &mkOpt, fmtWork, sizeof(fmtWork));
+              if (fr != FR_OK)
+                  printf("[SD] FATAL: f_mkfs 0: failed %d\r\n", (int)fr);
+
+              if (fr == FR_OK)
+              {
+                  fr = f_mkfs("1:", &mkOpt, fmtWork, sizeof(fmtWork));
+                  if (fr != FR_OK)
+                      printf("[SD] FATAL: f_mkfs 1: failed %d\r\n", (int)fr);
+              }
+
+              /* Patch MBR partition-2 type to 0x83 (Linux) so Windows often skips a drive letter.
+               * FatFS mounts via VolToPart[] partition index, not this byte. Not used if GPT (not this build). */
+              if (fr == FR_OK)
+              {
+                  DRESULT dr = disk_read(0, fmtWork, 0, 1);
+                  if (dr != RES_OK)
+                  {
+                      printf("[SD] FATAL: MBR read LBA0 dr=%d\r\n", (int)dr);
+                      fr = FR_DISK_ERR;
+                  }
+                  else
+                  {
+                      fmtWork[MBR_PART2_TYPE_OFFSET] = 0x1BU;
+                      dr = disk_write(0, fmtWork, 0, 1);
+                      if (dr != RES_OK)
+                      {
+                          printf("[SD] FATAL: MBR write LBA0 dr=%d\r\n", (int)dr);
+                          fr = FR_DISK_ERR;
+                      }
+                  }
+              }
+
+              if (fr == FR_OK)
+                  fr = sdMountAll();
+
+              if (fr == FR_OK)
+              {
+                  f_setlabel("0:LOGGER");
+                  f_setlabel("1:SYSCAL");
+                  printf("[SD] format complete: LOGGER + SYSCAL\r\n");
+                  printf("[SD] SYSCAL mounted\r\n");
+                  sdReady = true;
+              }
+              else
+                  ledStatusSetSys(LED_SYS_ERROR);
+          }
+      }
+      else
+      {
+          printf("[SD] FATAL: sdMountAll error %d\r\n", (int)fr);
+          ledStatusSetSys(LED_SYS_ERROR);
+      }
+  }
+
+  if (sdReady)
+  {
+      DWORD   freClust;
+      FATFS  *fsPtr = NULL;
+      FRESULT fres  = f_getfree("0:", &freClust, &fsPtr);
+
+      if (fres != FR_OK || fsPtr == NULL)
+      {
+          printf("[SD] FAIL f_getfree %d\r\n", (int)fres);
           uiSetSdStatus("ERROR");
           ledStatusSetSub(LED_SUB_SD, LED_LEVEL_ERROR);
-          goto sdDone;
+          sdReady = false;
       }
-      uint32_t freeMb = (uint32_t)((uint64_t)freClust * fsPtr->csize * 512
-                                    / (1024 * 1024));
-      printf("[SD] OK, free=%lu MB\r\n", (unsigned long)freeMb);
-      uiSetSdStatus("READY");
-      ledStatusSetSub(LED_SUB_SD, LED_LEVEL_OK);
-
-      sdSetClkdiv(1);
+      else
+      {
+          uint32_t freeMb = (uint32_t)((uint64_t)freClust * fsPtr->csize * 512UL
+                                        / (1024UL * 1024UL));
+          printf("[SD] OK, free=%lu MB\r\n", (unsigned long)freeMb);
+          uiSetSdStatus("READY");
+          ledStatusSetSub(LED_SUB_SD, LED_LEVEL_OK);
+          sdSetClkdiv(1U);
+      }
   }
-  sdDone:
 
-  /* ── Phase 10: load calibration from SD, then init decimation ─── */
-  calibrationLoad();
-  dpInit(calibrationGet());
+sdDone:
+
+  /* ── Phase 10b: README, cell scan, .cal load ───────────────────── */
+  if (sdReady)
   {
-    const char *calStr;
-    switch (calibrationGetSource())
-    {
-      case CAL_SRC_SD_FILE: calStr = "SD-FILE"; break;
-      case CAL_SRC_FLASH:   calStr = "FLASH";   break;
-      default:              calStr = "DEFAULT";  break;
-    }
-    uiSetCalSource(calStr);
-    printf("[P10] cal=%s sensitivity=%.3f uV/N tare=%.3f N crc=%u\r\n",
-           calStr,
-           (double)calibrationGet()->sensitivityUvPerN,
-           (double)calibrationGet()->tareOffsetN,
-           calibrationGet()->enableAdcCrc);
+      writeReadmeIfAbsent();
+      calScanFiles();
+      uint32_t selSerial = calSelectViaUi();
+      calibrationLoadFromCal(selSerial);
+  }
+
+  bool calLoaded = (calibrationGetSource() == CAL_SRC_SD_FILE);
+
+  if (calLoaded)
+  {
+      ads131m02SetGain(calibrationGet()->adcGainCh1,
+                       calibrationGet()->adcGainCh2);
+      dpInit(calibrationGet());
+
+      {
+          char     calBuf[24];
+          uint32_t sn = calibrationGetSerial();
+          snprintf(calBuf, sizeof(calBuf), "SN:%lu", (unsigned long)sn);
+          uiSetCalSource(calBuf);
+      }
+
+      printf("[P10b] cal=SD SN=%lu sens=%.6f corr=%.6f crc=%u\r\n",
+             (unsigned long)calibrationGetSerial(),
+             (double)calibrationGet()->sensitivityUvPerN,
+             (double)calibrationGet()->cellCorrFactor,
+             calibrationGet()->enableAdcCrc);
+  }
+  else
+  {
+      printf("[CAL] FAULT: no valid cal loaded, acquisition halted\r\n");
   }
 
   /* ── Re-enable EXTI2 now that all SPI1 init is done ────────────── */
@@ -319,10 +455,12 @@ int main(void)
   diagDrdyInit();
 
   /* ── Phase 7: start continuous DMA capture ────────────────────── */
-  ads131m02StartContinuous();
+  if (calLoaded)
+      ads131m02StartContinuous();
 
-  uiSetState("RUN");
-  ledStatusSetSys(LED_SYS_IDLE);  /* LED 0 → RED SOLID (Power ON) */
+  uiSetState(calLoaded ? "RUN" : "FAULT");
+  if (calLoaded)
+      ledStatusSetSys(LED_SYS_IDLE);  /* LED 0 → RED SOLID (Power ON) */
 
   /* ── Draw UI ──────────────────────────────────────────────────── */
 #ifndef VIZ_STREAM
@@ -369,28 +507,31 @@ int main(void)
     cdcPoll();
     diagClkinPoll();
 
-    /* ── Phase 10: drain pending decimation records ───────────────── */
-    if (g_dpPendingAdcRecord)
+    /* ── Phase 10: drain pending decimation records (needs valid cal) ─ */
+    if (calLoaded)
     {
-      g_dpPendingAdcRecord = 0;
-      /* Phase 11: ring_push(&g_dpStagedAdc, sizeof(g_dpStagedAdc)); */
-    }
-    if (g_dpPendingForceRecord)
-    {
-      g_dpPendingForceRecord = 0;
-      dpFillImu(&g_dpStagedForce);
-      /* Phase 11: ring_push(&g_dpStagedForce, sizeof(g_dpStagedForce)); */
-      /* Phase 11: format and push CSV line here (main loop context) */
-    }
-
-    /* ── Phase 10: force UI update at ~10 Hz ─────────────────────── */
-    {
-      static uint32_t lastForceUi;
-      uint32_t nowFui = HAL_GetTick();
-      if (nowFui - lastForceUi >= 100)
+      if (g_dpPendingAdcRecord)
       {
-        lastForceUi = nowFui;
-        uiSetForce(dpGetLatestForceN());
+        g_dpPendingAdcRecord = 0;
+        /* Phase 11: ring_push(&g_dpStagedAdc, sizeof(g_dpStagedAdc)); */
+      }
+      if (g_dpPendingForceRecord)
+      {
+        g_dpPendingForceRecord = 0;
+        dpFillImu(&g_dpStagedForce);
+        /* Phase 11: ring_push(&g_dpStagedForce, sizeof(g_dpStagedForce)); */
+        /* Phase 11: format and push CSV line here (main loop context) */
+      }
+
+      /* ── Phase 10: force UI update at ~10 Hz ───────────────────── */
+      {
+        static uint32_t lastForceUi;
+        uint32_t nowFui = HAL_GetTick();
+        if (nowFui - lastForceUi >= 100)
+        {
+          lastForceUi = nowFui;
+          uiSetForce(dpGetLatestForceN());
+        }
       }
     }
 

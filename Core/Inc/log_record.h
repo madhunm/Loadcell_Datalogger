@@ -25,7 +25,7 @@ extern "C" {
 
 /* ── Binary file magic ────────────────────────────────────────────── */
 #define BIN_FILE_MAGIC  0x4C44434CUL  /* 'LDCL' */
-#define BIN_FORMAT_VER  1
+#define BIN_FORMAT_VER  2
 
 /* ── Validity flags (binForceRecord_t.validity) ───────────────────── */
 #define VALIDITY_ADC_OK       0x01
@@ -51,15 +51,17 @@ typedef struct __attribute__((packed)) {
     uint16_t adcOsr;            /**< ADC oversampling ratio (128)             */
     uint16_t adcRecordRate;     /**< 8000                                    */
     uint16_t forceRecordRate;   /**< 500                                     */
-    float    sensitivity;       /**< uV/N from config.txt                    */
-    float    tareOffset;        /**< N from config.txt                       */
-    uint8_t  adcGainCh1;        /**< ADS131M02 gain setting CH1              */
-    uint8_t  adcGainCh2;        /**< ADS131M02 gain setting CH2              */
+    float    sensitivity;       /**< uV/N from cal                           */
+    float    tareOffset;        /**< N from cal                              */
+    uint8_t  adcGainCh1;        /**< ADS131M02 gain CH0 (uint8 from cal float)*/
+    uint8_t  adcGainCh2;        /**< ADS131M02 gain CH1                      */
     uint8_t  imuOdr;            /**< LSM6DSV ODR setting                     */
     uint8_t  imuFsAccel;        /**< Full-scale accel (16 g)                 */
     uint32_t rtcEpoch;          /**< RTC time at start (s since 2000-01-01)  */
     uint8_t  fwVersion[8];      /**< e.g. "v0.10.0\0"                       */
-    uint8_t  reserved[12];      /**< Pad to 64 bytes                         */
+    uint32_t serialNumber;      /**< Load cell serial                        */
+    float    cellCorrFactor;    /**< Per-cell correction from cal            */
+    uint8_t  reserved[6];       /**< Pad — crc16 at offset 62                */
     uint16_t crc16;             /**< CRC of bytes 0..61                      */
 } binFileHeader_t;              /* 64 bytes */
 

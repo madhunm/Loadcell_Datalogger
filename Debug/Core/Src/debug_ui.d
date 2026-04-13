@@ -1,5 +1,6 @@
 Core/Src/debug_ui.o: ../Core/Src/debug_ui.c ../Core/Inc/debug_ui.h \
- ../Core/Inc/debug_uart.h ../USBX/App/ux_device_cdc_acm.h \
+ ../Core/Inc/calibration.h ../Core/Inc/debug_uart.h \
+ ../USBX/App/ux_device_cdc_acm.h \
  ../Middlewares/ST/usbx/common/core/inc/ux_api.h \
  ../Middlewares/ST/usbx/ports/generic/inc/ux_port.h ../USBX/App/ux_user.h \
  ../Middlewares/ST/usbx/common/core/inc/ux_utility.h \
@@ -53,6 +54,7 @@ Core/Src/debug_ui.o: ../Core/Src/debug_ui.c ../Core/Inc/debug_ui.h \
  ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal_exti.h \
  ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal_fmac.h
 ../Core/Inc/debug_ui.h:
+../Core/Inc/calibration.h:
 ../Core/Inc/debug_uart.h:
 ../USBX/App/ux_device_cdc_acm.h:
 ../Middlewares/ST/usbx/common/core/inc/ux_api.h:

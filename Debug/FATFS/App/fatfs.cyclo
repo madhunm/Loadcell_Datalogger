@@ -1,1 +1,2 @@
-../FATFS/App/fatfs.c:16:6:MX_FATFS_Init	2
+../FATFS/App/fatfs.c:25:6:MX_FATFS_Init	1
+../FATFS/App/fatfs.c:35:9:sdMountAll	3

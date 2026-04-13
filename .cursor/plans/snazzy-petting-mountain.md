@@ -1030,6 +1030,8 @@ Phase 8 went through significant hardening after the initial driver was function
 ### Phase 10 — Two-Stage Decimation, Force Calculation, and Record Assembly
 **Goal:** Two-stage boxcar decimation produces 8 kHz ADC records and 500 Hz Force+IMU records; ratiometric force output reads correct Newtons with known calibration weights.
 
+**Note:** Initial Phase 10 used **`config.txt`** on **`0:`** for calibration. **Phase 10b** supersedes that with binary **`.cal`** on **`1:`**, `cellCorrFactor`, `CH1_DIV_RATIO`, and boot-time cell selection — see [Phase 10b](phase_10b_cal_sd_partitions_751257fe.plan.md). The decimation/ISR design below still applies.
+
 **Actions:**
 1. Create `Core/Inc/log_record.h` with all packed struct definitions:
    - `bin_file_header_t` (64 bytes)
@@ -1052,20 +1054,8 @@ Phase 8 went through significant hardening after the initial driver was function
    - `1e6` converts sensitivity from µV/N to V/N
    - Full derivation: [Phase 10b plan, Section 5](/.cursor/plans/phase_10b_cal_sd_partitions_751257fe.plan.md)
 
-4. Load calibration from `config.txt` on SD card:
-```ini
-sensitivity_uV_per_N = 2.0
-adc_gain_ch1         = 1
-adc_gain_ch2         = 1
-offset_ch1           = 0
-offset_ch2           = 0
-tare_offset_N        = 0.0
-batt_divider_ratio   = 0.5
-prealloc_mb          = 64
-enable_adc_crc       = 0
-allow_log_on_usb     = 1
-```
-> `allow_log_on_usb = 1` during development (log while USB debug is connected). Set to `0` for production (reject logging when USB cable present — reduces electrical noise on loadcell).
+4. Load calibration: **Phase 10 (historical)** used `config.txt` on `0:` with keys such as `sensitivityUvPerN`, gains, etc. **Phase 10b (current):** factory **`1:<serial>.cal`** (64-byte packed blob, CRC16), VT220 cell pick, `calibrationLoadFromCal()`, `cellCorrFactor`, and `write_cal.py` using the **same table-driven CRC** as `log_record.h`. See [Phase 10b](phase_10b_cal_sd_partitions_751257fe.plan.md).
+> `allowLogOnUsb` in `.cal` = 1 during development; 0 for production if logging must be blocked when USB is present.
 
 5. Implement tare function (store zero reading, subtract)
 
@@ -1074,7 +1064,7 @@ allow_log_on_usb     = 1
 **Key files:**
 - `Core/Inc/log_record.h` — new: all packed record type structs and CRC helper
 - `Core/Src/data_processing.c` / `Core/Inc/data_processing.h` — new: decimation logic, record assembly
-- `Core/Src/calibration.c` / `Core/Inc/calibration.h` — new: config.txt parser
+- `Core/Src/calibration.c` / `Core/Inc/calibration.h` — new: config.txt parser *(Phase 10b: binary `.cal` reader — see Phase 10b plan)*
 
 **Success Criteria:**
 - [ ] `bin_adc_record_t` emitted exactly **8000 times/second** (measure over 10 s)
@@ -1082,9 +1072,9 @@ allow_log_on_usb     = 1
 - [ ] Decimation ratio verified: every force record contains the sum of exactly 128 raw samples (= 16 ADC records)
 - [ ] Unloaded loadcell shows force approximately **0 N** after tare
 - [ ] Known calibration weight (e.g., 1 kg = 9.81 N) reads **9.81 +/- 0.5 N**
-- [ ] config.txt changes (different sensitivity) take effect after SD card re-insert + reboot
+- [ ] *(Phase 10b)* Changing `.cal` / cell selection updates force scaling after reboot (no `config.txt` requirement)
 - [ ] VT220 UI Force field updates at 10 Hz or less showing stable reading
-- [ ] Serial terminal shows: `CAL: loaded from SD, sensitivity=2.000 uV/N`
+- [ ] *(Phase 10b)* Serial shows successful `.cal` load / `SN:` / or fault — not the legacy `CAL: loaded from SD, sensitivity=2.000` line unless using old config path
 - [ ] Serial terminal shows (periodic): `DECIM: ADC=8000/s FORCE=500/s`
 - [ ] CSV line format verified: `$,<time_ms>,<load_N>,#` with correct framing
 - [ ] All above verified with zero DRDY misses over 60 s
@@ -1092,7 +1082,7 @@ allow_log_on_usb     = 1
 ---
 
 ### Phase 10b — Dual-Partition SD, Binary Calibration Files, and Cell Selection
-**Goal:** Non-technical users select a pre-calibrated load cell on every boot via the VT220 UI. Factory-written binary `.cal` files on a hidden SD partition provide per-cell calibration with CRC16 integrity. No user ever opens, edits, or interacts with any configuration file.
+**Goal:** Non-technical users select a pre-calibrated load cell on every boot via the VT220 UI. Factory-written binary `.cal` files on the SYSCAL volume provide per-cell calibration with CRC16 integrity. No user ever opens, edits, or interacts with any configuration file.
 
 **Prerequisite:** Phase 10 must be fully closed. This phase modifies Phase 10 files (`calibration.h/.c`, `data_processing.c`, `debug_ui.c`, `main.c`) and FatFS middleware config. All new/modified code is CubeMX-safe (USER CODE sections or standalone application files).
 
@@ -1102,10 +1092,10 @@ allow_log_on_usb     = 1
 
 1. **Two-partition SD card layout** (64 GB target):
    - Partition 1 (`0:`, label `LOGGER`, ~32 GB): user-visible FAT32 for CSV export files and `README.txt`
-   - Partition 2 (`1:`, label `SYSCAL`, ~32 GB): hidden FAT32 for `.cal` files and binary log files
-   - `ffconf.h`: set `FF_MULTI_PARTITION = 1`, `FF_VOLUMES = 2`, `FF_USE_FIND = 1`
-   - `fatfs.c`: add `VolToPart[]` mapping (`"0:" → phys 0, part 1`; `"1:" → phys 0, part 2`), second `FATFS` object
-   - First boot with blank SD: firmware auto-formats via `f_fdisk()` + `f_mkfs()` for both partitions, sets volume labels, prints progress over UART. User never runs any formatting tool.
+   - Partition 2 (`1:`, label `SYSCAL`, ~32 GB): FAT32 for `.cal` files and binary logs — **after first-boot format**, MBR partition-type byte for partition 2 is patched to **0x83** (Linux) so **Windows Explorer** typically assigns a drive letter only to **LOGGER**; **SYSCAL** stays off “This PC” (Disk Management still shows the second partition, often labeled **Linux**). FatFS mounts **`1:`** via **`VolToPart[]`** (partition index), independent of the type byte.
+   - `ffconf.h`: set `FF_MULTI_PARTITION = 1`, `FF_VOLUMES = 2`, `FF_USE_FIND = 1`, `FF_USE_LABEL = 1`
+   - `fatfs.c`: add `VolToPart[]` mapping (`"0:" → phys 0, part 1`; `"1:" → phys 0, part 2`), second `FATFS` object, `sdMountAll()`
+   - First boot with blank SD: firmware auto-formats via `f_fdisk()` + `f_mkfs()` ×2 + **MBR patch** (`disk_read`/`disk_write` LBA 0, `fmtWork[0x1D2] = 0x83`) + `sdMountAll()` + volume labels. UART: `[SD] format complete: LOGGER + SYSCAL`, `[SD] SYSCAL mounted`. Subsequent boots: `[SD] SYSCAL mounted` when dual mount succeeds.
 
 2. **Per-cell binary calibration file** (`.cal`, 64 bytes packed):
    - Location: `1:<serialNumber>.cal` (e.g. `1:10326.cal`)
@@ -1157,7 +1147,7 @@ allow_log_on_usb     = 1
    - **Test matrix:** loads at 0, 250, 500, 1000, 1500, 2000 kg (loading + unloading) × CH0 gains 1, 2, 4, 8, 16, 32, 128. Record 500 consecutive force records (1 s at 500 Hz) per point.
    - **Metrics per gain/load:** mean force N, RMS noise (σ of 500 samples), peak-to-peak noise, SNR, linearity R² across full range, max residual from linear fit.
    - **Pass criteria:** no clipping at any load point, RMS noise < 0.1 % FS (< 2 kg), R² > 0.9999, max residual < 5 kg.
-   - The lowest gain meeting all criteria becomes the production gain. `adcGainCh1` in `calConfig_t` / `.cal` stores the selected CH0 gain; `adcGainCh2` stores CH1 gain (= 1, fixed). Firmware applies gain during `ads131m02Init()`. Gain is not adjustable at runtime.
+   - The lowest gain meeting all criteria becomes the production gain. `adcGainCh1` in `calConfig_t` / `.cal` stores the selected CH0 gain; `adcGainCh2` stores CH1 gain (= 1, fixed). **`ads131m02Init()`** leaves PGA at **1×/1×**; **`ads131m02SetGain()`** applies factory gains **after** successful `calibrationLoadFromCal()`, before `dpInit()` / `ads131m02StartContinuous()`. Gain is not adjustable at runtime after boot.
 
 **Key files:**
 - `Middlewares/Third_Party/FatFs/src/ffconf.h` — edit: multi-partition, volumes, find
@@ -1167,13 +1157,14 @@ allow_log_on_usb     = 1
 - `Core/Inc/data_processing.h` — edit: add `CH1_DIV_RATIO` hardware constant
 - `Core/Src/data_processing.c` — edit: force formula with `CH1_DIV_RATIO` and `cellCorrFactor`
 - `Core/Src/debug_ui.c` — edit: cell selection menu + input handling
-- `Core/Src/main.c` — edit: dual mount, first-boot format, README, cell selection, fault gate
+- `Core/Src/main.c` — edit: dual mount, first-boot format, **MBR patch** (`diskio.h`), README, cell selection, fault gate, UART `SYSCAL mounted`
 - `Tools/write_cal.py` — new: Python `.cal` writer
 - `Tools/gen_all_cals.sh` — new: batch generator for all 4 cells
 
 **Success Criteria:**
-- [ ] Fresh (blank) SD card triggers auto-format: two FAT32 partitions created, volume labels `LOGGER` and `SYSCAL` set, UART prints `[SD] format complete: LOGGER + SYSCAL`
-- [ ] Pre-formatted card with existing partitions mounts directly (no re-format)
+- [ ] Fresh (blank) SD card triggers auto-format: two FAT32 partitions created, **MBR partition 2 type = 0x83**, volume labels `LOGGER` and `SYSCAL` set, UART prints `[SD] format complete: LOGGER + SYSCAL` and `[SD] SYSCAL mounted`
+- [ ] **Windows:** after format, only **LOGGER** appears in Explorer with a drive letter; **SYSCAL** does not; Disk Management shows second partition as **Linux** — expected
+- [ ] Pre-formatted card with existing partitions mounts directly (no re-format); UART prints `[SD] SYSCAL mounted` on successful dual mount
 - [ ] `README.txt` created on partition 1 on first boot; not overwritten on subsequent boots
 - [ ] `write_cal.py` produces a 64-byte `.cal` file whose CRC16 matches firmware `crc16Ccitt()`
 - [ ] Valid `.cal` file loads: serial terminal prints all 11 field values, `calibrationGetSource() == CAL_SRC_SD_FILE`
@@ -1191,7 +1182,7 @@ allow_log_on_usb     = 1
 - [ ] All naming follows project conventions: `camelCase` functions, `camelCase_t` structs, `UPPER_SNAKE_CASE` defines, `g_` prefix globals
 - [ ] `CH1_DIV_RATIO` defined in `data_processing.h` as `(33.0f / 133.0f)` — not in `calConfig_t` or `.cal` files
 - [ ] CH1 gain fixed at 1 in firmware; `adcGainCh2 = 1` in all `.cal` files. No code path allows CH1 gain > 1
-- [ ] Gain DOE: firmware applies CH0 gain from `calConfig_t.adcGainCh1` during `ads131m02Init()` — register write verified via readback or UART print
+- [ ] Gain DOE: firmware applies CH0 gain via **`ads131m02SetGain()`** from `calConfig_t.adcGainCh1` / `adcGainCh2` after successful cal load — **not** inside `ads131m02Init()`; verify via readback or UART print
 - [ ] Gain DOE pass criteria documented: no clipping, RMS noise < 0.1 % FS, R² > 0.9999, max residual < 5 kg
 - [ ] All edits in CubeMX-generated files use USER CODE sections; all new files are standalone (CubeMX-safe)
 - [ ] Zero DRDY misses over 60 s with calibration loaded (ISR budget unaffected)
