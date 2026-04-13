@@ -40,7 +40,7 @@
 /* ── Configuration ────────────────────────────────────────────── */
 
 /** @brief  Voltage divider ratio: Vbat * ratio = Vadc.
- *          Default 0.5 (2:1 divider).  Phase 10 loads from config.txt. */
+ *          Default 0.5 (2:1 divider).  Load-cell cal uses battDividerRatio from `.cal` (calibrationGet()). */
 #define BATT_DIVIDER_RATIO  0.5f
 
 /** @brief  ADC full-scale count (12-bit). */

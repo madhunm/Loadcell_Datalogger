@@ -6,7 +6,7 @@ todos:
     content: "Create Core/Src/circular_buffer.c + Core/Inc/circular_buffer.h: 256 KB power-of-2 lock-free SPSC ring buffer with ISR push / main-loop drain in 4 KB chunks"
     status: pending
   - id: create-csv-buffer
-    content: "Add CSV line buffer (1 KB) to circular_buffer or as a separate small ring — ISR push at 500 Hz, main-loop drain via f_write"
+    content: Add CSV line buffer (1 KB) to circular_buffer or as a separate small ring — ISR push at 500 Hz, main-loop drain via f_write
     status: pending
   - id: create-sdmmc-fatfs
     content: "Create Core/Src/sdmmc_fatfs.c + Core/Inc/sdmmc_fatfs.h: sdSessionOpen (dual file, pre-alloc, headers), sdSessionWriteBinChunk/sdSessionWriteCsvChunk, sdSessionClose (truncate), filename generation from RTC"
@@ -18,7 +18,7 @@ todos:
     content: "Implement 1 Hz metadata record assembly in main loop: CLKIN, MCU temp, battery, DRDY/miss/overflow counters, ADS status — push to binary ring"
     status: pending
   - id: wire-isr-to-ring
-    content: "Replace Phase 10 staging flags with actual ringPush calls in dpFeedSample() for ADC records, force records, and CSV lines"
+    content: Replace Phase 10 staging flags with actual ringPush calls in dpFeedSample() for ADC records, force records, and CSV lines
     status: pending
   - id: main-loop-flush
     content: "Implement main loop flush order: binary ring (4 KB chunks) → CSV buffer → ux_system_tasks_run → cdc_poll, with write timing measurement"

@@ -1030,20 +1030,24 @@ Phase 8 went through significant hardening after the initial driver was function
 ### Phase 10 — Two-Stage Decimation, Force Calculation, and Record Assembly
 **Goal:** Two-stage boxcar decimation produces 8 kHz ADC records and 500 Hz Force+IMU records; ratiometric force output reads correct Newtons with known calibration weights.
 
+**Status — firmware (2026-04-13):** Decimation, `log_record.h` wire types, main-loop `dpFormatForceCsvLine()` / `g_dpStagedCsv`, `DECIM:` diagnostic, VT220 force ~10 Hz, CDC **`t`/`T`** tare, and IMU fill via `dpFillImu()` are implemented. **Hardware validation** (exact rates, known mass, 60 s soak) remains on the bench checklist below.
+
+**Closure — approved (2026-04-14):** Phase 10 / 10b **firmware exit** is approved. The only deferred gate is **physical load cell connection** (and then **P10-M5, M6**, optional **M7** UART spot-check). Tracked in [.cursor/plans/phase_10_deferred_hardware_todos.md](phase_10_deferred_hardware_todos.md). Objective metrics **P10-M1–M4** and **M8** can be met without a cell; nonsensical `F=` with no cell is expected.
+
 **Note:** Initial Phase 10 used **`config.txt`** on **`0:`** for calibration. **Phase 10b** supersedes that with binary **`.cal`** on **`1:`**, `cellCorrFactor`, `CH1_DIV_RATIO`, and boot-time cell selection — see [Phase 10b](phase_10b_cal_sd_partitions_751257fe.plan.md). The decimation/ISR design below still applies.
 
 **Actions:**
 1. Create `Core/Inc/log_record.h` with all packed struct definitions:
-   - `bin_file_header_t` (64 bytes)
-   - `bin_adc_record_t` (16 bytes, type 0x01)
-   - `bin_force_record_t` (32 bytes, type 0x02)
-   - `bin_meta_record_t` (32 bytes, type 0x03)
+   - `binFileHeader_t` (64 bytes)
+   - `binAdcRecord_t` (16 bytes, type 0x01)
+   - `binForceRecord_t` (32 bytes, type 0x02)
+   - `binMetaRecord_t` (32 bytes, type 0x03)
    - Validity flag defines
    - CRC16-CCITT helper
 
 2. Implement two-stage boxcar decimation in the DMA-complete ISR (`data_processing.c/.h`):
-   - **Stage 1 (every 8 DRDYs = 8 kHz):** Sum 8 raw CH1/CH2 values. Assemble and emit a `bin_adc_record_t` (raw 8-sample sum, not divided). Reset partial accumulator.
-   - **Stage 2 (every 128 DRDYs = 500 Hz):** Sum of 128 raw values (= 16 stage-1 sums). Compute `force_N`, read IMU via blocking SPI2. Assemble `bin_force_record_t`. Format CSV line `$,time_ms,load_N,#\r\n`.
+   - **Stage 1 (every 8 DRDYs = 8 kHz):** Sum 8 raw CH0/CH1 values. Assemble and emit a `binAdcRecord_t` (raw 8-sample sum, not divided). Reset partial accumulator.
+   - **Stage 2 (every 128 DRDYs = 500 Hz):** Sum of 128 raw values (= 16 stage-1 sums). Compute `force_N`. Assemble `binForceRecord_t` in the ISR; **IMU** is read in the **main loop** (`dpFillImu`) to avoid SPI2 deadlock inside the GPDMA ISR. **CSV** line `$,time_ms,load_N,#\r\n` is built in the main loop via `dpFormatForceCsvLine()` (Phase 11 will push bytes to the CSV ring / file).
    - Both stages write records to a staging area; the ring buffer push happens in Phase 11.
 
 3. At 500 Hz decimation boundary compute force via ratiometric bridge equation:
@@ -1057,34 +1061,56 @@ Phase 8 went through significant hardening after the initial driver was function
 4. Load calibration: **Phase 10 (historical)** used `config.txt` on `0:` with keys such as `sensitivityUvPerN`, gains, etc. **Phase 10b (current):** factory **`1:<serial>.cal`** (64-byte packed blob, CRC16), VT220 cell pick, `calibrationLoadFromCal()`, `cellCorrFactor`, and `write_cal.py` using the **same table-driven CRC** as `log_record.h`. See [Phase 10b](phase_10b_cal_sd_partitions_751257fe.plan.md).
 > `allowLogOnUsb` in `.cal` = 1 during development; 0 for production if logging must be blocked when USB is present.
 
-5. Implement tare function (store zero reading, subtract)
+5. Implement tare function (store zero reading, subtract) — CDC **`t`** / **`T`** requests tare when calibration is loaded.
 
-6. `pending_adc_record` flag set every 8 DRDYs; `pending_force_record` flag set every 128 DRDYs; both cleared by main loop
+6. `g_dpPendingAdcRecord` / `g_dpPendingForceRecord` set from ISR; main loop clears flags, fills IMU, formats CSV into `g_dpStagedCsv` (Phase 11: `ringPush`).
+
+#### Phase 10 / 10b — Objective exit metrics (qualify “Phase 10 closed”)
+
+Use these **measurable** criteria before signing off and starting Phase 11. Record UART captures or a short lab log (date, FW build id, SD card id optional).
+
+| ID | Metric | How to measure | Pass threshold | Class |
+|----|--------|----------------|----------------|--------|
+| P10-M1 | ADC record rate | 1 Hz `DECIM:` line: per-second delta of `dpGetAdcRecordCount()` (same as printed ADC/s) | **8000 / s ± 1%** (7920–8080) averaged over **≥ 10 s** steady run | Must pass |
+| P10-M2 | Force record rate | Same line: FORCE/s delta | **500 / s ± 1%** (495–505) averaged over **≥ 10 s** | Must pass |
+| P10-M3 | Decimation coupling | Over any interval ≥ 2 s: delta(ADC record count) / delta(force record count) | **16.0 ± 0.05** (128 raw samples per force = 16× 8-sample ADC records) | Must pass |
+| P10-M4 | DRDY misses | Same line: `miss=` delta over **60 s** (or `ads131m02GetStats()->missCount`) | **0** additional misses in window | Must pass |
+| P10-M5 | Tare residual | Unloaded cell, after **`t`** tare; read `F=` in `DECIM:` or panel force | **abs(force) ≤ 2.0 N** (tighten to 0.5 N when mechanics quiet) | Must pass |
+| P10-M6 | Known load | Certified mass on cell (e.g. ~9.81 N) | **Reading within ± 0.5 N** of expected (or ±0.5% of reading if team agrees) | Must pass |
+| P10-M7 | CSV framing | Debugger or temporary UART dump of `g_dpStagedCsv` (first line after force record) | Matches regex: `^\$,[0-9]+,[+-]?[0-9]+\.[0-9]{3},#\r\n$` | Must pass |
+| P10-M8 | Cal load | After boot with valid `.cal` | `calibrationGetSource() == CAL_SRC_SD_FILE` and panel / UART shows **SN** matching file | Must pass (10b) |
+| P10-M9 | Cal scaling repeat | Change `.cal` or select different cell, reboot | **P10-M1–M6** still pass; force at same load scales consistently with sensitivity/corr in UART print | Bench |
+
+**Minimum scope (updated at closure):** Full sign-off of **P10-M5/M6** requires a **connected load cell** + (for M6) certified weight when available. **P10-M6** may still be deferred if no certified weight — document “M6 deferred.” After load cell install, complete items in [phase_10_deferred_hardware_todos.md](phase_10_deferred_hardware_todos.md) before treating force accuracy as production-qualified.
 
 **Key files:**
-- `Core/Inc/log_record.h` — new: all packed record type structs and CRC helper
-- `Core/Src/data_processing.c` / `Core/Inc/data_processing.h` — new: decimation logic, record assembly
-- `Core/Src/calibration.c` / `Core/Inc/calibration.h` — new: config.txt parser *(Phase 10b: binary `.cal` reader — see Phase 10b plan)*
+- `Core/Inc/log_record.h` — packed record type structs and CRC helper
+- `Core/Src/data_processing.c` / `Core/Inc/data_processing.h` — decimation, CSV staging, IMU fill
+- `Core/Src/calibration.c` / `Core/Inc/calibration.h` — binary `.cal` reader (Phase 10b)
 
 **Success Criteria:**
-- [ ] `bin_adc_record_t` emitted exactly **8000 times/second** (measure over 10 s)
-- [ ] `bin_force_record_t` emitted exactly **500 times/second** (measure over 10 s)
-- [ ] Decimation ratio verified: every force record contains the sum of exactly 128 raw samples (= 16 ADC records)
-- [ ] Unloaded loadcell shows force approximately **0 N** after tare
-- [ ] Known calibration weight (e.g., 1 kg = 9.81 N) reads **9.81 +/- 0.5 N**
-- [ ] *(Phase 10b)* Changing `.cal` / cell selection updates force scaling after reboot (no `config.txt` requirement)
-- [ ] VT220 UI Force field updates at 10 Hz or less showing stable reading
-- [ ] *(Phase 10b)* Serial shows successful `.cal` load / `SN:` / or fault — not the legacy `CAL: loaded from SD, sensitivity=2.000` line unless using old config path
-- [ ] Serial terminal shows (periodic): `DECIM: ADC=8000/s FORCE=500/s`
-- [ ] CSV line format verified: `$,<time_ms>,<load_N>,#` with correct framing
-- [ ] All above verified with zero DRDY misses over 60 s
+- [ ] `binAdcRecord_t` emitted exactly **8000 times/second** (measure over 10 s) — *hardware*
+- [ ] `binForceRecord_t` emitted exactly **500 times/second** (measure over 10 s) — *hardware*
+- [ ] Decimation ratio verified: every force record contains the sum of exactly 128 raw samples (= 16 ADC records) — *hardware*
+- [ ] Unloaded loadcell shows force approximately **0 N** after tare — *hardware*
+- [ ] Known calibration weight (e.g., 1 kg = 9.81 N) reads **9.81 +/- 0.5 N** — *hardware*
+- [ ] *(Phase 10b)* Changing `.cal` / cell selection updates force scaling after reboot (no `config.txt` requirement) — *hardware*
+- [x] VT220 UI Force field updates at 10 Hz or less (implemented)
+- [x] *(Phase 10b)* Boot path: valid `.cal` → `[P10b]` / `[CAL]` lines and `SN:` on panel; fault path if load fails (implemented)
+- [x] Serial terminal shows (1 Hz): `DECIM: ADC=…/s FORCE=…/s` (implemented)
+- [x] CSV line format in `g_dpStagedCsv`: `$,<time_ms>,<load_N>,#` (implemented; Phase 11 writes to SD)
+- [ ] All rate/accuracy items above with **zero DRDY misses** over 60 s — *hardware soak*
 
 ---
 
 ### Phase 10b — Dual-Partition SD, Binary Calibration Files, and Cell Selection
 **Goal:** Non-technical users select a pre-calibrated load cell on every boot via the VT220 UI. Factory-written binary `.cal` files on the SYSCAL volume provide per-cell calibration with CRC16 integrity. No user ever opens, edits, or interacts with any configuration file.
 
-**Prerequisite:** Phase 10 must be fully closed. This phase modifies Phase 10 files (`calibration.h/.c`, `data_processing.c`, `debug_ui.c`, `main.c`) and FatFS middleware config. All new/modified code is CubeMX-safe (USER CODE sections or standalone application files).
+**Status — firmware (2026-04-13):** Dual mount, first-boot format, MBR partition-2 type **0x83**, `.cal` scan/load, cell menu, `ads131m02SetGain`, `write_cal.py`, and `appStateCanStartLogging()` using `calibrationGet()->allowLogOnUsb` are implemented. **Session binary/CSV file creation** is deferred to **Phase 11** (single implementation in `sdmmc_fatfs`).
+
+**Closure — approved (2026-04-14):** 10b **firmware scope** closed together with Phase 10. **Bridge / load cell not connected** does not block this closure; re-run **P10-M5/M6** (and Windows Explorer checks in success criteria if not yet done) after hardware is available — [phase_10_deferred_hardware_todos.md](phase_10_deferred_hardware_todos.md).
+
+**Prerequisite:** Phase 10 **decimation + record assembly + staging** must be in place before 10b (same module touch list). 10b extends calibration and SD layout; it does not replace the ISR pipeline.
 
 **Detailed plan:** [phase_10b_cal_sd_partitions_751257fe.plan.md](/.cursor/plans/phase_10b_cal_sd_partitions_751257fe.plan.md)
 
@@ -1136,7 +1162,7 @@ Phase 8 went through significant hardening after the initial driver was function
    - Blocks until selection made — ADC streaming never starts without valid calibration
    - `uiSetCalSource("SN:XXXXX")` shows active cell on panel row 21
 
-6. **Binary log files on partition 2**: `1:LOG_<bootSeconds>.bin` with pre-allocation from `calConfig_t.preallocMb`. CSV export to `0:` deferred to later phase (interface contract defined).
+6. **Binary / CSV session files:** Implemented in **Phase 11** (`sdmmc_fatfs`): e.g. `LOG_YYMMDD_HHMMSS.bin` on SYSCAL and matching `.csv` on LOGGER, pre-allocation from `calConfig_t.preallocMb`. Until then, decimated data stays in RAM staging (`g_dpStaged*`, `g_dpStagedCsv`).
 
 7. **Python factory tool** `Tools/write_cal.py`: CLI accepts serial + calibration values, writes 64-byte `.cal` with correct CRC16-CCITT. Companion `Tools/gen_all_cals.sh` generates all four cell files.
 
@@ -1162,59 +1188,61 @@ Phase 8 went through significant hardening after the initial driver was function
 - `Tools/gen_all_cals.sh` — new: batch generator for all 4 cells
 
 **Success Criteria:**
-- [ ] Fresh (blank) SD card triggers auto-format: two FAT32 partitions created, **MBR partition 2 type = 0x83**, volume labels `LOGGER` and `SYSCAL` set, UART prints `[SD] format complete: LOGGER + SYSCAL` and `[SD] SYSCAL mounted`
-- [ ] **Windows:** after format, only **LOGGER** appears in Explorer with a drive letter; **SYSCAL** does not; Disk Management shows second partition as **Linux** — expected
-- [ ] Pre-formatted card with existing partitions mounts directly (no re-format); UART prints `[SD] SYSCAL mounted` on successful dual mount
-- [ ] `README.txt` created on partition 1 on first boot; not overwritten on subsequent boots
-- [ ] `write_cal.py` produces a 64-byte `.cal` file whose CRC16 matches firmware `crc16Ccitt()`
-- [ ] Valid `.cal` file loads: serial terminal prints all 11 field values, `calibrationGetSource() == CAL_SRC_SD_FILE`
-- [ ] `.cal` file with a single flipped bit is rejected: UART prints CRC error, `STATE_ERROR` set, ADC streaming does not start, fault LED pattern active
-- [ ] Missing `.cal` file (empty SYSCAL partition) triggers fault state identically to CRC failure
-- [ ] `calConfig_t.cellCorrFactor` correctly loaded from `.cal` file (verify via UART print for each of the 4 cells)
-- [ ] Force formula produces correct N with SN 10326 values: multiplier = `3.3 * (33/133) * 1e6 / (0.220919 * 0.973379)` = ~3,808,000; verify with known test signal or ADC test mode
-- [ ] VT220 cell selection menu displays all scanned cells; digit key selects correct one
-- [ ] Single `.cal` file on card: auto-selected without menu, UART prints `CAL: auto-select SN XXXXX`
-- [ ] Panel row 21 shows `Cal: SN:XXXXX` after selection
-- [ ] Cell selection is not persisted: power cycle requires re-selection
-- [ ] Binary log file created on partition 2 (`1:LOG_*.bin`) with correct pre-allocation
-- [ ] Both `"0:"` and `"1:"` drive paths work independently for read/write operations
-- [ ] All new code follows Doxygen commenting standard (`@file`, `@brief`, `@param`, `@return`, `@note`, `@pre`, `@post`)
-- [ ] All naming follows project conventions: `camelCase` functions, `camelCase_t` structs, `UPPER_SNAKE_CASE` defines, `g_` prefix globals
-- [ ] `CH1_DIV_RATIO` defined in `data_processing.h` as `(33.0f / 133.0f)` — not in `calConfig_t` or `.cal` files
-- [ ] CH1 gain fixed at 1 in firmware; `adcGainCh2 = 1` in all `.cal` files. No code path allows CH1 gain > 1
-- [ ] Gain DOE: firmware applies CH0 gain via **`ads131m02SetGain()`** from `calConfig_t.adcGainCh1` / `adcGainCh2` after successful cal load — **not** inside `ads131m02Init()`; verify via readback or UART print
-- [ ] Gain DOE pass criteria documented: no clipping, RMS noise < 0.1 % FS, R² > 0.9999, max residual < 5 kg
-- [ ] All edits in CubeMX-generated files use USER CODE sections; all new files are standalone (CubeMX-safe)
-- [ ] Zero DRDY misses over 60 s with calibration loaded (ISR budget unaffected)
+- [x] Fresh (blank) SD card triggers auto-format: two FAT32 partitions created, **MBR partition 2 type = 0x83**, volume labels `LOGGER` and `SYSCAL` set, UART prints `[SD] format complete: LOGGER + SYSCAL` and `[SD] SYSCAL mounted` — *firmware; confirm on card*
+- [ ] **Windows:** after format, only **LOGGER** appears in Explorer with a drive letter; **SYSCAL** does not; Disk Management shows second partition as **Linux** — *PC validation*
+- [x] Pre-formatted card with existing partitions mounts directly (no re-format); UART prints `[SD] SYSCAL mounted` on successful dual mount — *firmware path*
+- [x] `README.txt` created on partition 1 on first boot; not overwritten on subsequent boots — *implemented*
+- [x] `write_cal.py` produces a 64-byte `.cal` file whose CRC16 matches firmware `crc16Ccitt()` — *tool; verify on demand*
+- [x] Valid `.cal` file loads: serial terminal prints field values, `calibrationGetSource() == CAL_SRC_SD_FILE` — *implemented*
+- [x] `.cal` file with a single flipped bit is rejected: UART prints CRC error, fault path, ADC streaming does not start — *implemented*
+- [x] Missing `.cal` file (empty SYSCAL partition) triggers fault state — *implemented*
+- [ ] `calConfig_t.cellCorrFactor` correctly loaded from `.cal` file (verify via UART print for each of the 4 cells) — *optional per-cell bench check*
+- [ ] Force formula produces correct N with SN 10326 values: multiplier = `3.3 * (33/133) * 1e6 / (0.220919 * 0.973379)` = ~3,808,000; verify with known test signal or ADC test mode — *hardware*
+- [x] VT220 cell selection menu displays all scanned cells; digit key selects correct one — *implemented*
+- [x] Single `.cal` file on card: auto-selected without menu (`calSelectViaUi` returns that serial immediately)
+- [x] Panel row 21 shows `Cal: SN:XXXXX` after selection — *implemented*
+- [ ] Cell selection is not persisted: power cycle requires re-selection — *hardware*
+- [ ] Binary log file on SYSCAL with pre-allocation — **moved to Phase 11** (see Phase 11 actions)
+- [x] Both `"0:"` and `"1:"` drive paths work independently for read/write operations — *implemented*
+- [x] New application code follows Doxygen commenting standard where required
+- [x] Naming follows project conventions (`camelCase_t` structs, etc.) for application modules
+- [x] `CH1_DIV_RATIO` defined in `data_processing.h` as `(33.0f / 133.0f)` — not in `calConfig_t` or `.cal` files
+- [x] CH1 gain: `ads131m02SetGain(ch0,ch1)` uses cal; CH1 must remain 1× in factory `.cal`
+- [x] Firmware applies CH0 gain via **`ads131m02SetGain()`** after successful cal load — **not** inside `ads131m02Init()`
+- [ ] Gain DOE pass criteria (factory): no clipping, RMS noise < 0.1 % FS, R² > 0.9999, max residual < 5 kg
+- [x] CubeMX USER CODE / standalone app files policy respected
+- [ ] Zero DRDY misses over 60 s with calibration loaded — *hardware soak*
 
 ---
 
 ### Phase 11 — Dual-File Logging Pipeline
 **Goal:** Binary and CSV files written simultaneously to SD card with zero sample loss; 256 KB ring buffer absorbs FAT write stalls.
 
+**Prerequisite:** Phase 10 staging (`g_dpStagedAdc`, `g_dpStagedForce`, `g_dpStagedCsv` from `dpFormatForceCsvLine`) and Phase 10b dual volumes + `preallocMb` in `calConfig_t`.
+
 **Actions:**
 1. Implement **256 KB ring buffer** (`circular_buffer.c/.h`):
    - Power-of-2 size for efficient wrap-around masking (no modulo)
    - Lock-free single-producer (ISR) / single-consumer (main loop) design
-   - ISR pushes interleaved `bin_adc_record_t`, `bin_force_record_t`, and `bin_meta_record_t`
+   - ISR pushes interleaved `binAdcRecord_t`, `binForceRecord_t`, and `binMetaRecord_t`
    - Main loop drains in 4 KB chunks via `f_write()`
    - Overflow counter incremented (not blocked) if buffer full
 
 2. Implement **CSV line buffer** (~1 KB):
    - Separate from the binary ring buffer
-   - ISR formats `$,time_ms,load_N,#\r\n` at 500 Hz and copies into this buffer
-   - Main loop drains via `f_write()` to the CSV file
+   - At 500 Hz, push the same framing as Phase 10 (`dpFormatForceCsvLine`): `$,time_ms,load_N,#\r\n` — either move formatting into ISR per Phase 11 plan or `memcpy` from ISR-safe staging after Phase 10 `g_dpStagedCsv` / `g_dpStagedCsvLen`
+   - Main loop drains via `f_write()` to the CSV file on **`0:`** (LOGGER)
 
-3. Implement `sdmmc_fatfs.c`: dual-file session lifecycle:
-   - `sd_session_open()` — opens both `LOG_YYMMDD_HHMMSS.bin` and `LOG_YYMMDD_HHMMSS.csv`
-   - Pre-allocate both files:
+3. Implement `sdmmc_fatfs.c`: dual-file session lifecycle (**carries Phase 10b item: binary on SYSCAL, CSV on LOGGER**):
+   - `sd_session_open()` — opens both `LOG_YYMMDD_HHMMSS.bin` (e.g. on `1:`) and `LOG_YYMMDD_HHMMSS.csv` (on `0:`)
+   - Pre-allocate both files (use integer `preallocMb` from `calibrationGet()` per Phase 10b):
      ```c
-     f_lseek(&g_bin_file, (FSIZE_t)g_cal.prealloc_mb * 1024 * 1024);
+     f_lseek(&g_bin_file, (FSIZE_t)((uint32_t)calibrationGet()->preallocMb * 1024UL * 1024UL));
      f_lseek(&g_bin_file, 0);
-     f_lseek(&g_csv_file, (FSIZE_t)(g_cal.prealloc_mb / 4) * 1024 * 1024);
+     f_lseek(&g_csv_file, (FSIZE_t)((uint32_t)(calibrationGet()->preallocMb / 4.0f) * 1024UL * 1024UL));
      f_lseek(&g_csv_file, 0);
      ```
-   - Write 64-byte `bin_file_header_t` to binary file at session start
+   - Write 64-byte `binFileHeader_t` to binary file at session start
    - Write CSV header comment lines at session start
    - `sd_session_close()` — truncate both files to actual size, close cleanly
 

@@ -43,7 +43,7 @@ void appStateSet(appState_t state);
  * @details If allowLogOnUsb == 0 and USB VBUS is present, logging is
  *          blocked to prevent data corruption from USB enumeration resets.
  * @return true if logging may start, false if blocked by USB policy.
- * @note   allowLogOnUsb defaults to 1 (dev mode); Phase 10 loads from config.txt.
+ * @note   allowLogOnUsb comes from factory `.cal` via calibrationGet() (Phase 10b).
  */
 bool appStateCanStartLogging(void);
 

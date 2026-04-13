@@ -49,6 +49,12 @@ void uiUartDump(void);
 void uiProcessInput(void);
 
 /**
+ * @brief  If the user pressed 't'/'T' since last call, return 1 once and clear.
+ * @details Main loop calls this after uiProcessInput(); if cal is loaded, dpTare().
+ */
+uint8_t uiConsumeTareRequest(void);
+
+/**
  * @brief  Blocking VT220 menu to pick a factory .cal cell by serial.
  * @return Selected serial number, or 0 if none / error.
  * @note   Calls calibrationGetEntries(); does not load the .cal file.

@@ -68,7 +68,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-/** MBR partition 2 entry starts at 0x1CE; type byte is at +4 → 0x1D2 Hidden FAT32: suppresses Windows auto-mount on Win10/11 */
+/** MBR partition 2 entry starts at 0x1CE; type byte is at +4 → 0x1D2 (set to 0x83 Linux after format). */
 #define MBR_PART2_TYPE_OFFSET  0x1D2U
 
 /* USER CODE END PD */
@@ -342,7 +342,7 @@ int main(void)
                       printf("[SD] FATAL: f_mkfs 1: failed %d\r\n", (int)fr);
               }
 
-              /* Patch MBR partition-2 type to 0x83 (Linux) so Windows often skips a drive letter.
+              /* Patch MBR partition-2 type to 0x83 (Linux native) so Explorer often skips SYSCAL.
                * FatFS mounts via VolToPart[] partition index, not this byte. Not used if GPT (not this build). */
               if (fr == FR_OK)
               {
@@ -354,7 +354,7 @@ int main(void)
                   }
                   else
                   {
-                      fmtWork[MBR_PART2_TYPE_OFFSET] = 0x1BU;
+                      fmtWork[MBR_PART2_TYPE_OFFSET] = 0x83U;
                       dr = disk_write(0, fmtWork, 0, 1);
                       if (dr != RES_OK)
                       {
@@ -519,8 +519,9 @@ sdDone:
       {
         g_dpPendingForceRecord = 0;
         dpFillImu(&g_dpStagedForce);
+        dpFormatForceCsvLine(&g_dpStagedForce);
         /* Phase 11: ring_push(&g_dpStagedForce, sizeof(g_dpStagedForce)); */
-        /* Phase 11: format and push CSV line here (main loop context) */
+        /* Phase 11: ring_push CSV bytes g_dpStagedCsv, g_dpStagedCsvLen */
       }
 
       /* ── Phase 10: force UI update at ~10 Hz ───────────────────── */
@@ -537,8 +538,10 @@ sdDone:
 
 #ifndef VIZ_STREAM
     uiUpdateFields();
-    uiProcessInput();
 #endif
+    uiProcessInput();
+    if (calLoaded && uiConsumeTareRequest())
+      dpTare();
 
     /* ── ADC stats (1 Hz, UI feed only — no serial print) ─────── */
     {

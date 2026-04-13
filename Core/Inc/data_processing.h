@@ -4,9 +4,12 @@
  * @details dpFeedSample() is called from the DMA-complete ISR at 64 kHz.
  *          Stage 1 (8-sample boxcar) emits binAdcRecord_t at 8 kHz.
  *          Stage 2 (16 stage-1 sums = 128 raw) emits binForceRecord_t at 500 Hz
- *          including a blocking SPI2 IMU read and ratiometric force calc.
- *          Records are placed in staging globals with pending flags; the main
- *          loop drains them (Phase 11 pushes to ring buffer).
+ *          with ratiometric forceN.  IMU samples are not read in the ISR —
+ *          dpFillImu() runs in the main loop (SPI2 + SysTick deadlock if called
+ *          from priority-0 GPDMA ISR).  After IMU fill, dpFormatForceCsvLine()
+ *          builds `$,time_ms,load_N,#` for Phase 11 CSV ring push.
+ *          Records use staging globals and pending flags; Phase 11 replaces
+ *          flags with ringPush from ISR/main.
  *
  *          Upstream:  adsFastComplete() in adc_ads131m02.c
  *          Downstream: main loop polling, debug_ui force display, Phase 11 ring
@@ -49,9 +52,9 @@ void dpInit(const calConfig_t *cal);
  * @param[in] ch0        Sign-extended 24-bit CH0 value.
  * @param[in] ch1        Sign-extended 24-bit CH1 value.
  * @param[in] adsStatus  16-bit ADS131M02 STATUS word from the SPI frame.
- * @note   Called from ISR context; must complete within a few microseconds
- *         on the 64 kHz path.  The 500 Hz path includes a blocking SPI2 IMU
- *         read (~28 us) which is safe because EXTI2 can preempt it.
+ * @note   Called from ISR context.  The 64 kHz path is a few adds; the 8 kHz
+ *         path adds record assembly + optional CRC.  The 500 Hz path does
+ *         not call SPI2 here — IMU is filled in the main loop via dpFillImu().
  */
 void dpFeedSample(int32_t ch0, int32_t ch1, uint16_t adsStatus);
 
@@ -63,6 +66,12 @@ extern volatile uint8_t      g_dpPendingForceRecord;
 extern binAdcRecord_t        g_dpStagedAdc;
 extern binForceRecord_t      g_dpStagedForce;
 
+/** Max length of CSV line `$,time_ms,load_N,#\\r\\n` (Phase 11 copies to CSV ring). */
+#define DP_STAGED_CSV_MAX  48U
+
+extern char                  g_dpStagedCsv[DP_STAGED_CSV_MAX];
+extern uint8_t               g_dpStagedCsvLen;
+
 /* ── Deferred IMU fill (called from main loop, NOT ISR) ───────────── */
 
 /**
@@ -73,6 +82,15 @@ extern binForceRecord_t      g_dpStagedForce;
  * @pre    g_dpPendingForceRecord was 1; caller has cleared the flag.
  */
 void dpFillImu(binForceRecord_t *rec);
+
+/**
+ * @brief  Format one CSV line from a completed force record (main loop only).
+ * @details Writes `$,<timestampMs>,<forceN>,#\\r\\n` into g_dpStagedCsv and
+ *          sets g_dpStagedCsvLen.  Phase 11 will push these bytes to the CSV
+ *          SPSC ring; no file I/O here.
+ * @param[in] rec  Force record after dpFillImu (IMU fields valid for logging).
+ */
+void dpFormatForceCsvLine(const binForceRecord_t *rec);
 
 /* ── Tare ─────────────────────────────────────────────────────────── */
 

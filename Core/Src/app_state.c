@@ -11,11 +11,8 @@
 
 #include "app_state.h"
 #include "battery_monitor.h"
+#include "calibration.h"
 #include <stdio.h>
-
-/** @brief  Allow logging while USB is connected.  1 = dev mode (allow),
- *          0 = production (block).  Phase 10 loads from config.txt. */
-static uint8_t allowLogOnUsb = 1;
 
 static appState_t g_appState = STATE_IDLE;
 
@@ -31,7 +28,7 @@ void appStateSet(appState_t state)
 
 bool appStateCanStartLogging(void)
 {
-    if (allowLogOnUsb == 0 && batteryIsUsbConnected())
+    if (calibrationGet()->allowLogOnUsb == 0U && batteryIsUsbConnected())
     {
         printf("[APP] logging BLOCKED: USB connected & allowLogOnUsb=0\r\n");
         return false;

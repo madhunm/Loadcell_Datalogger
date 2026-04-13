@@ -3,14 +3,12 @@
  * @brief   Two-stage boxcar decimation, ratiometric force, and record assembly.
  * @details Stage 1 accumulates 8 raw 64 kHz samples into a binAdcRecord_t
  *          emitted at 8 kHz.  Stage 2 accumulates 16 Stage-1 sums (= 128 raw)
- *          into a binForceRecord_t emitted at 500 Hz, which includes a blocking
- *          SPI2 IMU read and ratiometric force calculation.
+ *          into a binForceRecord_t at 500 Hz with ratiometric forceN.  IMU
+ *          samples are read in the main loop (dpFillImu), not in the ISR.
  *
- *          All accumulation runs inside the DMA-complete ISR context.  The
- *          64 kHz path adds ~0.3 us; the 8 kHz path adds ~2 us (record + CRC);
- *          the 500 Hz path adds ~35 us (IMU SPI2 read + float math).  EXTI2
- *          at priority 0 preempts the continuation, so intervening DRDYs are
- *          never missed.
+ *          Accumulation and ADC/force record assembly run in the DMA-complete
+ *          ISR.  The 64 kHz path is dominated by adds; the 8 kHz path adds
+ *          record assembly and optional CRC.
  *
  * @author  Madhu
  * @date    2026-04-12
@@ -20,9 +18,10 @@
 #include "data_processing.h"
 #include "imu_lsm6dsv.h"
 #include "main.h"
+#include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
-#include <math.h>
 
 /* ── Module-static state ──────────────────────────────────────────── */
 
@@ -62,6 +61,9 @@ volatile uint8_t      g_dpPendingForceRecord;
 binAdcRecord_t        g_dpStagedAdc;
 binForceRecord_t      g_dpStagedForce;
 
+char     g_dpStagedCsv[DP_STAGED_CSV_MAX];
+uint8_t  g_dpStagedCsvLen;
+
 /* ── Threshold for CH1 division-by-zero guard ─────────────────────── */
 #define CH1_MIN_ABS_THRESHOLD  1000
 
@@ -93,6 +95,8 @@ void dpInit(const calConfig_t *cal)
 
     memset(&g_dpStagedAdc,   0, sizeof(g_dpStagedAdc));
     memset(&g_dpStagedForce, 0, sizeof(g_dpStagedForce));
+    memset(g_dpStagedCsv, 0, sizeof(g_dpStagedCsv));
+    g_dpStagedCsvLen = 0;
 }
 
 void dpFeedSample(int32_t ch0, int32_t ch1, uint16_t adsStatus)
@@ -241,5 +245,35 @@ void dpFillImu(binForceRecord_t *rec)
         rec->gyroY  = gyro[1];
         rec->gyroZ  = gyro[2];
         rec->validity |= VALIDITY_IMU_OK;
+    }
+}
+
+void dpFormatForceCsvLine(const binForceRecord_t *rec)
+{
+    int n;
+
+    if (rec == NULL)
+    {
+        g_dpStagedCsvLen = 0;
+        return;
+    }
+
+    n = snprintf(g_dpStagedCsv, sizeof(g_dpStagedCsv),
+                 "$,%lu,%+.3f,#\r\n",
+                 (unsigned long)rec->timestampMs,
+                 (double)rec->forceN);
+    if (n < 0)
+    {
+        g_dpStagedCsvLen = 0;
+        return;
+    }
+    if ((size_t)n >= sizeof(g_dpStagedCsv))
+    {
+        g_dpStagedCsv[sizeof(g_dpStagedCsv) - 1U] = '\0';
+        g_dpStagedCsvLen = (uint8_t)(sizeof(g_dpStagedCsv) - 1U);
+    }
+    else
+    {
+        g_dpStagedCsvLen = (uint8_t)n;
     }
 }

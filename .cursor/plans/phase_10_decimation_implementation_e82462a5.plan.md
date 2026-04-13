@@ -25,6 +25,8 @@ isProject: false
 
 # Phase 10 — Two-Stage Decimation, Force Calculation, and Record Assembly
 
+**Closure — approved (2026-04-14):** Implementation complete; user approved Phase 10 firmware exit. **Load cell not yet connected** — remaining objective metrics **P10-M5, M6** (force/tare/known load) and optional **M7** UART CSV spot-check are deferred; see [.cursor/plans/phase_10_deferred_hardware_todos.md](phase_10_deferred_hardware_todos.md).
+
 **Phase Jump Acknowledgment:** Phase 9 closure is pending due to external hardware dependencies. This one-time jump to Phase 10 is approved by the user.
 
 **Supersession (Phase 10b):** Production calibration is **not** loaded from `config.txt`. [Phase 10b](phase_10b_cal_sd_partitions_751257fe.plan.md) replaces the text parser with binary **`.cal`** files on the SYSCAL volume, VT220 cell selection, **`cellCorrFactor`**, **`CH1_DIV_RATIO`** in the force equation, and **`ads131m02SetGain()`** after a successful cal load. This Phase 10 plan remains the historical spec for decimation/ISR/data_processing architecture; treat **`calibration.c`** / boot integration descriptions as superseded where they conflict with Phase 10b.

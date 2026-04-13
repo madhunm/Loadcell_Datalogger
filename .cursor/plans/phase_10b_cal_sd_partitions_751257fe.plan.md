@@ -40,7 +40,9 @@ isProject: false
 
 # Phase 10b -- Dual-Partition SD, Binary Calibration Files, and Cell Selection
 
-**Prerequisite:** Phase 10 must be fully closed before implementation begins. This phase modifies `calibration.h/.c`, `data_processing.c`, `debug_ui.c`, `main.c`, `adc_ads131m02.c/.h`, `ffconf.h`, `fatfs.c`, `sd_diskio.c`, and creates new files. No Phase 10 design decisions are altered -- only extended.
+**Closure — approved (2026-04-14):** Firmware / plan scope for 10b accepted together with Phase 10. **Load cell not yet wired** — objective force metrics (**P10-M5, M6** in [snazzy-petting-mountain.md](snazzy-petting-mountain.md)) and any optional Windows/Explorer checks remain in [.cursor/plans/phase_10_deferred_hardware_todos.md](phase_10_deferred_hardware_todos.md).
+
+**Prerequisite:** Phase 10 **decimation + record assembly** was required before 10b implementation (done). This phase modifies `calibration.h/.c`, `data_processing.c`, `debug_ui.c`, `main.c`, `adc_ads131m02.c/.h`, `ffconf.h`, `fatfs.c`, `sd_diskio.c`, and creates new files. No Phase 10 design decisions are altered -- only extended.
 
 ## Architecture
 
